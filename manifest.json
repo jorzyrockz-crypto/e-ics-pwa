@@ -2,8 +2,9 @@
   "name": "E-ICS Inventory System",
   "short_name": "E-ICS",
   "description": "Offline Inventory Custodian Slip Management System",
-  "start_url": "./",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
 }
+
