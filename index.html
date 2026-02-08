@@ -1,0 +1,3480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Inventory Custodian Slip (ICS) Pro</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f172a">
+
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <script>
+  /* ================= GLOBAL STATE ================= */
+  let stagedItems = [];
+  let records = JSON.parse(localStorage.getItem('icsRecords') || '[]');
+  let editIndex = null;
+  let isEditMode = false;
+  let editRecordIndex = null;
+  let maintenanceFilterActive = false;
+  let exportICSIndex = null;
+
+/* ======== EUL ACTION CENTER STATE ================= */
+
+let eulActionItems = [];
+let eulCurrentPage = 1;
+const EUL_PAGE_SIZE = 20;
+
+/* ============ EXPORT CENTER STATE ================= */
+
+let exportLogs = JSON.parse(localStorage.getItem('icsExportLogs') || '[]');
+
+/* ================= MODAL CONTEXT ================= */
+let reopenEULActionCenterOnClose = false;
+
+// Pagination state for Manage ICS
+let currentPage = 1;
+const pageSize = 25;
+
+  const qs = id => document.getElementById(id);
+
+/* ============ EXPORT ICS AS JSON ================= */
+function exportICSJSON(index){
+  const rec = records[index];
+  if(!rec) return;
+
+  const blob = new Blob(
+    [JSON.stringify(rec, null, 2)],
+    { type: 'application/json' }
+  );
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${rec.icsNo || 'ICS'}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+
+  showToast(`ICS ${rec.icsNo} exported as JSON`);
+}
+
+  /* ================= UTILITIES ================= */
+  function safeNumber(val){
+    const n = Number(val);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function formatNumber(val){
+  // ⛔ show NOTHING for blank values
+  if(val === '' || val === null || val === undefined) return '';
+
+  const n = Number(val);
+  if(!Number.isFinite(n)) return '';
+
+  return n.toLocaleString(undefined,{
+    minimumFractionDigits:2,
+    maximumFractionDigits:2
+  });
+}
+  /* ================= TOAST ================= */
+  function showToast(message){
+    const toast = qs('toast');
+    if(!toast) return;
+    toast.textContent = message;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 3000);
+  }
+
+ /* ======= GLOBAL WIDGET update ================= */
+function getWidgetStats() {
+  const today = new Date();
+
+  let totalValue = 0;
+  let totalItems = 0;
+  let maintenance = 0;
+  let disposal = 0;
+
+  records.forEach(rec => {
+    if (!rec.issuedBy?.date) return;
+
+    const issued = new Date(rec.issuedBy.date);
+    if (isNaN(issued)) return;
+
+    (rec.items || []).forEach(it => {
+      totalItems++;
+      totalValue += safeNumber(it.total);
+
+      const eul = parseFloat(it.eul);
+      if (!Number.isFinite(eul) || eul <= 0) return;
+
+      const expiry = new Date(issued);
+      expiry.setFullYear(expiry.getFullYear() + eul);
+
+      const diffDays = (expiry - today) / 86400000;
+
+      if (diffDays < 0) disposal++;
+      else if (diffDays <= 30) maintenance++;
+    });
+  });
+
+  return { totalValue, totalItems, maintenance, disposal };
+}
+
+/* -------------------------
+   Last Items Helper
+   ------------------------- */
+function getLastItems(limit = 5) {
+  const result = [];
+
+  for (let r = 0; r < records.length; r++) {
+    const rec = records[r];
+    if (!Array.isArray(rec.items)) continue;
+
+    for (let i = rec.items.length - 1; i >= 0; i--) {
+      const it = rec.items[i];
+      if (!it) continue;
+
+      result.push({
+        desc: it.desc || '—',
+        time: it.addedAt || rec.date || '—'
+      });
+
+      if (result.length >= limit) return result;
+    }
+  }
+
+  return result;
+}
+
+/* ================= MONTH COUNT HELPER ================= */
+function getMonthCountsByYear(year){
+  const monthMap = {};
+
+  records.forEach(r => {
+    if(!r.issuedBy?.date) return;
+    const d = new Date(r.issuedBy.date);
+    if(isNaN(d)) return;
+
+    if(year && d.getFullYear() !== Number(year)) return;
+
+    const m = d.getMonth();
+    monthMap[m] = (monthMap[m] || 0) + 1;
+  });
+
+  return monthMap;
+}
+
+/* -------------------------
+   Last Items Auto Scroll
+   ------------------------- */
+
+let lastItemScrollTimer = null;
+
+function startLastItemAutoScroll() {
+  const el = qs('dashLastItem');
+  if (!el) return;
+
+  stopLastItemAutoScroll();
+
+  lastItemScrollTimer = setInterval(() => {
+    if (el.scrollWidth <= el.clientWidth) return;
+
+    if (el.scrollLeft + el.clientWidth >= el.scrollWidth - 5) {
+      el.scrollLeft = 0; // loop back
+    } else {
+      el.scrollLeft += 1; // slow smooth scroll
+    }
+  }, 30);
+}
+
+function stopLastItemAutoScroll() {
+  if (lastItemScrollTimer) {
+    clearInterval(lastItemScrollTimer);
+    lastItemScrollTimer = null;
+  }
+}
+
+  /* ================= GLOBAL MODAL ================= */
+function showModal(message, options = {}) {
+  const modal = qs('appModal');
+  const titleEl = qs('appModalTitle');
+  const msgEl = qs('appModalMessage');
+  const okBtn = qs('appModalOk');
+  const cancelBtn = qs('appModalCancel');
+
+  if (!modal) return Promise.resolve(false);
+
+  okBtn.setAttribute('data-primary', '');
+
+  titleEl.textContent = options.title || 'Message';
+  msgEl.textContent = message;
+
+  if (options.confirm) {
+    cancelBtn.classList.remove('hidden');
+  } else {
+    cancelBtn.classList.add('hidden');
+  }
+
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+
+  return new Promise(resolve => {
+    okBtn.onclick = () => {
+      closeModal();
+      resolve(true);
+    };
+    cancelBtn.onclick = () => {
+      closeModal();
+      resolve(false);
+    };
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  const modal = document.querySelector('.fixed.flex');
+  if (!modal) return;
+
+  // ESC → cancel
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    return;
+  }
+
+  // ENTER → OK (Delete confirm)
+  if (e.key === 'Enter') {
+    const tag = document.activeElement.tagName;
+    if (['INPUT','TEXTAREA','SELECT'].includes(tag)) return;
+
+    e.preventDefault();
+    modal.querySelector('[data-primary]')?.click();
+  }
+});
+
+function closeModal() {
+  const modal = qs('appModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+  /* ================= AUTO COMPUTE TOTAL ================= */
+  document.addEventListener('input', e => {
+    if(e.target.id === 'qty' || e.target.id === 'unitCost'){
+      const q = safeNumber(qs('qty')?.value);
+      const c = safeNumber(qs('unitCost')?.value);
+      if(qs('total')) qs('total').value = q && c ? (q*c).toFixed(2) : '';
+    }
+  });
+
+/* ================= EUL MODAL ================= */
+  function openEULModal(recordIndex){
+  const rec = records[recordIndex];
+  if(!rec || !rec.issuedBy?.date) return;
+
+  const body = qs('eulModalBody');
+  const meta = qs('eulModalMeta');
+  const modal = qs('eulModal');
+  if(!body || !modal) return;
+
+  body.innerHTML = '';
+
+  const issuedDate = new Date(rec.issuedBy.date);
+  const today = new Date();
+
+  let hasRows = false;
+
+  (rec.items || []).forEach(it => {
+    const eulYears = parseFloat(it.eul);
+    if (!Number.isFinite(eulYears) || eulYears <= 0) return;
+
+    const expiry = new Date(issuedDate);
+    expiry.setFullYear(expiry.getFullYear() + eulYears);
+
+    const diffDays = Math.ceil((expiry - today) / (1000 * 60 * 60 * 24));
+
+    let status = '';
+    let cls = '';
+
+    if (diffDays < 0) {
+      status = 'For Disposal';
+      cls = 'text-red-600 font-semibold';
+    } else if (diffDays <= 30) {
+      status = 'Maintenance Due';
+      cls = 'text-yellow-600 font-semibold';
+    } else {
+      return; // hide OK items
+    }
+
+    hasRows = true;
+
+    const tr = document.createElement('tr');
+    tr.classList.add('border-b','last:border-b-0');
+    const lastStatus = getLatestInspectionStatus(it);
+
+tr.innerHTML = `
+  <td class="py-1.5 px-2">${it.desc}</td>
+  <td class="py-1.5 px-2">${it.eul}</td>
+  <td class="py-1.5 px-2 text-xs">${rec.issuedBy.date}</td>
+  <td class="py-1.5 px-2 ${cls}">${status}</td>
+  <td class="py-1.5 px-2 text-right">${diffDays}</td>
+
+  <td class="py-1.5 px-2">
+    <div class="flex items-center gap-2">
+<select
+    class="border rounded px-2 py-1 text-xs"
+    onchange="handleInspectionChange(${recordIndex}, '${it.itemNo}', this)"
+  >
+    <option value="">Select</option>
+    <option value="serviceable" ${lastStatus === 'serviceable' ? 'selected' : ''}>
+      Serviceable
+    </option>
+    <option value="unserviceable" ${lastStatus === 'unserviceable' ? 'selected' : ''}>
+      Unserviceable
+    </option>
+  </select>
+
+      <button
+        class="text-slate-400 hover:text-slate-700"
+        title="Inspection History"
+        onclick="openInspectionHistory(${recordIndex}, '${it.itemNo}')"
+      >
+        🕒
+      </button>
+    </div>
+  </td>
+`;
+
+    body.appendChild(tr);
+  });
+
+  if(!hasRows){
+    body.innerHTML =
+      '<tr><td colspan="5" class="italic text-center py-4">No EUL actions required</td></tr>';
+  }
+
+  meta.textContent = `ICS No.: ${rec.icsNo} • ${rec.entity}`;
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeEULModal(){
+  const modal = qs('eulModal');
+  if(!modal) return;
+
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+
+  // 🔁 Return to Action Center if needed
+  if(reopenEULActionCenterOnClose){
+    reopenEULActionCenterOnClose = false;
+    openEULActionCenter();
+  }
+}
+
+function handleInspectionChange(recordIndex, itemNo, selectEl){
+  const value = selectEl.value;
+  if(!value) return;
+
+  if(value === 'serviceable'){
+    saveServiceableInspection(recordIndex, itemNo);
+    selectEl.value = '';
+    return;
+  }
+
+  if(value === 'unserviceable'){
+    selectEl.value = ''; // prevent accidental save
+    openUnserviceableModal(recordIndex, itemNo);
+  }
+}
+
+function saveServiceableInspection(recordIndex, itemNo){
+  const rec = records[recordIndex];
+  if(!rec) return;
+
+  const item = rec.items.find(it => it.itemNo === itemNo);
+  if(!item) return;
+
+  item.inspectionHistory = item.inspectionHistory || [];
+  item.inspectionHistory.push({
+    status: 'serviceable',
+    date: new Date().toISOString().split('T')[0],
+    recordedAt: new Date().toISOString()
+  });
+
+  localStorage.setItem('icsRecords', JSON.stringify(records));
+  showToast(`Inspection saved (Serviceable) for ${itemNo}`);
+}
+
+/* ================= INSPECTION HELPERS ================= */
+function getLatestInspectionStatus(item){
+  if(!item || !Array.isArray(item.inspectionHistory)) return '';
+  if(!item.inspectionHistory.length) return '';
+
+  const last = item.inspectionHistory[item.inspectionHistory.length - 1];
+  return last?.status || '';
+}
+
+/* ================= CONTEXT-AWARE KEY MAP ================= */
+document.addEventListener('keydown', (e) => {
+
+  const activeEl = document.activeElement;
+  const tag = activeEl?.tagName;
+
+  const isTyping = ['INPUT','TEXTAREA','SELECT'].includes(tag);
+
+  // detect open modal (your modals use .fixed.flex)
+  const openModal = document.querySelector('.fixed.flex');
+
+  /* ========= MODAL CONTROLS ========= */
+  if (openModal) {
+
+    // ESC → close modal
+    if (e.key === 'Escape') {
+      e.preventDefault();
+
+      // try known close functions first
+      if (typeof closeInspectionModal === 'function') closeInspectionModal();
+      if (typeof closeInspectionHistoryModal === 'function') closeInspectionHistoryModal();
+      if (typeof closeEULModal === 'function') closeEULModal();
+      if (typeof closeModal === 'function') closeModal();
+
+      // fallback: force close
+      openModal.classList.add('hidden');
+      openModal.classList.remove('flex');
+      return;
+    }
+
+    // ENTER → OK / primary button
+    if (e.key === 'Enter' && !isTyping) {
+      e.preventDefault();
+
+      const okBtn =
+        openModal.querySelector('[data-primary]') ||
+        openModal.querySelector('button.bg-emerald-600') ||
+        openModal.querySelector('button');
+
+      okBtn?.click();
+      return;
+    }
+  }
+
+  /* ========= GLOBAL SHORTCUTS ========= */
+
+ document.addEventListener('keydown', e => {
+  if(e.ctrlKey && e.key.toLowerCase() === 'e'){
+    e.preventDefault();
+    openExportCenter();
+  }
+});
+
+ // CTRL + F → focus search
+  if (e.ctrlKey && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    document.getElementById('icsSearch')?.focus();
+    return;
+  }
+
+  // CTRL + A → Add Item (with validation)
+  if (e.ctrlKey && e.key.toLowerCase() === 'a') {
+    e.preventDefault();
+    if (typeof addItem === 'function') addItem();
+    return;
+  }
+
+  // CTRL + S → Save / Update ICS
+  if (e.ctrlKey && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    if (typeof saveICS === 'function') saveICS();
+    return;
+  }
+
+  // CTRL + P → Print CURRENT ICS (not browser)
+  if (e.ctrlKey && e.key.toLowerCase() === 'p') {
+    e.preventDefault();
+
+    // print currently edited record OR latest viewed
+    if (typeof printICS === 'function') {
+
+      if (typeof editRecordIndex === 'number') {
+        printICS(editRecordIndex);
+      } else if (records?.length) {
+        printICS(0); // fallback: most recent
+      }
+    }
+    return;
+  }
+});
+
+/* ================= RUN EXPORT ================= */
+function runExportCenter(){
+  const year = qs('exportYear')?.value;
+  const month = qs('exportMonth')?.value;
+  const icsNo = qs('exportICSNo')?.value.trim();
+
+  let payload = [];
+
+  // Individual ICS
+  if(icsNo){
+    payload = records.filter(r =>
+      (r.icsNo || '').toLowerCase() === icsNo.toLowerCase()
+    );
+
+    if(!payload.length){
+      showToast('No matching ICS found');
+      return;
+    }
+
+    doExport(payload, `ICS_${icsNo}`);
+    return;
+  }
+
+  // Month + Year
+  if(year && month !== ''){
+    payload = records.filter(r => {
+      if(!r.issuedBy?.date) return false;
+      const d = new Date(r.issuedBy.date);
+      return d.getFullYear() === Number(year)
+          && d.getMonth() === Number(month);
+    });
+
+    if(!payload.length){
+      showToast('No records found for selected month');
+      return;
+    }
+
+    const label =
+      `${new Date(2000, month).toLocaleString('default',{month:'short'})}_${year}`;
+
+    doExport(payload, `ICS_${label}`);
+    return;
+  }
+
+  // Year only
+  if(year){
+    payload = records.filter(r => {
+      if(!r.issuedBy?.date) return false;
+      return new Date(r.issuedBy.date).getFullYear() === Number(year);
+    });
+
+    if(!payload.length){
+      showToast('No records found for selected year');
+      return;
+    }
+
+    doExport(payload, `ICS_${year}`);
+    return;
+  }
+
+  // Export ALL
+  if(!records.length){
+    showToast('No records to export');
+    return;
+  }
+
+  doExport(records, 'ICS_ALL');
+}
+
+  // --- EXPORT FILE ---
+function doExport(payload, filename){
+  const blob = new Blob(
+    [JSON.stringify(payload, null, 2)],
+    { type: 'application/json' }
+  );
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${filename}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+
+  logExport(filename, payload.length);
+}
+
+  // --- LOG EXPORT ---
+function logExport(scope, count){
+  exportLogs.unshift({
+    date: new Date().toLocaleString(),
+    scope,
+    count
+  });
+
+  exportLogs = exportLogs.slice(0, 30);
+  localStorage.setItem('icsExportLogs', JSON.stringify(exportLogs));
+  renderExportLogs();
+  showToast('Export completed');
+}
+
+function renderExportLogs(){
+  const body = qs('exportLogBody');
+  if(!body) return;
+
+  body.innerHTML = '';
+
+  exportLogs.forEach(log => {
+    const tr = document.createElement('tr');
+tr.innerHTML = `
+  <td class="py-1 whitespace-nowrap">${log.date}</td>
+  <td class="py-1">
+    ${log.scope}${log.filter ? ` – ${log.filter}` : ''}
+  </td>
+  <td class="py-1 text-right">${log.count}</td>
+`;
+    body.appendChild(tr);
+  });
+}
+
+/* ========== EXPORT CENTER OPEN / CLOSE =========== */
+function openExportCenter(){
+  populateExportYears();
+  populateExportMonthFilter();
+  populateExportICS();
+  renderExportLogs();
+
+  const modal = qs('exportCenterModal');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeExportCenter(){
+  const modal = qs('exportCenterModal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+/* ========= FILTER ICS BY YEAR & MONTH =========== */
+function getFilteredICSByDate(year, month){
+  return records.filter(r => {
+    if(!r.issuedBy?.date) return false;
+
+    const d = new Date(r.issuedBy.date);
+    if(isNaN(d)) return false;
+
+    if(year && d.getFullYear() !== Number(year)) return false;
+    if(month !== '' && d.getMonth() !== Number(month)) return false;
+
+    return true;
+  });
+}
+
+/* ================= EXPORT YEAR POPULATOR ================= */
+function populateExportYears(){
+  const yearSelect = qs('exportYear');
+  if(!yearSelect) return;
+
+  yearSelect.innerHTML = '<option value="">Year</option>';
+
+  const yearMap = {};
+
+  records.forEach(r => {
+    if(!r.issuedBy?.date) return;
+    const y = new Date(r.issuedBy.date).getFullYear();
+    if(isNaN(y)) return;
+    yearMap[y] = (yearMap[y] || 0) + 1;
+  });
+
+  Object.keys(yearMap)
+    .sort((a,b)=>b-a)
+    .forEach(y => {
+      const opt = document.createElement('option');
+      opt.value = y;
+      opt.textContent = `${y} (${yearMap[y]})`;
+      yearSelect.appendChild(opt);
+    });
+}
+
+/* ================= EXPORT MONTH FILTER ================= */
+function populateExportMonthFilter(){
+  const monthSelect = qs('exportMonth');
+  const yearVal = qs('exportYear')?.value;
+  if(!monthSelect) return;
+
+  monthSelect.innerHTML = '<option value="">Month</option>';
+
+  const monthMap = {};
+
+  records.forEach(r => {
+    if(!r.issuedBy?.date) return;
+
+    const d = new Date(r.issuedBy.date);
+    if(isNaN(d)) return;
+
+    // year-aware
+    if(yearVal && d.getFullYear() !== Number(yearVal)) return;
+
+    const m = d.getMonth();
+    monthMap[m] = (monthMap[m] || 0) + 1;
+  });
+
+  Object.keys(monthMap)
+    .sort((a,b)=>a-b)
+    .forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent =
+        `${new Date(2000, m).toLocaleString('default',{month:'long'})} (${monthMap[m]})`;
+      monthSelect.appendChild(opt);
+    });
+}
+
+/* ================= POPULATE INDIVIDUAL ICS DROPDOWN ================= */
+function populateExportICS(){
+  const scope = qs('exportScope')?.value;
+  const select = qs('exportICS');
+  if(!select) return;
+
+  // 🔒 only for Individual ICS
+  if(scope !== 'single'){
+    select.classList.add('hidden');
+    return;
+  }
+
+  const year = qs('exportYear')?.value;
+  const month = qs('exportMonth')?.value;
+
+  // 🔒 require BOTH year and month
+  if(!year || month === ''){
+    select.classList.add('hidden');
+    return;
+  }
+
+  select.innerHTML = '<option value="">Select ICS</option>';
+
+  const filtered = getFilteredICSByDate(year, month);
+
+  if(!filtered.length){
+    const opt = document.createElement('option');
+    opt.disabled = true;
+    opt.textContent = 'No ICS found for selected period';
+    select.appendChild(opt);
+  } else {
+    filtered.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.icsNo;
+      opt.textContent = r.icsNo;
+      select.appendChild(opt);
+    });
+  }
+
+  // ✅ SHOW DROPDOWN
+  select.classList.remove('hidden');
+}
+
+/* ================= YEAR FILTER WITH COUNTS ================= */
+function populateYearFilter(){
+  const yearSelect = qs('icsYear');
+  if(!yearSelect) return;
+
+  yearSelect.innerHTML = '<option value="">All Years</option>';
+
+  const yearMap = {};
+
+  records.forEach(r => {
+    const d = r.issuedBy?.date;
+    if(!d) return;
+
+    const year = new Date(d).getFullYear();
+    if(isNaN(year)) return;
+
+    yearMap[year] = (yearMap[year] || 0) + 1;
+  });
+
+  Object.keys(yearMap)
+    .sort((a,b)=>b-a)
+    .forEach(year => {
+      const opt = document.createElement('option');
+      opt.value = year;
+      opt.textContent = `${year} (${yearMap[year]})`;
+      yearSelect.appendChild(opt);
+    });
+}
+
+/* ================= INSPECTION LOGIC ================= */
+
+let inspectionContext = null;
+
+function handleInspectionChange(recordIndex, itemNo, selectEl){
+  const value = selectEl.value;
+  if(!value) return;
+
+  if(value === 'serviceable'){
+    saveServiceableInspection(recordIndex, itemNo);
+    selectEl.value = '';
+    return;
+  }
+
+  if(value === 'unserviceable'){
+    selectEl.value = ''; // prevent accidental save
+    openUnserviceableModal(recordIndex, itemNo);
+  }
+}
+
+function saveServiceableInspection(recordIndex, itemNo){
+  const rec = records[recordIndex];
+  if(!rec) return;
+
+  const item = (rec.items || []).find(it => it.itemNo === itemNo);
+  if(!item) return;
+
+  item.inspectionHistory = item.inspectionHistory || [];
+  item.inspectionHistory.push({
+    status: 'serviceable',
+    date: new Date().toISOString().split('T')[0],
+    recordedAt: new Date().toISOString()
+  });
+
+  localStorage.setItem('icsRecords', JSON.stringify(records));
+  showToast(`Inspection saved (Serviceable) for ${itemNo}`);
+}
+
+function openUnserviceableModal(recordIndex, itemNo){
+  inspectionContext = { recordIndex, itemNo };
+
+  qs('inspDate').value = '';
+  qs('inspReason').value = '';
+  qs('inspNotes').value = '';
+
+  const modal = qs('inspectionModal');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeInspectionModal(){
+  const modal = qs('inspectionModal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+function saveUnserviceableInspection(){
+  if(!inspectionContext) return;
+
+  const { recordIndex, itemNo } = inspectionContext;
+  const date = qs('inspDate').value;
+  const reason = qs('inspReason').value.trim();
+  const notes = qs('inspNotes').value.trim();
+
+  if(!date || !reason){
+    showToast('Inspection date and reason are required');
+    return;
+  }
+
+  const rec = records[recordIndex];
+  const item = (rec.items || []).find(it => it.itemNo === itemNo);
+  if(!item) return;
+
+  item.inspectionHistory = item.inspectionHistory || [];
+  item.inspectionHistory.push({
+    status: 'unserviceable',
+    date,
+    reason,
+    notes,
+    recordedAt: new Date().toISOString()
+  });
+
+  localStorage.setItem('icsRecords', JSON.stringify(records));
+  closeInspectionModal();
+  showToast(`Inspection saved (Unserviceable) for ${itemNo}`);
+}
+
+/* ================= ITEM FUNCTIONS ================= */
+  function addItem(){
+    const qtyRaw = qs('qty').value;
+    const unitRaw = qs('unit').value.trim();
+    const unitCostRaw = qs('unitCost').value;
+
+    const desc = qs('desc').value.trim();
+    const eul = qs('eul').value.trim();
+    const itemNo = qs('itemNo').value.trim();
+
+    // ✅ REQUIRED ONLY: Description, EUL, Item No.
+    if(!desc || !eul || !itemNo){
+      showToast('Description, EUL, and Item No. are required');
+      return;
+    }
+
+    const qty = qtyRaw !== '' ? safeNumber(qtyRaw) : '';
+    const unitCost = unitCostRaw !== '' ? safeNumber(unitCostRaw) : '';
+    const total = (qty !== '' && unitCost !== '') ? qty * unitCost : '';
+
+    const item = {
+      qty,
+      unit: unitRaw,
+      unitCost,
+      total,
+      desc,
+      eul,
+      itemNo,
+      inspectionStatus: ''
+    };
+
+    if(editIndex !== null){
+      stagedItems[editIndex] = item;
+      editIndex = null;
+      showToast('Item updated');
+    } else {
+      stagedItems.push(item);
+      showToast('Item added');
+    }
+
+    clearItemForm();
+    updateItemActionState();
+    renderStaged();
+  }
+
+  function renderStaged(){
+    const body = qs('itemsBody');
+    if(!body) return;
+    body.innerHTML = '';
+
+    if(!stagedItems.length){
+      body.innerHTML = '<tr><td colspan="9" class="italic text-center py-3">No items staged</td></tr>';
+      return;
+    }
+
+    stagedItems.forEach((it,i)=>{
+      const tr = document.createElement('tr');
+      // subtle row separators (same as Manage ICS)
+      tr.classList.add('border-b','last:border-b-0','align-top');
+      if (editIndex === i) tr.classList.add('bg-blue-50');
+
+      tr.innerHTML = `
+        <td class="py-1.5 px-2 text-center">${i+1}</td>
+        <td class="py-1.5 px-2">${it.desc}</td>
+        <td class="py-1.5 px-2 text-center">${it.itemNo || ''}</td>
+        <td class="py-1.5 px-2 text-center">${it.qty !== '' ? it.qty : ''}</td>
+        <td class="py-1.5 px-2">${it.unit || ''}</td>
+        <td class="py-1.5 px-2 text-right">${formatNumber(it.unitCost)}</td>
+        <td class="py-1.5 px-2 text-right">${formatNumber(it.total)}</td>
+        <td class="py-1.5 px-2 text-center">${it.eul || ''}</td>
+        <td class="py-1.5 px-2 text-left whitespace-nowrap">
+          <button onclick="editItem(${i})">✏️</button>
+          <button onclick="removeItem(${i})" class="ml-2">🗑️</button>
+        </td>`;
+      body.appendChild(tr);
+    });
+  }
+
+  function editItem(i){
+    const it = stagedItems[i];
+    if(!it) return;
+    editIndex = i;
+    qs('qty').value = it.qty;
+    qs('unit').value = it.unit;
+    qs('unitCost').value = it.unitCost;
+    qs('total').value = it.total;
+    qs('desc').value = it.desc;
+    qs('eul').value = it.eul;
+    qs('itemNo').value = it.itemNo;
+    updateItemActionState();
+    renderStaged();
+  }
+
+  function removeItem(i){
+    stagedItems.splice(i,1);
+    if(editIndex === i) editIndex = null;
+    updateItemActionState();
+    renderStaged();
+  }
+
+  function clearItemForm(){
+    ['qty','unit','unitCost','total','desc','eul','itemNo'].forEach(id=>{ if(qs(id)) qs(id).value=''; });
+  }
+
+  function updateItemActionState(){
+    const btn = document.querySelector('button[onclick="addItem()"]');
+    if(!btn) return;
+    if(editIndex !== null){
+      btn.textContent = 'Update Item';
+      btn.classList.remove('bg-slate-900');
+      btn.classList.add('bg-blue-600');
+    } else {
+      btn.textContent = 'Add Item';
+      btn.classList.remove('bg-blue-600');
+      btn.classList.add('bg-slate-900');
+    }
+  }
+
+  /* ================= PAGINATION ================= */
+function changePage(dir){
+  currentPage += dir;
+  if(currentPage < 1) currentPage = 1;
+  renderRecords();
+}
+
+/* ================= ICS FUNCTIONS ================= */
+  function saveICS(){
+    const issuedOK = qs('issuedByName').value && qs('issuedByDesignation').value && qs('issuedByDate').value;
+    const receivedOK = qs('receivedByName').value && qs('receivedByDesignation').value && qs('receivedByDate').value;
+
+    if(!issuedOK || !receivedOK){
+      showToast('Complete all signatory fields before saving');
+      return;
+    }
+
+    if(!stagedItems.length){ showToast('No items to save'); return; }
+
+    const currentICSNo = qs('icsNo').value.trim();
+    if(!currentICSNo){ showToast('ICS No. is required'); return; }
+
+    if(!isEditMode && records.some(r => r.icsNo === currentICSNo)){
+      showToast('Duplicate ICS No. detected');
+      return;
+    }
+
+    const itemNos = stagedItems.map(it => it.itemNo).filter(Boolean);
+    if(new Set(itemNos).size !== itemNos.length){
+      showToast('Duplicate Item No. found in items');
+      return;
+    }
+
+    if(!isEditMode){
+      const usedItemNos = records.flatMap(r => r.items || []).map(it => it.itemNo).filter(Boolean);
+      const conflict = itemNos.find(no => usedItemNos.includes(no));
+      if(conflict){
+        showToast(`Item No. ${conflict} already exists in another ICS`);
+        return;
+      }
+    }
+
+    const record = {
+      issuedBy: {
+        name: qs('issuedByName').value,
+        designation: qs('issuedByDesignation').value,
+        date: qs('issuedByDate').value
+      },
+      receivedBy: {
+        name: qs('receivedByName').value,
+        designation: qs('receivedByDesignation').value,
+        date: qs('receivedByDate').value
+      },
+      icsNo: currentICSNo,
+      entity: qs('entity').value,
+      fund: qs('fund').value,
+      items: stagedItems.map(it => ({...it})),
+      date: new Date().toISOString()
+    };
+
+    if(isEditMode && editRecordIndex !== null){
+      records[editRecordIndex] = record;
+      showToast('ICS updated');
+    } else {
+      records.unshift(record);
+      showToast('ICS saved');
+    }
+
+    localStorage.setItem('icsRecords', JSON.stringify(records));
+    exitEditMode();
+    populateAutoSuggest();
+    populateYearFilter();
+    currentPage = 1;
+    renderRecords();
+    updateDashboard();
+    updateGreetingStat();
+  }
+
+/* ====== EUL action center LIST CLOSE OPEN RENDER PRINT PAGINATION FUNCTION =========== */
+function buildEULActionItems(){
+  const today = new Date();
+  const list = [];
+
+  records.forEach((rec, recordIndex) => {
+    if(!rec.issuedBy?.date) return;
+
+    const issuedDate = new Date(rec.issuedBy.date);
+    if(isNaN(issuedDate)) return;
+
+    (rec.items || []).forEach(item => {
+      const eulYears = parseFloat(item.eul);
+      if(!Number.isFinite(eulYears) || eulYears <= 0) return;
+
+      const expiry = new Date(issuedDate);
+      expiry.setFullYear(expiry.getFullYear() + eulYears);
+
+      const diffDays = Math.ceil((expiry - today) / (1000*60*60*24));
+
+      if(diffDays <= 30){ // disposal + maintenance window
+        list.push({
+          recordIndex,
+          itemNo: item.itemNo,
+          desc: item.desc,
+          entity: rec.entity,
+          icsNo: rec.icsNo,
+          issuedDate: rec.issuedBy.date,
+          eul: item.eul,
+          diffDays,
+          status:
+            diffDays < 0 ? 'For Disposal' : 'Maintenance Due'
+        });
+      }
+    });
+  });
+
+  return list;
+}
+
+function openEULActionCenter(){
+  eulActionItems = buildEULActionItems();
+  eulCurrentPage = 1;
+  renderEULActionCenter();
+
+  const modal = qs('eulActionCenterModal');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeEULActionCenter(){
+  const modal = qs('eulActionCenterModal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+function renderEULActionCenter(){
+  const body = qs('eulActionCenterBody');
+  const pageInfo = qs('eulPageInfo');
+  if(!body) return;
+
+  body.innerHTML = '';
+
+  const totalPages = Math.ceil(eulActionItems.length / EUL_PAGE_SIZE) || 1;
+  if(eulCurrentPage > totalPages) eulCurrentPage = totalPages;
+
+  const start = (eulCurrentPage - 1) * EUL_PAGE_SIZE;
+  const pageItems = eulActionItems.slice(start, start + EUL_PAGE_SIZE);
+
+  pageItems.forEach(it => {
+    const tr = document.createElement('tr');
+    tr.classList.add('border-b','hover:bg-slate-50','cursor-pointer');
+
+    tr.onclick = () => {
+  reopenEULActionCenterOnClose = true; // 🧭 remember origin
+  closeEULActionCenter();
+  openEULModal(it.recordIndex);
+};
+
+    tr.innerHTML = `
+      <td class="py-2 px-2">${it.desc}</td>
+      <td class="py-2 px-2 text-blue-600 underline">${it.icsNo}</td>
+      <td class="py-2 px-2">${it.entity}</td>
+      <td class="py-2 px-2">${it.issuedDate}</td>
+      <td class="py-2 px-2 text-center">${it.eul}</td>
+      <td class="py-2 px-2 font-semibold ${
+        it.diffDays < 0 ? 'text-red-600' : 'text-yellow-600'
+      }">${it.status}</td>
+      <td class="py-2 px-2 text-right">${it.diffDays}</td>
+    `;
+    body.appendChild(tr);
+  });
+
+  pageInfo.textContent = `Page ${eulCurrentPage} of ${totalPages}`;
+}
+
+function changeEULPage(dir){
+  eulCurrentPage += dir;
+  if(eulCurrentPage < 1) eulCurrentPage = 1;
+  renderEULActionCenter();
+}
+
+/* ================= EUL ACTION CENTER PRINT ================= */
+function printEULReport(){
+  if(!eulActionItems || !eulActionItems.length){
+    showToast('No EUL items to print');
+    return;
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow.document;
+
+  const rows = eulActionItems.map(it => {
+    const rec = records[it.recordIndex];
+    const item = (rec.items || []).find(x => x.itemNo === it.itemNo);
+
+    const history = (item?.inspectionHistory || [])
+      .map(h => `
+        <div style="font-size:10px; margin-left:10px;">
+          • ${h.date || ''} — ${h.status.toUpperCase()}
+          ${h.reason ? `(${h.reason})` : ''}
+        </div>
+      `).join('') || '<div style="font-size:10px; color:#666;">No inspection history</div>';
+
+    return `
+      <tr>
+        <td>${it.desc || ''}</td>
+        <td>${it.itemNo || ''}</td>
+        <td>${it.icsNo || ''}</td>
+        <td>${it.entity || ''}</td>
+        <td>${it.issuedDate || ''}</td>
+        <td class="center">${it.eul || ''}</td>
+        <td class="center">${it.status}</td>
+        <td class="right">${it.diffDays}</td>
+      </tr>
+      <tr>
+        <td colspan="8" style="padding:6px 10px;">
+          <strong style="font-size:11px;">Inspection History</strong>
+          ${history}
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  doc.open();
+  doc.write(`
+<!DOCTYPE html>
+<html>
+<head>
+  <title>EUL Action Center Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size:12px; }
+    h2 { text-align:center; margin-bottom:6px; }
+    p { text-align:center; font-size:11px; margin-top:0; }
+
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { border:1px solid #000; padding:6px; vertical-align:top; }
+    th { background:#f1f5f9; }
+
+    .center { text-align:center; }
+    .right { text-align:right; }
+
+    @media print {
+      body { margin: 12mm; }
+    }
+  </style>
+</head>
+<body>
+
+<h2>Estimated Useful Life (EUL) Action Center</h2>
+<p>
+  Generated on ${new Date().toLocaleDateString()}<br>
+  Disposal & Maintenance Alerts (View Only)
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Description</th>
+      <th>Item No.</th>
+      <th>ICS No.</th>
+      <th>Entity</th>
+      <th>Issued Date</th>
+      <th>EUL</th>
+      <th>Status</th>
+      <th>Days</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${rows}
+  </tbody>
+</table>
+
+</body>
+</html>
+  `);
+
+  doc.close();
+  iframe.contentWindow.focus();
+  iframe.contentWindow.print();
+
+  setTimeout(() => {
+    document.body.removeChild(iframe);
+  }, 1000);
+}
+
+
+/* -------------------------
+   EUL Action Center Toggle
+   ------------------------- */
+function toggleEULActionCenter(){
+  const modal = qs('eulActionCenterModal');
+  if(!modal) return;
+
+  const isOpen = !modal.classList.contains('hidden');
+
+  if(isOpen){
+    closeEULActionCenter();
+  } else {
+    openEULActionCenter();
+  }
+}
+
+/* ================= RENDER RECORDS FUNCTIONS ================= */
+  function renderRecords(){
+  const body = qs('archiveBody');
+  const pageInfo = qs('pageInfo');
+  if(!body) return;
+  body.innerHTML = '';
+
+    const search = qs('icsSearch')?.value.toLowerCase() || '';
+    const monthVal = qs('icsMonth')?.value;
+    const yearVal = qs('icsYear')?.value;
+
+    // sort records by most recently added/updated
+    const sortedRecords = [...records].sort((a,b)=> new Date(b.date) - new Date(a.date));
+
+    const filtered = sortedRecords.filter(rec => {
+  // 🔔 MAINTENANCE FILTER ACTIVE
+  if (maintenanceFilterActive && !recordHasMaintenance(rec)) {
+    return false;
+  }
+      const headerMatch = (rec.icsNo || '').toLowerCase().includes(search) || (rec.entity || '').toLowerCase().includes(search);
+      const itemMatch = Array.isArray(rec.items) && rec.items.some(it => (it.desc || '').toLowerCase().includes(search));
+      if(!headerMatch && !itemMatch) return false;
+      const d = new Date(rec.date);
+      if(yearVal !== '' && d.getFullYear() !== Number(yearVal)) return false;
+      if(monthVal !== '' && d.getMonth() !== Number(monthVal)) return false;
+	return true;
+    });
+
+    const countEl = qs('icsResultCount');
+    if(countEl){
+      countEl.textContent = `${filtered.length} record${filtered.length === 1 ? '' : 's'} found`;
+    }
+
+    // PAGINATION
+    const totalPages = Math.ceil(filtered.length / pageSize) || 1;
+    if(pageInfo){
+      pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+    }
+    if(currentPage > totalPages) currentPage = totalPages;
+
+    const start = (currentPage - 1) * pageSize;
+    const pageRecords = filtered.slice(start, start + pageSize);
+
+    if(!pageRecords.length){
+      body.innerHTML = '<tr><td colspan="8" class="italic text-center py-4">No matching records</td></tr>';
+      return;
+    }
+
+    pageRecords.forEach(rec => {
+      const idx = records.indexOf(rec);
+      const tr = document.createElement('tr');
+
+      const totalValue = (rec.items || []).reduce((s,it)=>s+safeNumber(it.total),0);
+      const issuedDate = rec.issuedBy?.date || '';
+      const accountable = rec.receivedBy?.name || '';
+
+      let maintenance = 0;
+      let disposal = 0;
+
+tr.classList.add(
+  'border-b',
+  'border-slate-200',
+  'last:border-b-0',
+  'align-top'
+);
+
+if (rec.issuedBy?.date) {
+  const issued = new Date(rec.issuedBy.date);
+  const today = new Date();
+
+  (rec.items || []).forEach(it => {
+    const eulYears = parseFloat(it.eul);
+    if (!Number.isFinite(eulYears) || eulYears <= 0) return;
+
+    const expiry = new Date(issued);
+    expiry.setFullYear(expiry.getFullYear() + eulYears);
+
+    const diffDays = (expiry - today) / (1000 * 60 * 60 * 24);
+
+    if (diffDays < 0) disposal++;
+    else if (diffDays <= 30) maintenance++;
+  });
+}
+
+tr.innerHTML = `
+        <td class="py-1.5 px-2 text-blue-600 cursor-pointer whitespace-nowrap" onclick="openICSPreview(${idx})">${rec.icsNo}</td>
+        <td class="py-1.5 px-2 whitespace-nowrap">${rec.entity}</td>
+        <td class="py-1.5 px-2 whitespace-nowrap text-xs">${issuedDate}</td>
+        <td class="py-1.5 px-2 whitespace-nowrap">${accountable}</td>
+<td
+  class="py-1.5 px-2 text-xs ${maintenance || disposal ? 'text-blue-600 cursor-pointer' : ''}"
+  ${maintenance || disposal ? `onclick="openEULModal(${idx})"` : ''}
+>
+  ${
+    maintenance || disposal
+      ? [
+          maintenance ? `🥲 (${maintenance})` : '',
+          disposal ? `😭 (${disposal})` : ''
+        ].filter(Boolean).join(' • ')
+      : '—'
+  }
+</td>
+
+        <td class="py-1.5 px-2 text-left font-medium">${totalValue ? `₱${formatNumber(totalValue)}` : ''}</td>
+        <td class="py-1.5 px-2 text-center">${Array.isArray(rec.items) ? rec.items.length : 0}</td>
+        <td class="py-1.5 px-2 text-right whitespace-nowrap">
+  <button onclick="enterEditMode(${idx})" title="View">👁️</button>
+  <button onclick="printICS(${idx})" class="ml-2" title="Print">🖨️</button>
+  <button onclick="exportICSJSON(${idx})" class="ml-2" title="Export">⬇️</button>
+  <button onclick="deleteRecord(${idx})" class="ml-2" title="Delete">🗑️</button>
+</td>`;
+      body.appendChild(tr);
+    });
+  }
+    
+/* ============ MAINTENANCE FILTER FUNCTION ================= */
+
+function toggleMaintenanceFilter(){
+  currentPage = 1;
+  maintenanceFilterActive = !maintenanceFilterActive;
+
+  if (maintenanceFilterActive) {
+    showToast('Maintenance filter applied');
+  } else {
+    showToast('Maintenance filter cleared');
+  }
+
+  renderRecords();
+}
+
+  function deleteRecord(index){
+     showModal('Delete this ICS record?', {
+      title: 'Delete Record',
+      confirm: true
+    }).then(ok => {
+      if(!ok) return;
+    
+      records.splice(index,1);
+      localStorage.setItem('icsRecords', JSON.stringify(records));
+      populateAutoSuggest();
+      populateYearFilter();
+      renderRecords();
+      updateDashboard();
+      updateGreetingStat();
+    });
+}
+  function enterEditMode(index){
+    const rec = records[index];
+    if(!rec) return;
+
+    isEditMode = true;
+    editRecordIndex = index;
+
+    qs('icsNo').value = rec.icsNo || '';
+    qs('entity').value = rec.entity || '';
+    qs('fund').value = rec.fund || '';
+
+    // SAFELY HANDLE ISSUED BY (may be missing in imported/old records)
+    const issued = rec.issuedBy || { name:'', designation:'', date:'' };
+    qs('issuedByName').value = issued.name || '';
+    qs('issuedByDesignation').value = issued.designation || '';
+    qs('issuedByDate').value = issued.date || '';
+
+    // SAFELY HANDLE RECEIVED BY
+    const received = rec.receivedBy || { name:'', designation:'', date:'' };
+    qs('receivedByName').value = received.name || '';
+    qs('receivedByDesignation').value = received.designation || '';
+    qs('receivedByDate').value = received.date || '';
+
+    stagedItems = Array.isArray(rec.items) ? rec.items.map(it => ({...it})) : [];
+    editIndex = null;
+    updateItemActionState();
+    renderStaged();
+
+    const btn = document.querySelector('button[onclick="saveICS()"]');
+    btn.textContent = 'Update ICS';
+    btn.classList.replace('bg-emerald-600','bg-blue-600');
+  }
+
+  function resetSignatories(){
+    ['issuedByName','issuedByDesignation','issuedByDate','receivedByName','receivedByDesignation','receivedByDate']
+      .forEach(id => qs(id).value = '');
+  }
+
+  function exitEditMode(){
+    isEditMode = false;
+    editRecordIndex = null;
+    stagedItems = [];
+    editIndex = null;
+    clearItemForm();
+    resetSignatories();
+    qs('entity').value = qs('fund').value = qs('icsNo').value = '';
+    updateItemActionState();
+    renderStaged();
+
+    const btn = document.querySelector('button[onclick="saveICS()"]');
+    btn.textContent = 'Save ICS';
+    btn.classList.replace('bg-blue-600','bg-emerald-600');
+  }
+
+/* ================= EXPORT FUNCTIONS ================= */
+
+  function exportICS(){
+    if(!records.length){ showToast('No records to export'); return; }
+    const blob = new Blob([JSON.stringify(records,null,2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ICS-records.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+function refreshUI(){
+  renderRecords();
+  updateDashboard();
+  updateGreetingStat();
+}
+
+/* ================= COA STYLE PRINT FUNCTIONS ================= */    
+function printICS(index){
+  const rec = records[index];
+  if(!rec) return;
+
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow.document;
+
+  // --- BUILD 20-ROW TABLE ---
+  const items = rec.items || [];
+  const minRows = 20;
+  const totalRows = Math.max(items.length, minRows);
+
+  const itemRows = Array.from({ length: totalRows }, (_, i) => {
+    const it = items[i];
+    return `
+      <tr>
+        <td class="center">${it ? (it.qty !== '' ? it.qty : '') : ''}</td>
+        <td class="center">${it ? (it.unit || '') : ''}</td>
+        <td class="right">${it ? formatNumber(it.unitCost) : ''}</td>
+        <td class="right">${it ? formatNumber(it.total) : ''}</td>
+        <td>${it ? (it.desc || '') : ''}</td>
+        <td class="center">${it ? (it.itemNo || '') : ''}</td>
+        <td class="center">${it ? (it.eul || '') : ''}</td>
+      </tr>
+    `;
+  }).join('');
+
+  doc.open();
+  doc.write(`
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ICS Print</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size:12px; }
+    .center { text-align:center; }
+    .right { text-align:right; }
+
+    table { width:100%; border-collapse:collapse; }
+    th, td { border:1px solid #000; padding:4px; }
+
+    /* 🔒 UNIFORM ROW HEIGHT */
+    tbody tr { height:28px; }
+    td { vertical-align:middle; line-height:1.2; }
+
+    .no-border td { border:none; }
+
+    @media print {
+      body { margin: 12mm; }
+    }
+  </style>
+</head>
+<body data-density="normal">
+
+<div class="center" style="line-height:1.15">
+  <div>Republic of the Philippines</div>
+  <div><strong>Department of Education</strong></div>
+  <div>Region VI – Western Visayas</div>
+  <div><strong>DIVISION OF AKLAN</strong></div>
+  <div>Kalibo, Aklan</div>
+</div>
+
+<div class="center" style="margin-top:10px; font-weight:bold;">
+  INVENTORY CUSTODIAN SLIP
+</div>
+
+<br>
+
+<table class="no-border" style="margin-top:14px;">
+  <tr>
+    <td style="width:65%;">
+      <strong>Entity Name:</strong>
+      <span style="border-bottom:1px solid #000; min-width:260px; display:inline-block;">
+        ${rec.entity || ''}
+      </span>
+    </td>
+    <td class="right" style="width:35%;">
+      <strong>ICS No.:</strong>
+      <span style="border-bottom:1px solid #000; min-width:140px; display:inline-block;">
+        ${rec.icsNo || ''}
+      </span>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <strong>Fund Cluster:</strong>
+      <span style="border-bottom:1px solid #000; min-width:120px; display:inline-block;">
+        ${rec.fund || ''}
+      </span>
+    </td>
+    <td></td>
+  </tr>
+</table>
+
+<br>
+
+<table>
+  <thead>
+    <tr>
+      <th rowspan="2">Qty</th>
+      <th rowspan="2">Unit</th>
+      <th colspan="2">Amount</th>
+      <th rowspan="2">Description</th>
+      <th rowspan="2">Inventory Item No.</th>
+      <th rowspan="2">Estimated Useful Life</th>
+    </tr>
+    <tr>
+      <th>Unit Cost</th>
+      <th>Total Cost</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${itemRows}
+  </tbody>
+</table>
+<table style="width:100%;">
+  <tr>
+    <td><strong>Received from:</strong></td>
+    <td><strong>Received by:</strong></td>
+  </tr>
+  <tr>
+    <td class="center" style="height:55px; vertical-align:bottom;">
+      <strong>${rec.issuedBy?.name || ''}</strong><br>
+      <span style="font-size:10px;">Signature Over Printed Name</span>
+    </td>
+    <td class="center" style="vertical-align:bottom;">
+      <strong>${rec.receivedBy?.name || ''}</strong><br>
+      <span style="font-size:10px;">Signature Over Printed Name</span>
+    </td>
+  </tr>
+  <tr>
+    <td class="center">
+      <strong>${rec.issuedBy?.designation || ''}</strong><br>
+      <span style="font-size:10px;">Position/Office</span>
+    </td>
+    <td class="center">
+      <strong>${rec.receivedBy?.designation || ''}</strong><br>
+      <span style="font-size:10px;">Position/Office</span>
+    </td>
+  </tr>
+  <tr>
+    <td class="center">
+      <strong>${rec.issuedBy?.date || ''}</strong><br>
+      <span style="font-size:10px;">Date</span>
+    </td>
+    <td class="center">
+      <strong>${rec.receivedBy?.date || ''}</strong><br>
+      <span style="font-size:10px;">Date</span>
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>
+  `);
+
+  doc.close();
+
+  iframe.contentWindow.focus();
+  iframe.contentWindow.print();
+
+  setTimeout(() => {
+    document.body.removeChild(iframe);
+  }, 1000);
+}
+
+function magicPopulate(){
+  const names = ['Juan Dela Cruz','Maria Santos','Pedro Reyes','Ana Lopez'];
+  const entities = ['Oquendo ES','Balete ES','Kalibo NHS','Division Office'];
+  const units = ['pc','unit','set'];
+  const descs = ['Office Chair','Desktop Computer','Electric Fan','Printer','Table'];
+
+  const count = 20; // stress size
+  for(let i=0;i<count;i++){
+    const issuedDate = new Date();
+    issuedDate.setMonth(issuedDate.getMonth() - Math.floor(Math.random()*24));
+
+    const items = Array.from({length: Math.ceil(Math.random()*5)}, (_,j)=>{
+      const qty = Math.ceil(Math.random()*5);
+      const cost = Math.ceil(Math.random()*5000);
+      return {
+        qty,
+        unit: units[Math.floor(Math.random()*units.length)],
+        unitCost: cost,
+        total: qty * cost,
+        desc: descs[Math.floor(Math.random()*descs.length)],
+        eul: String(Math.ceil(Math.random()*5)),
+        itemNo: `IT-${Math.floor(Math.random()*99999)}`
+      };
+    });
+
+    records.unshift({
+      icsNo: `ICS-${Date.now()}-${i}`,
+      entity: entities[Math.floor(Math.random()*entities.length)],
+      fund: '101',
+      date: new Date().toISOString(),
+      issuedBy: {
+        name: names[Math.floor(Math.random()*names.length)],
+        designation: 'School Head',
+        date: issuedDate.toISOString().split('T')[0]
+      },
+      receivedBy: {
+        name: names[Math.floor(Math.random()*names.length)],
+        designation: 'Property Custodian',
+        date: issuedDate.toISOString().split('T')[0]
+      },
+      items
+    });
+  }
+
+  localStorage.setItem('icsRecords', JSON.stringify(records));
+  populateAutoSuggest();
+  populateYearFilter();
+  currentPage = 1;
+  renderRecords();
+  updateDashboard();
+  updateGreetingStat();showToast('Magic data generated');
+}
+
+function importICS(){
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json';
+
+  input.onchange = e => {
+    const file = e.target.files[0];
+    if(!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try{
+        const imported = JSON.parse(reader.result);
+
+        if(!Array.isArray(imported)){
+          throw new Error('Invalid ICS file structure');
+        }
+
+        // ✅ NORMALIZE RECORDS
+        records = imported.map(r => ({
+          icsNo: r.icsNo || '',
+          entity: r.entity || '',
+          fund: r.fund || '',
+          date: r.date || new Date().toISOString(),
+
+          issuedBy: {
+            name: r.issuedBy?.name || '',
+            designation: r.issuedBy?.designation || '',
+            date: r.issuedBy?.date || ''   // IMPORTANT
+          },
+
+          receivedBy: {
+            name: r.receivedBy?.name || '',
+            designation: r.receivedBy?.designation || '',
+            date: r.receivedBy?.date || ''
+          },
+
+          items: Array.isArray(r.items)
+            ? r.items.map(it => ({
+                qty: safeNumber(it.qty),
+                unit: it.unit || '',
+                unitCost: safeNumber(it.unitCost),
+                total: safeNumber(it.total),
+                desc: it.desc || '',
+                eul: it.eul || '',
+                itemNo: it.itemNo || ''
+              }))
+            : []
+        }));
+
+        localStorage.setItem('icsRecords', JSON.stringify(records));
+
+        populateAutoSuggest();
+        populateYearFilter();
+        renderRecords();
+        updateDashboard();
+
+        showToast('ICS records imported successfully');
+
+      }catch(err){
+        showModal(
+          'Invalid ICS file. The file structure is not supported.',
+          { title: 'Import Error' }
+        );
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+/* ================= MONTH FILTER WITH COUNTS ================= */
+function populateMonthFilter(){
+  const monthSelect = qs('icsMonth');
+  const yearVal = qs('icsYear')?.value;
+  if(!monthSelect) return;
+
+  monthSelect.innerHTML = '<option value="">All Months</option>';
+
+  const monthMap = getMonthCountsByYear(yearVal);
+
+  Object.keys(monthMap)
+    .sort((a,b)=>a-b)
+    .forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent =
+        `${new Date(2000, m).toLocaleString('default',{month:'long'})} (${monthMap[m]})`;
+      monthSelect.appendChild(opt);
+    });
+}
+
+  function populateAutoSuggest(){
+    const setOptions = (id, values) => {
+      const dl = qs(id);
+      if(!dl) return;
+      dl.innerHTML = '';
+      [...new Set(values.filter(Boolean))].forEach(v => {
+        const o = document.createElement('option');
+        o.value = v;
+        dl.appendChild(o);
+      });
+    };
+
+    setOptions('entityList', records.map(r => r.entity));
+    setOptions('fundList', records.map(r => r.fund));
+    setOptions('issuedByList', records.map(r => r.issuedBy?.name));
+    setOptions('receivedByList', records.map(r => r.receivedBy?.name));
+    setOptions('designationList', records.flatMap(r => [r.issuedBy?.designation, r.receivedBy?.designation]));
+    setOptions('descList', records.flatMap(r => (r.items || []).map(it => it.desc)));
+    setOptions('searchList', records.flatMap(r => [r.icsNo, r.entity, ...(r.items||[]).map(it=>it.desc)]));
+  }
+
+function populateMonthFilter(){
+  const monthSelect = qs('icsMonth');
+  const yearVal = qs('icsYear')?.value;
+  if(!monthSelect) return;
+
+  monthSelect.innerHTML = '<option value="">All Months</option>';
+
+  const monthMap = getMonthCountsByYear(yearVal);
+
+  Object.keys(monthMap)
+    .sort((a,b)=>a-b)
+    .forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent =
+        `${new Date(2000, m).toLocaleString('default',{month:'long'})} (${monthMap[m]})`;
+      monthSelect.appendChild(opt);
+    });
+}
+
+/*============ONE SHARED HELPER WIDGET ========*/
+function getEULStatus(it, issuedDate, today){
+  const eulYears = parseFloat(it.eul);
+  if (!Number.isFinite(eulYears) || eulYears <= 0) return null;
+
+  const expiryDate = new Date(issuedDate);
+  expiryDate.setFullYear(expiryDate.getFullYear() + eulYears);
+
+  const diffMonths = (expiryDate - today) / (1000 * 60 * 60 * 24 * 30);
+
+  if (diffMonths < 0) return 'disposal';
+  if (diffMonths <= 1) return 'maintenance';
+
+  return 'ok';
+}
+
+function updateDashboard(){
+  const today = new Date();
+
+  let totalValue = 0;
+  let maintenanceCount = 0;
+  let disposalCount = 0;
+
+  records.forEach(rec => {
+    if (!rec.issuedBy?.date) return;
+
+    const issuedDate = new Date(rec.issuedBy.date);
+    if (isNaN(issuedDate)) return;
+
+    (rec.items || []).forEach(it => {
+      totalValue += safeNumber(it.total);
+
+      const status = getEULStatus(it, issuedDate, today);
+
+      if (status === 'maintenance') maintenanceCount++;
+      if (status === 'disposal') disposalCount++;
+    });
+  });
+
+/* -------------------------
+   Last Items Added (Carousel)
+   ------------------------- */
+const container = qs('dashLastItem');
+if (container) {
+  const items = getLastItems(5);
+  container.innerHTML = '';
+
+  if (!items.length) {
+    container.innerHTML =
+      '<span class="text-xs text-slate-400 italic">No items added yet</span>';
+  } else {
+    items.forEach(it => {
+      const el = document.createElement('div');
+
+      // keep carousel sizing + horizontal flow
+      el.className =
+        'min-w-[180px] shrink-0 border rounded-lg p-2 text-xs ' +
+        'bg-white hover:bg-slate-50 transition';
+
+      el.innerHTML = `
+        <div class="font-semibold text-slate-700 truncate">
+          ${it.desc}
+        </div>
+        <div class="text-[11px] text-slate-400 mt-1">
+          ${formatRelativeTime(it.time)}
+        </div>
+      `;
+
+      container.appendChild(el);
+    });
+  }
+}
+
+function formatRelativeTime(dateStr){
+  if(!dateStr) return '';
+
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+
+  if(mins < 1) return 'just now';
+  if(mins < 60) return `${mins}m ago`;
+
+  const hrs = Math.floor(mins / 60);
+  if(hrs < 24) return `${hrs}h ago`;
+
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+
+  qs('dashTotalValue').textContent =
+    totalValue ? `₱${formatNumber(totalValue)}` : '—';
+
+  qs('dashActiveSlips').textContent = records.length;
+  qs('dashMaintenance').textContent = maintenanceCount;
+  qs('dashDisposal').textContent = disposalCount;
+}
+
+function recordHasMaintenance(rec){
+  if (!rec.issuedBy?.date) return false;
+
+  const issuedDate = new Date(rec.issuedBy.date);
+  if (isNaN(issuedDate)) return false;
+
+  const today = new Date();
+
+  return (rec.items || []).some(it =>
+    getEULStatus(it, issuedDate, today) === 'maintenance'
+  );
+}
+
+function bindLastItemHover() {
+  const el = qs('dashLastItem');
+  if (!el) return;
+
+  el.onmouseenter = stopLastItemAutoScroll;
+  el.onmouseleave = startLastItemAutoScroll;
+}
+
+
+  /* ================= INIT ================= */
+  function updateGreeting(){
+  const textEl = qs('greetingText');
+  const iconEl = qs('greetingIcon');
+  if(!textEl || !iconEl) return;
+
+  const hour = new Date().getHours();
+  let greeting = 'Good day, Admin';
+  let icon = '🌞';
+
+  if(hour < 12){
+    greeting = 'Good morning, Admin';
+    icon = '🌞';
+  } else if(hour < 18){
+    greeting = 'Good afternoon, Afternoon';
+    icon = '🌤️';
+  } else {
+    greeting = 'Good evening, Admin';
+    icon = '🌚';
+  }
+
+  textEl.textContent = greeting;
+  iconEl.textContent = icon;
+
+  // trigger animation
+  iconEl.classList.remove('greet-animate');
+  void iconEl.offsetWidth; // restart animation
+  iconEl.classList.add('greet-animate');
+}
+
+function updateGreetingStat(){
+  const countEl = qs('greetingStatCount');
+  const labelEl = qs('greetingStatLabel');
+  if(!countEl || !labelEl) return;
+
+  const totalItems = records.reduce(
+    (sum, r) => sum + ((r.items && r.items.length) || 0),
+    0
+  );
+
+  if(totalItems > 0){
+    countEl.textContent = totalItems;
+    labelEl.textContent = totalItems === 1 ? 'item' : 'items';
+  } else {
+    countEl.textContent = '0';
+    labelEl.textContent = 'No items';
+  }
+}
+
+
+/* ================= CLOCK STAT ================= */
+
+function syncSystemClock(){
+  const el = qs('greetingClock');
+  if(!el) return;
+
+  const now = new Date();
+
+  el.textContent = now.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
+}
+
+/* ================= ICS PREVIEW (HARD RESET) ================= */
+
+function closeAllOverlays(){
+  document.querySelectorAll('.modal-overlay').forEach(m => {
+    m.classList.add('hidden');
+    m.classList.remove('flex');
+  });
+}
+
+function openICSPreview(index){
+  closeAllOverlays();
+
+  const rec = records[index];
+  if(!rec) return;
+
+  // Header
+  qs('pvICSNo').textContent = rec.icsNo || '';
+  qs('pvEntity').textContent = rec.entity || '';
+  qs('pvFund').textContent = rec.fund || '';
+
+  // Items
+  const body = qs('pvItems');
+  body.innerHTML = '';
+  let total = 0;
+
+  (rec.items || []).forEach(it => {
+    total += safeNumber(it.total);
+
+    body.insertAdjacentHTML('beforeend', `
+      <tr class="border-b last:border-b-0">
+        <td class="p-2">${it.desc || ''}</td>
+        <td class="p-2 text-center">${it.qty || ''}</td>
+        <td class="p-2 text-right">${formatNumber(it.unitCost)}</td>
+        <td class="p-2 text-right font-medium">${formatNumber(it.total)}</td>
+      </tr>
+    `);
+  });
+
+  qs('pvTotal').textContent = formatNumber(total);
+
+  // Signatories
+  qs('pvIssuedBy').textContent = rec.issuedBy?.name || '';
+  qs('pvIssuedPos').textContent = rec.issuedBy?.designation || '';
+  qs('pvIssuedDate').textContent = rec.issuedBy?.date || '';
+
+  qs('pvReceivedBy').textContent = rec.receivedBy?.name || '';
+  qs('pvReceivedPos').textContent = rec.receivedBy?.designation || '';
+  qs('pvReceivedDate').textContent = rec.receivedBy?.date || '';
+
+  // Logs
+  const logWrap = qs('pvLogs');
+  logWrap.innerHTML = '';
+
+  let hasLogs = false;
+  rec.items?.forEach(it => {
+    (it.inspectionHistory || []).forEach(h => {
+      hasLogs = true;
+      logWrap.insertAdjacentHTML('beforeend', `
+        <div class="border-l-2 pl-3 ${
+          h.status === 'unserviceable'
+            ? 'border-red-400'
+            : 'border-green-400'
+        }">
+          <div class="font-semibold">${h.status}</div>
+          <div class="text-slate-400">${h.date || ''}</div>
+          <div>${h.reason || h.notes || ''}</div>
+        </div>
+      `);
+    });
+  });
+
+  if(!hasLogs){
+    logWrap.innerHTML = '<div class="italic text-center">No inspection history</div>';
+  }
+
+  // Show
+  const modal = qs('icsPreview');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeICSPreview(){
+  const modal = qs('icsPreview');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+/* ================= INSPECTION HISTORY MODAL ================= */
+
+function openInspectionHistory(recordIndex, itemNo){
+  const rec = records[recordIndex];
+  if(!rec) return;
+
+  const item = (rec.items || []).find(it => it.itemNo === itemNo);
+  if(!item || !item.inspectionHistory || !item.inspectionHistory.length){
+    showToast('No inspection history available');
+    return;
+  }
+
+  const body = qs('inspectionHistoryBody');
+  if(!body) return;
+
+  body.innerHTML = '';
+
+  item.inspectionHistory.forEach(h => {
+    const tr = document.createElement('tr');
+    tr.classList.add('border-b','last:border-b-0');
+
+    tr.innerHTML = `
+      <td class="py-2 px-3">${h.date || ''}</td>
+      <td class="py-2 px-3">
+        <span class="px-2 py-0.5 rounded text-[11px] font-medium ${
+          h.status === 'unserviceable'
+            ? 'bg-red-100 text-red-700'
+            : 'bg-green-100 text-green-700'
+        }">
+          ${h.status}
+        </span>
+      </td>
+      <td class="py-2 px-3">${h.reason || '-'}</td>
+      <td class="py-2 px-3">${h.notes || '-'}</td>
+      <td class="py-2 px-3 text-slate-500">
+        ${h.recordedAt ? new Date(h.recordedAt).toLocaleString() : ''}
+      </td>
+    `;
+    body.appendChild(tr);
+  });
+
+  const modal = qs('inspectionHistoryModal');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeInspectionHistoryModal(){
+  const modal = qs('inspectionHistoryModal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+/* ================= PWA SERVICE WORKER ================= */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('./sw.js')
+      .catch(err => console.warn('SW failed', err));
+  });
+}
+
+/* ================= INIT ================= */
+window.addEventListener('DOMContentLoaded', () => {
+
+  // Core
+  populateAutoSuggest();
+  populateYearFilter();
+  populateMonthFilter();
+  renderRecords();
+  renderStaged();
+  updateDashboard();
+  updateGreeting();
+  updateGreetingStat();
+  startLastItemAutoScroll();
+  bindLastItemHover();
+  syncSystemClock();                 // initial paint
+  setInterval(syncSystemClock, 1000); // live update
+
+  // Manage ICS filters
+  qs('icsYear')?.addEventListener('change', () => {
+    populateMonthFilter();
+    renderRecords();
+  });
+
+  qs('icsMonth')?.addEventListener('change', renderRecords);
+
+  // Export Center filters
+  qs('exportScope')?.addEventListener('change', populateExportICS);
+
+  qs('exportYear')?.addEventListener('change', () => {
+    populateExportMonthFilter();
+    populateExportICS();
+  });
+
+  qs('exportMonth')?.addEventListener('change', populateExportICS);
+
+});
+
+    // --- BASIC RUNTIME TESTS ---
+    console.assert(Array.isArray(records),'records is array');
+    console.assert(typeof renderRecords === 'function','renderRecords exists');
+    console.assert(typeof showToast === 'function','showToast exists');
+    console.assert(typeof saveICS === 'function','saveICS exists');
+    console.assert(formatNumber(undefined) === '','formatNumber(undefined)');
+    console.assert(formatNumber(null) === '','formatNumber(null)');
+    console.assert(formatNumber(1234.5) === '1,234.50','formatNumber valid');
+
+/* -------------------------
+   UI Density Control
+   ------------------------- */
+function setDensity(mode) {
+  document.body.setAttribute('data-density', mode);
+  localStorage.setItem('uiDensity', mode);
+}
+  const savedDensity = localStorage.getItem('uiDensity');
+if (savedDensity) {
+  document.body.setAttribute('data-density', savedDensity);
+}
+  </script>
+  <style>
+    #toast{position:fixed;bottom:1rem;right:1rem;background:#0f172a;color:white;padding:.6rem 1rem;border-radius:.5rem;opacity:0;transition:.3s}
+
+/* Greeting icon animation */
+@keyframes greetPulse {
+  0% { transform: scale(0.9) rotate(-5deg); opacity: 0.7; }
+  50% { transform: scale(1.1) rotate(5deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+/* ================= GREETING ICON BOUNCE ================= */
+
+@keyframes gentleBounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.animate-greeting-bounce {
+  animation: gentleBounce 2.2s ease-in-out infinite;
+}
+
+    #toast.show{opacity:1}
+
+/* EUL Modal row hover (optional UX) */
+#eulModal table tbody tr:hover {
+  background-color: #f8fafc;
+}
+  </style>
+</head>
+
+<style>
+/* ================= ICS v2 GLOBAL THEME ================= */
+:root {
+  /* Brand / Accent */
+  --accent: #4f8cff;
+  --accent-soft: #e8f0ff;
+
+  /* Backgrounds */
+  --bg-app: linear-gradient(135deg, #eef3fb 0%, #e6ecf8 100%);
+  --bg-card: rgba(255, 255, 255, 0.75);
+  --bg-card-solid: #ffffff;
+  --bg-muted: #f5f7fb;
+
+  /* Text */
+  --text-main: #1f2937;
+  --text-muted: #64748b;
+  --text-soft: #94a3b8;
+
+  /* Borders & Radius */
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+
+  /* Shadows */
+  --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.08);
+  --shadow-card: 0 6px 20px rgba(15, 23, 42, 0.06);
+
+  /* Overlays */
+  --overlay: rgba(15, 23, 42, 0.35);
+}
+
+/* ================= BASE APP OK ================= */
+body {
+  background-color: #ffffff; color: #334155;
+  }
+
+/* ================= CARDS ================= */
+.card {
+  background: linear-gradient(
+    180deg,
+    rgb(255, 255, 255),
+    rgb(255, 255, 255)
+  );
+
+  backdrop-filter: blur(12px);
+  border-radius: var(--radius-lg);
+
+  /* ✨ DEPTH */
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.6) inset,   /* top highlight */
+    0 8px 24px rgba(15,23,42,0.08),        /* main lift */
+    0 2px 6px rgba(15,23,42,0.04);         /* grounding */
+
+  border: 1px solid rgba(255,255,255,0.5);
+}
+    .glass-pill {
+      background: rgba(255, 255, 255, 0.7);
+      backdrop-filter: blur(4px);
+}
+    .stat-inner-box {
+      /* Updated to an emerald green theme */
+      background: #000000;;
+      border: 1px solid rgba(0, 0, 0, 0.25);
+      backdrop-filter: blur(10px);
+      transition: all 0.3s ease;
+}
+    /* Glass effect for navigation and containers */
+    .glass-nav {
+      background: rgba(255, 255, 255, 0.75);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+}
+    .stats-divider {
+      width: 1px;
+      height: 40px;
+      margin: 0 1rem;
+      background: rgba(14, 14, 14, 0.1);
+}
+/* ================= HEADERS ================= */
+h1, h2, h3 {
+  letter-spacing: 0.2px;
+}
+
+/* ================= INPUTS ================= */
+input, select, textarea {
+  background: var(--bg-card-solid);
+  border-radius: var(--radius-sm);
+  border: 1px solid #d5d7db;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* ================= BUTTONS ================= */
+button {
+  border-radius: var(--radius-md);
+  transition: all 0.15s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+/* Primary */
+.bg-emerald-600,
+.bg-blue-600,
+.bg-slate-900 {
+  background: var(--accent) !important;
+}
+
+/* ================= TABLES ================= */
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+thead {
+  background: var(--bg-muted);
+}
+
+tbody tr {
+  transition: background 0.12s ease;
+}
+
+tbody tr:hover {
+  background: #eef3ff;
+}
+
+/* ================= MODALS ================= */
+.fixed.inset-0.bg-black\/40 {
+  background: var(--overlay) !important;
+}
+
+.modal-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(14px);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+
+  /* Subtle edge glow */
+  outline: 1px solid rgba(255, 255, 255, 0.35);
+  outline-offset: -1px;
+}
+
+/* ================= TOAST / NOTIFICATIONS ================= */
+#toast {
+  background: var(--bg-card-solid);
+  color: var(--text-main);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-soft);
+}
+
+/* ================= BADGES ================= */
+.badge {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* ================= SCROLLBARS ================= */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #c7d2fe;
+  border-radius: 999px;
+}
+
+.card {
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.7) inset,
+    0 14px 32px rgba(15,23,42,0.12),
+    0 6px 12px rgba(15,23,42,0.06);
+}
+
+/* ================= LEFT COLUMN GROUPING ================= */
+.left-panel {
+  background: linear-gradient(
+    180deg,
+    rgba(4, 17, 31, 0.288),
+    rgba(3, 10, 17, 0.205)
+  );
+
+  border-radius: 14px;
+  padding: 12px;
+
+  box-shadow:
+    inset 0 1px 0 rgb(255, 255, 255),
+    
+
+
+}
+
+/* Hide scrollbar but keep scroll */
+#dashLastItem {
+  scrollbar-width: none;      /* Firefox */
+}
+#dashLastItem::-webkit-scrollbar {
+  display: none;              /* Chrome / Edge */
+}
+
+<style>
+/* =================================================
+   UI DENSITY SYSTEM
+   ================================================= */
+
+/* ---------- COMFORTABLE ---------- */
+body[data-density="comfortable"] .card {
+  padding: 1rem;
+}
+
+body[data-density="comfortable"] .text-xs {
+  font-size: 0.85rem;
+}
+
+body[data-density="comfortable"] .text-xl {
+  font-size: 1.35rem;
+}
+
+body[data-density="comfortable"] .gap-3 {
+  gap: 1rem;
+}
+body[data-density="comfortable"] .gap-4 {
+  gap: 1.25rem;
+}
+
+/* ---------- COMPACT ---------- */
+body[data-density="compact"] .card {
+  padding: 0.55rem;
+}
+
+body[data-density="compact"] .text-xs {
+  font-size: 0.65rem;
+}
+
+body[data-density="compact"] .text-xl {
+  font-size: 1rem;
+}
+
+body[data-density="compact"] .gap-3 {
+  gap: 0.45rem;
+}
+body[data-density="compact"] .gap-4 {
+  gap: 0.6rem;
+}
+
+/* Widget icon boxes */
+body[data-density="compact"] .w-9,
+body[data-density="compact"] .w-8 {
+  width: 1.7rem;
+  height: 1.7rem;
+  font-size: 0.85rem;
+}
+</style>
+
+ <!-- TOP NAVIGATIONAL MENU -->
+  <nav class="w-full glass-nav px-8 py-3.5 flex items-center justify-between sticky top-0 z-40">
+    <div class="flex items-center gap-4">
+        <div class="bg-[#2563eb] text-white font-extrabold w-9 h-9 flex items-center justify-center rounded-lg text-[11px] shadow-sm">OES</div>
+        <div>
+          <span class="text-[13px] font-bold text-slate-800 block leading-tight">Electronic Inventory Custodian Management</span>
+          <span class="text-[10px] font-semibold text-slate-400 block leading-tight">version 1.0 by JRG (test version 02/2026)</span>
+        </div>
+    </div>
+    
+    <div class="flex items-center gap-3">
+        <button onclick="magicPopulate()" class="bg-[#7c3aed] text-white px-5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-purple-200/50 hover:bg-[#6d28d9] transition-all">
+            <span class="text-sm">✨</span> Magic Actions
+        </button>
+        <div class="h-6 w-[1px] bg-slate-200 mx-1"></div>
+        <button onclick="importICS()" class="bg-white/50 border border-white/40 text-slate-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-white transition-colors">Import</button>
+        <button onclick="openExportCenter()" class="bg-white/50 border border-white/40 text-slate-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-white transition-colors">Export</button>
+    </div>
+  </nav>
+
+<!-- WELCOME HEADER -->
+
+<main class="w-full">
+    
+<!-- REFINED WELCOME HEADER -->
+    <header class="bg-white bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-indigo-50/20 via-white to-white px-12 py-7 flex items-center justify-between gap-6 relative overflow-hidden border-b border-slate-200/50">
+
+<!-- LEFT CONTENT -->
+      <div class="relative z-10 space-y-4">
+        <!-- Professional Badge -->
+        <div class="inline-flex items-center px-2.5 py-1 glass-pill text-[#4f46e5] rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] border border-indigo-100/50 shadow-sm">
+          <span class="flex gap-1.5 mr-2.5">
+            <span class="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse"></span>
+            <span class="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-pulse"></span>
+            <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+          </span>
+          System Live <span class="mx-2 text-slate-300">|</span> Oquendo Elementary School
+        </div>
+
+    <!-- Greeting Line -->
+    <h2 class="flex items-center gap-3 text-5xl font-extrabold text-[#1e293b] tracking-tight leading-none">
+      <span id="greetingText">Good Evening, Admin</span>
+      <span id="greetingIcon" class="animate-greeting-bounce text-4xl ml-1">🌚</span>
+</h2>
+          <p class="text-slate-500 font-medium text-lg leading-tight">
+            Document and track inventory distributions seamlessly with real-time analytics.
+          </p>
+        </div>
+      </div>
+
+  <!-- RIGHT STAT PILL -->
+      <div class="relative z-10 shrink-0 pl-10 pr-4 py-4 rounded-[1.8rem] flex items-center gap-1 ">
+        <!-- Time Section -->
+        <div class="flex flex-col items-end">
+          <span id="greetingClock" class="text-4xl font-black text-black leading-none tracking-tighter uppercase">--:-- --</span>
+          <span class="text-[9px] font-bold text-slate-500 uppercase tracking-[0.2em] mt-2">Server Time (PST)</span>
+        </div>
+        <div class="stats-divider"></div>
+<!-- Active Slips Box -->
+        <div id="slipsContainer" class="stat-inner-box px-6 py-4 rounded-2xl flex flex-col items-center justify-center min-w-[100px]">
+          <span id="greetingStatCount" class="text-2xl font-black text-white leading-none transition-all duration-300">54</span>
+          <span id="greetingStatLabel" class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1.5 whitespace-nowrap">Active Slips</span>
+        </div>
+      </div>
+    </header>
+
+<main class="p-4">
+ <div class="px-4">
+      </div>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-6 items-start">
+
+  <!-- LEFT COLUMN -->
+<div class="left-panel space-y-4">
+
+  <!-- AGENCY INFO -->
+  <div class="card p-3">
+    <h2 class="font-semibold mb-2">🏫 Agency Info</h2>
+
+    <div class="flex flex-col mb-2">
+      <label class="text-[11px] font-medium text-slate-600 mb-1">
+        Entity Name
+      </label>
+      <input id="entity" list="entityList"
+             class="border p-1.5 w-full text-xs"
+             placeholder="Entity Name">
+    </div>
+
+    <div class="flex flex-col mb-2">
+      <label class="text-[11px] font-medium text-slate-600 mb-1">
+        Fund Cluster
+      </label>
+      <input id="fund" list="fundList"
+             class="border p-1.5 w-full text-xs"
+             placeholder="Fund Cluster">
+    </div>
+
+    <div class="flex flex-col">
+      <label class="text-[11px] font-medium text-slate-600 mb-1">
+        ICS No.
+      </label>
+      <input id="icsNo" maxlength="12"
+             class="border p-1.5 w-full text-xs"
+             placeholder="YYYY-MM-XXX">
+    </div>
+  </div>
+
+
+  <!-- ADD ITEM -->
+  <div class="card p-3">
+    <h2 class="font-semibold mb-2">📝 Add Item</h2>
+
+    <div class="grid grid-cols-2 gap-2">
+
+      <div class="flex flex-col">
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Quantity
+        </label>
+        <input id="qty" type="number"
+               class="border p-1.5 text-xs w-full"
+               placeholder="Qty">
+      </div>
+
+      <div class="flex flex-col">
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Unit
+        </label>
+        <input id="unit"
+               class="border p-1.5 text-xs w-full"
+               placeholder="Unit">
+      </div>
+
+      <div class="flex flex-col">
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Unit Cost
+        </label>
+        <input id="unitCost" type="number"
+               class="border p-1.5 text-xs w-full"
+               placeholder="Unit Cost">
+      </div>
+
+      <div class="flex flex-col">
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Total Cost
+        </label>
+        <input id="total" disabled
+               class="border p-1.5 bg-slate-50 text-xs w-full"
+               placeholder="Total">
+      </div>
+
+      <div class="col-span-2 flex flex-col">
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Description
+        </label>
+        <input id="desc" list="descList"
+               class="border p-1.5 text-xs w-full"
+               placeholder="Description">
+      </div>
+
+      <div class="flex flex-col">
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          EUL
+        </label>
+        <input id="eul" type="number"
+               class="border p-1.5 text-xs w-full"
+               placeholder="EUL">
+      </div>
+
+      <div class="flex flex-col">
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Item No.
+        </label>
+        <input id="itemNo"
+               class="border p-1.5 text-xs w-full"
+               placeholder="YYYY-MM-XXX-QQ-SS">
+      </div>
+
+      <div class="col-span-2">
+        <button onclick="addItem()"
+                class="w-full bg-slate-900 text-white rounded p-2">
+          Add Item
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- SIGNATORIES -->
+  <div class="card p-3">
+    <h2 class="font-semibold mb-2">✍️ Signatories</h2>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+
+      <div class="flex flex-col">
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Issued By Name
+        </label>
+        <input id="issuedByName" list="issuedByList"
+               class="border p-1.5 w-full text-xs mb-2">
+
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Designation
+        </label>
+        <input id="issuedByDesignation" list="designationList"
+               class="border p-1.5 w-full text-xs mb-2">
+
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Date Issued
+        </label>
+        <input id="issuedByDate" type="date"
+               class="border p-1.5 w-full text-xs">
+      </div>
+
+      <div class="flex flex-col">
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Received By Name
+        </label>
+        <input id="receivedByName" list="receivedByList"
+               class="border p-1.5 w-full text-xs mb-2">
+
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Designation
+        </label>
+        <input id="receivedByDesignation" list="designationList"
+               class="border p-1.5 w-full text-xs mb-2">
+
+        <label class="text-[11px] font-medium text-slate-600 mb-1">
+          Date Received
+        </label>
+        <input id="receivedByDate" type="date"
+               class="border p-1.5 w-full text-xs">
+      </div>
+
+    </div>
+
+    <button onclick="saveICS()"
+            class="mt-3 w-full bg-emerald-600 text-white rounded p-2">
+      Save ICS
+    </button>
+  </div>
+
+</div>
+
+  <!-- RIGHT COLUMN -->
+  <div class="space-y-4">
+
+<!-- DASHBOARD WIDGETS -->
+<div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
+
+<!-- Total Valuation -->
+<div class="card p-3 flex rounded-2xl flex items-center gap-3">
+  
+  <!-- Icon -->
+  <div class="shrink-0">
+    <div class="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center text-2xl">
+      🤑
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="flex-1">
+    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+      Total Valuation
+    </div>
+
+    <div id="dashTotalValue" class="text-xl font-extrabold text-slate-800">
+      ₱0.00
+    </div>
+
+    <div class="text-[10px] text-indigo-400 font-medium mt-0.5">
+      Live from records
+    </div>
+  </div>
+
+</div>
+
+ <!-- Active Slips -->
+<div class="card p-3 flex rounded-2xl flex items-center gap-3">
+
+  <!-- Icon -->
+  <div class="shrink-0">
+    <div class="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center text-2xl">
+      😎
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="flex-1">
+    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+      Active Slips
+    </div>
+
+    <div id="dashActiveSlips" class="text-xl font-extrabold text-slate-800">
+      0
+    </div>
+
+    <div class="text-[10px] text-indigo-400 font-medium mt-0.5">
+      Stored in local vault
+    </div>
+  </div>
+
+</div>
+
+
+<!-- Maintenance Warning -->
+<div class="card p-3 flex rounded-2xl flex items-center gap-3 cursor-pointer
+         hover:ring-2 hover:ring-yellow-400"
+  onclick="toggleMaintenanceFilter()"
+>
+
+  <!-- Icon -->
+  <div class="shrink-0">
+    <div class="w-12 h-12 bg-yellow-50 rounded-xl flex items-center justify-center text-2xl">
+      🥲
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="flex-1">
+    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+      Maintenance Warning
+    </div>
+
+    <div id="dashMaintenance" class="text-xl font-extrabold text-slate-800">
+      0
+    </div>
+
+    <div class="text-[10px] text-yellow-400 font-medium italic mt-0.5">
+      Expires in &lt; 1 month
+    </div>
+  </div>
+
+</div>
+
+<!-- Disposal Ready -->
+<div class="card p-3 flex rounded-2xl flex items-center gap-3 cursor-pointer
+         hover:ring-2 hover:ring-red-400"
+  onclick="toggleEULActionCenter()"
+
+  <!-- Icon -->
+  <div class="shrink-0">
+    <div class="w-12 h-12 bg-red-50 rounded-xl flex items-center justify-center text-2xl">
+      😭
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="flex-1">
+    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+      Disposal Ready
+    </div>
+
+    <div id="dashDisposal" class="text-xl font-extrabold text-slate-800">
+      0
+    </div>
+    <div class="text-[10px] text-red-400 font-medium italic mt-0.5">
+      Lifecycle completed
+    </div>
+  </div>
+
+</div>
+
+
+  <!-- Last Item Added -->
+  <div class="card p-3 ">
+    <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+      Last Items Added
+    </div>
+
+    <div
+      id="dashLastItem"
+      class="flex gap-3 overflow-x-auto snap-x snap-mandatory py-0.5 scroll-smooth"
+    ></div>
+   </div>
+</div>
+
+
+<!-- END DASHBOARD WIDGETS -->
+
+    <div class="card p-3">
+      <h2 class="font-semibold mb-3">📃 Staged Items</h2>
+      <table class="w-full text-xs border-collapse">
+        <thead class="border-b text-slate-600">
+          <tr class="text-left">
+            <th class="py-2 px-2 w-8">#</th>
+            <th class="py-2 px-2">Description</th>
+            <th class="py-2 px-2">Item No.</th>
+            <th class="py-2 px-2 text-center w-12">Qty</th>
+            <th class="py-2 px-2 w-12">Unit</th>
+            <th class="py-2 px-2 text-right w-24">Unit Cost</th>
+            <th class="py-2 px-2 text-right w-24">Total</th>
+            <th class="py-2 px-2 w-16">EUL</th>
+            <th class="py-2 px-2 w-20">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="itemsBody"></tbody>
+      </table>
+<br
+<!-- Density Mode Toggle -->
+<div class="flex items-center gap-1 text-xs">
+  <button onclick="setDensity('compact')" class="px-2 py-1 rounded border">
+    Compact
+  </button>
+  <button onclick="setDensity('normal')" class="px-2 py-1 rounded border">
+    Normal
+  </button>
+  <button onclick="setDensity('comfortable')" class="px-2 py-1 rounded border">
+    Comfortable
+  </button>
+</div>
+
+    </div>
+
+    <div class="card p-3">
+      <h2 class="font-semibold mb-4">🗃️ Manage ICS</h2>
+      <div class="flex flex-col md:flex-row gap-3 mb-3">
+        <input id="icsSearch" list="searchList" class="border p-2 text-xs w-full" placeholder="Search ICS No., Entity, or Item Description" oninput="renderRecords()">
+        <select id="icsMonth" class="border p-2 text-xs w-full md:w-40" onchange="renderRecords()">
+          <option value="">All Months</option>
+          <option value="0">January</option>
+          <option value="1">February</option>
+          <option value="2">March</option>
+          <option value="3">April</option>
+          <option value="4">May</option>
+          <option value="5">June</option>
+          <option value="6">July</option>
+          <option value="7">August</option>
+          <option value="8">September</option>
+          <option value="9">October</option>
+          <option value="10">November</option>
+          <option value="11">December</option>
+        </select>
+        <select id="icsYear" class="border p-2 text-xs w-full md:w-32" onchange="renderRecords()">
+          <option value="">All Years</option>
+        </select>
+      </div>
+      <div id="icsResultCount" class="text-xs text-slate-600 mb-3">0 records found</div>
+      <table class="w-full text-xs border-collapse">
+        <caption class="sr-only">Manage ICS</caption>
+        <thead class="border-b text-slate-600">
+          <tr class="text-left">
+            <th class="py-2 px-2 w-56">ICS No.</th>
+            <th class="py-2 px-2 w-40">Entity</th>
+            <th class="py-2 px-2 w-28">Issued Date</th>
+            <th class="py-2 px-2 w-44">Accountable Person</th>
+            <th class="py-2 px-2 w-32">EUL Status</th>
+            <th class="py-2 px-2 text-left w-32">Total Value</th>
+            <th class="py-2 px-2 text-center w-16">Items</th>
+            <th class="py-2 px-2 text-center w-24">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="archiveBody"></tbody>
+      </table>
+      <div class="flex items-center justify-between mt-3 text-xs text-slate-600">
+        <button onclick="changePage(-1)" class="px-2 py-1 border rounded">Prev</button>
+        <div id="pageInfo"></div>
+        <button onclick="changePage(1)" class="px-2 py-1 border rounded">Next</button>
+      </div>
+    </div>
+  </div>
+</div>
+</main>
+
+<datalist id="entityList"></datalist>
+<datalist id="fundList"></datalist>
+<datalist id="descList"></datalist>
+<datalist id="issuedByList"></datalist>
+<datalist id="receivedByList"></datalist>
+<datalist id="designationList"></datalist>
+<datalist id="searchList"></datalist>
+<div id="toast"></div>
+
+<!-- GLOBAL CUSTOM MODAL (for messages except toast) -->
+<div id="appModal" class="fixed inset-0 hidden items-center justify-center bg-black/40 z-60">
+  <div class="bg-white rounded-xl shadow-lg w-full max-w-sm p-4">
+    <h3 id="appModalTitle" class="font-semibold text-base mb-2">Message</h3>
+    <p id="appModalMessage" class="text-sm text-slate-700 mb-4"></p>
+    <div class="flex justify-end gap-2">
+      <button id="appModalCancel" class="px-3 py-1.5 text-sm rounded bg-slate-200 hidden">Cancel</button>
+      <button id="appModalOk" class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= EUL ACTION CENTER MODAL ================= -->
+<div id="eulActionCenterModal"
+     class="fixed inset-0 hidden items-center justify-center bg-black/40 z-[60]">
+
+  <div class="modal-card w-full max-w-4xl p-4 flex flex-col">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h3 class="text-lg font-semibold">EUL Action Center</h3>
+        <p class="text-xs text-slate-500">
+          Consolidated EUL alerts (view-only)
+        </p>
+      </div>
+
+      <div class="flex gap-2">
+        <button onclick="printEULReport()"
+                class="px-3 py-1.5 text-xs rounded border">
+          Print Report
+        </button>
+
+        <button onclick="closeEULActionCenter()"
+                class="px-3 py-1.5 text-xs rounded border">
+          Close
+        </button>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="flex-1 overflow-auto border rounded-lg">
+      <table class="w-full text-xs">
+        <thead class="bg-slate-100">
+          <tr>
+            <th class="py-2 px-2">Item</th>
+            <th class="py-2 px-2">ICS No.</th>
+            <th class="py-2 px-2">Entity</th>
+            <th class="py-2 px-2">Issued Date</th>
+            <th class="py-2 px-2">EUL</th>
+            <th class="py-2 px-2">Status</th>
+            <th class="py-2 px-2">Days</th>
+          </tr>
+        </thead>
+        <tbody id="eulActionCenterBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="flex items-center justify-between mt-3 text-xs">
+      <span id="eulPageInfo"></span>
+      <div class="flex gap-2">
+        <button onclick="changeEULPage(-1)" class="px-2 py-1 border rounded">Prev</button>
+        <button onclick="changeEULPage(1)" class="px-2 py-1 border rounded">Next</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- EUL PER-ICS MODAL -->
+<div id="eulModal" class="fixed inset-0 hidden items-center justify-center bg-black/40 z-[70]">
+  <div class="modal-card w-full max-w-4xl p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-semibold text-base">EUL Details</h3>
+      <button onclick="closeEULModal()" class="text-slate-500 hover:text-black">✕</button>
+    </div>
+
+    <div id="eulModalMeta" class="text-xs text-slate-500 mb-2"></div>
+
+    <table class="w-full text-xs border-collapse">
+      <thead class="border-b text-slate-600">
+        <tr class="text-left">
+          <th class="py-2 px-2">Item</th>
+          <th class="py-2 px-2 w-20">EUL</th>
+          <th class="py-2 px-2 w-28">Issued</th>
+          <th class="py-2 px-2 w-28">Status</th>
+          <th class="py-2 px-2 w-24 text-right">Days</th>
+	  <th class="py-2 px-2 w-32">Inspection Status</th>
+        </tr>
+      </thead>
+      <tbody id="eulModalBody"></tbody>
+    </table>
+
+    <div class="flex justify-end mt-4">
+      <button onclick="closeEULModal()" class="text-xs px-3 py-1.5 rounded-lg
+                 border border-slate-300
+                 hover:bg-slate-100">
+        Close
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- UNSERVICEABLE INSPECTION MODAL -->
+<div id="inspectionModal"
+     class="fixed inset-0 hidden items-center justify-center bg-black/40 z-[75]">
+
+  <div class="modal-card w-full max-w-4xl p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-semibold text-base">
+        Unserviceable Inspection
+      </h3>
+      <button onclick="closeInspectionModal()"
+              class="text-slate-500 hover:text-black">
+        ✕
+      </button>
+    </div>
+
+    <div class="space-y-3 text-xs">
+
+      <!-- Inspection Date -->
+      <div>
+        <label class="block text-slate-600 mb-1">
+          Inspection Date <span class="text-red-500">*</span>
+        </label>
+        <input id="inspDate"
+               type="date"
+               class="border rounded p-2 w-full text-xs">
+      </div>
+
+      <!-- Reason -->
+      <div>
+        <label class="block text-slate-600 mb-1">
+          Situation / Reason <span class="text-red-500">*</span>
+        </label>
+        <textarea id="inspReason"
+                  rows="3"
+                  class="border rounded p-2 w-full text-xs"
+                  placeholder="Describe why the item is unserviceable"></textarea>
+      </div>
+
+      <!-- Notes -->
+      <div>
+        <label class="block text-slate-600 mb-1">
+          Remarks / Notes (optional)
+        </label>
+        <textarea id="inspNotes"
+                  rows="2"
+                  class="border rounded p-2 w-full text-xs"
+                  placeholder="Additional notes (optional)"></textarea>
+      </div>
+
+    </div>
+
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeInspectionModal()"
+              class="px-3 py-1.5 text-sm rounded bg-slate-200">
+        Cancel
+      </button>
+      <button onclick="saveUnserviceableInspection()"
+              class="px-3 py-1.5 text-sm rounded bg-red-600 text-white">
+        Save Inspection
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ================= ICS PREVIEW (SINGLE SOURCE OF TRUTH) ================= -->
+<div id="icsPreview"
+     class="fixed inset-0 hidden flex items-center justify-center bg-black/40 modal-overlay z-[65]">
+
+  <div class="modal-card w-full max-w-6xl p-6">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-3">
+        <span class="text-xs font-bold px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full">
+          ICS PREVIEW
+        </span>
+        <h3 id="pvICSNo" class="text-lg font-semibold"></h3>
+      </div>
+
+      <button onclick="closeICSPreview()"
+              class="text-xs px-3 py-1.5 rounded-lg
+                 border border-slate-300
+                 hover:bg-slate-100">
+        Close
+      </button>
+    </div>
+
+    <!-- Content -->
+    <div class="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+
+      <!-- LEFT -->
+      <div class="space-y-4">
+
+        <!-- Meta -->
+        <div class="grid grid-cols-2 gap-4">
+          <div class="p-3 rounded-xl bg-slate-50">
+            <div class="text-xs text-slate-400 uppercase">Entity</div>
+            <div id="pvEntity" class="font-semibold"></div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-slate-50">
+            <div class="text-xs text-slate-400 uppercase">Fund</div>
+            <div id="pvFund" class="font-semibold"></div>
+          </div>
+        </div>
+
+        <!-- Items -->
+        <div class="border rounded-xl overflow-hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-100">
+              <tr>
+                <th class="p-2 text-left">Description</th>
+                <th class="p-2 text-center">Qty</th>
+                <th class="p-2 text-right">Unit Cost</th>
+                <th class="p-2 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody id="pvItems"></tbody>
+            <tfoot class="bg-slate-50 font-semibold">
+              <tr>
+                <td colspan="3" class="p-2 text-right">Grand Total</td>
+                <td id="pvTotal" class="p-2 text-right"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <!-- Signatories -->
+        <div class="grid grid-cols-2 gap-4 text-xs">
+          <div>
+            <div class="text-slate-400 uppercase">Issued By</div>
+            <div id="pvIssuedBy" class="font-semibold"></div>
+            <div id="pvIssuedPos"></div>
+            <div id="pvIssuedDate"></div>
+          </div>
+
+          <div>
+            <div class="text-slate-400 uppercase">Received By</div>
+            <div id="pvReceivedBy" class="font-semibold"></div>
+            <div id="pvReceivedPos"></div>
+            <div id="pvReceivedDate"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT -->
+      <div class="rounded-xl border border-slate-200 bg-slate-50/40 p-4 flex flex-col justify-between">
+        <h4 class="text-sm font-semibold mb-3">Inspection Logs</h4>
+
+        <div id="pvLogs" class="flex-1 overflow-auto space-y-3 text-xs text-slate-500">
+          <div class="italic text-center">No inspection history</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- INSPECTION HISTORY MODAL -->
+<div id="inspectionHistoryModal"
+     class="fixed inset-0 hidden items-center justify-center bg-black/40 z-[80]">
+  <div class="modal-card w-full max-w-md p-4">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-semibold text-base">Inspection History</h3>
+      <button onclick="closeInspectionHistoryModal()"
+              class="text-xs px-3 py-1.5 rounded-lg
+                 border border-slate-300
+                 hover:bg-slate-100">
+        Close
+      </button>
+    </div>
+    <div class="overflow-x-auto border rounded-lg">
+      <table class="w-full text-xs border-collapse">
+        <thead class="bg-slate-100 text-slate-700">
+          <tr>
+            <th class="py-2 px-3">Date</th>
+            <th class="py-2 px-3">Status</th>
+            <th class="py-2 px-3">Reason</th>
+            <th class="py-2 px-3">Notes</th>
+            <th class="py-2 px-3">Recorded At</th>
+          </tr>
+        </thead>
+        <tbody id="inspectionHistoryBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ================= EXPORT CENTER MODAL ================= -->
+<div id="exportCenterModal"
+     class="fixed inset-0 hidden flex items-center justify-center bg-black/40 modal-overlay z-[65]">
+
+  <div class="modal-card ring-1 ring-white/40 w-full max-w-3xl p-6 flex flex-col">
+
+   <!-- Header -->
+<div class="flex items-start justify-between mb-5">
+  <div>
+    <h3 class="text-base font-semibold text-slate-800">
+      Export Center
+    </h3>
+    <p class="text-xs text-slate-500 mt-0.5">
+      Export Inventory Custodian Slip records
+    </p>
+  </div>
+
+  <button onclick="closeExportCenter()"
+          class="text-xs px-3 py-1.5 rounded-lg
+                 border border-slate-300
+                 hover:bg-slate-100">
+    Close
+  </button>
+</div>
+
+
+    <!-- Export Controls -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+
+      <!-- Filters -->
+      <div class="border rounded-xl p-4 space-y-3">
+        <div class="text-xs font-semibold text-slate-700">
+          Filters
+        </div>
+
+         <!-- Month / Year -->
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-[11px] font-medium text-slate-500 mb-1">
+              Month
+            </label>
+            <select id="exportMonth"
+                    class="border rounded-lg w-full p-2 text-sm">
+              <option value="">All Months</option>
+              <option value="0">January</option>
+              <option value="1">February</option>
+              <option value="2">March</option>
+              <option value="3">April</option>
+              <option value="4">May</option>
+              <option value="5">June</option>
+              <option value="6">July</option>
+              <option value="7">August</option>
+              <option value="8">September</option>
+              <option value="9">October</option>
+              <option value="10">November</option>
+              <option value="11">December</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-medium text-slate-500 mb-1">
+              Year
+            </label>
+            <select id="exportYear"
+                    class="border rounded-lg w-full p-2 text-sm">
+              <option value="">All Years</option>
+            </select>
+          </div>
+        </div>
+
+        <p class="text-[11px] text-slate-400">
+          Leave filters empty to export all records.
+        </p>
+      </div>
+
+      <!-- Action Panel -->
+      <div class="rounded-xl border border-slate-200 bg-slate-50/40 p-4 flex flex-col justify-between">
+
+        <div>
+          <div class="text-xs font-semibold text-slate-700 mb-2">
+            Export Action
+          </div>
+
+          <p class="text-xs text-slate-500 mb-3">
+            The system will automatically determine the export scope
+            based on the filters you selected.
+          </p>
+
+          <ul class="text-[11px] text-slate-400 space-y-1">
+            <li>• Month + Year → export monthly batch</li>
+            <li>• Year only → export yearly batch</li>
+            <li>• No filter → export all records</li>
+          </ul>
+        </div>
+
+        <button onclick="runExportCenter()"
+             class="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-4 py-2 text-sm font-medium">
+          Export Records
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Export Logs -->
+    <div class="border-t pt-3">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-xs font-semibold text-slate-700">
+          Recent Exports
+        </div>
+      </div>
+
+      <div class="max-h-40 overflow-auto text-xs">
+        <table class="w-full border-collapse">
+          <thead class="text-slate-500 border-b">
+            <tr>
+              <th class="text-left py-1">Date</th>
+              <th class="text-left py-1">Scope</th>
+              <th class="text-right py-1">Count</th>
+            </tr>
+          </thead>
+          <tbody id="exportLogBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+</body>
+</html>
