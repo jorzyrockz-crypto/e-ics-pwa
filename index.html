@@ -2212,11 +2212,7 @@ function closeInspectionHistoryModal(){
 
 /* ================= PWA SERVICE WORKER ================= */
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register('./sw.js')
-      .catch(err => console.warn('SW failed', err));
-  });
+  navigator.serviceWorker.register('./sw.js');
 }
 
 /* ================= INIT ================= */
@@ -3477,4 +3473,5 @@ body[data-density="compact"] .w-8 {
 
 
 </body>
+
 </html>
