@@ -20,12 +20,13 @@
   let editRecordIndex = null;
   let maintenanceFilterActive = false;
   let exportICSIndex = null;
+  let pendingImport = null;
 
 /* ======== EUL ACTION CENTER STATE ================= */
 
 let eulActionItems = [];
 let eulCurrentPage = 1;
-const EUL_PAGE_SIZE = 20;
+const EUL_PAGE_SIZE = 10;
 
 /* ============ EXPORT CENTER STATE ================= */
 
@@ -1313,47 +1314,65 @@ function toggleEULActionCenter(){
   if(!body) return;
   body.innerHTML = '';
 
+    // SAFETY: records must be an array
+    const data = Array.isArray(records) ? records : [];
     const search = qs('icsSearch')?.value.toLowerCase() || '';
     const monthVal = qs('icsMonth')?.value;
     const yearVal = qs('icsYear')?.value;
 
-    // sort records by most recently added/updated
-    const sortedRecords = [...records].sort((a,b)=> new Date(b.date) - new Date(a.date));
+   /* ===== SORT (most recent first) ===== */
+  const sortedRecords = [...data].sort(
+    (a, b) => new Date(b.date || 0) - new Date(a.date || 0)
+  );
 
+   /* ===== FILTER ===== */
     const filtered = sortedRecords.filter(rec => {
+
   // 🔔 MAINTENANCE FILTER ACTIVE
   if (maintenanceFilterActive && !recordHasMaintenance(rec)) {
     return false;
   }
-      const headerMatch = (rec.icsNo || '').toLowerCase().includes(search) || (rec.entity || '').toLowerCase().includes(search);
-      const itemMatch = Array.isArray(rec.items) && rec.items.some(it => (it.desc || '').toLowerCase().includes(search));
+      const headerMatch = 
+      (rec.icsNo || '').toLowerCase().includes(search) || 
+      (rec.entity || '').toLowerCase().includes(search);
+      
+      const itemMatch = Array.isArray(rec.items) && 
+      rec.items.some(it => 
+      (it.desc || '').toLowerCase().includes(search)
+    );
       if(!headerMatch && !itemMatch) return false;
+      
       const d = new Date(rec.date);
       if(yearVal !== '' && d.getFullYear() !== Number(yearVal)) return false;
       if(monthVal !== '' && d.getMonth() !== Number(monthVal)) return false;
-	return true;
+	
+      return true;
     });
 
+     /* ===== RESULT COUNT ===== */
     const countEl = qs('icsResultCount');
     if(countEl){
       countEl.textContent = `${filtered.length} record${filtered.length === 1 ? '' : 's'} found`;
     }
 
     // PAGINATION
-    const totalPages = Math.ceil(filtered.length / pageSize) || 1;
-    if(pageInfo){
-      pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
-    }
-    if(currentPage > totalPages) currentPage = totalPages;
+    const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    currentPage = Math.min(Math.max(1, currentPage), totalPages);
 
-    const start = (currentPage - 1) * pageSize;
-    const pageRecords = filtered.slice(start, start + pageSize);
+  if(pageInfo){
+    pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+  }
 
-    if(!pageRecords.length){
-      body.innerHTML = '<tr><td colspan="8" class="italic text-center py-4">No matching records</td></tr>';
-      return;
-    }
+   const start = (currentPage - 1) * pageSize;
+   const pageRecords = filtered.slice(start, start + pageSize);
 
+  if(!pageRecords.length){
+    body.innerHTML =
+      '<tr><td colspan="9" class="italic text-center py-4">No matching records</td></tr>';
+    return;
+  }
+
+    /* ===== RENDER ROWS ===== */
     pageRecords.forEach(rec => {
       const idx = records.indexOf(rec);
       const tr = document.createElement('tr');
@@ -1395,20 +1414,19 @@ tr.innerHTML = `
         <td class="py-1.5 px-2 whitespace-nowrap">${rec.entity}</td>
         <td class="py-1.5 px-2 whitespace-nowrap text-xs">${issuedDate}</td>
         <td class="py-1.5 px-2 whitespace-nowrap">${accountable}</td>
-<td
-  class="py-1.5 px-2 text-xs ${maintenance || disposal ? 'text-blue-600 cursor-pointer' : ''}"
-  ${maintenance || disposal ? `onclick="openEULModal(${idx})"` : ''}
->
-  ${
-    maintenance || disposal
-      ? [
-          maintenance ? `🥲 (${maintenance})` : '',
-          disposal ? `😭 (${disposal})` : ''
-        ].filter(Boolean).join(' • ')
-      : '—'
-  }
-</td>
-
+      <td
+        class="py-1.5 px-2 text-xs ${maintenance || disposal ? 'text-blue-600 cursor-pointer' : ''}"
+        ${maintenance || disposal ? `onclick="openEULModal(${idx})"` : ''}
+      >
+        ${
+          maintenance || disposal
+            ? [
+                maintenance ? `🥲 (${maintenance})` : '',
+                disposal ? `😭 (${disposal})` : ''
+              ].filter(Boolean).join(' • ')
+            : '—'
+        }
+      </td>
         <td class="py-1.5 px-2 text-left font-medium">${totalValue ? `₱${formatNumber(totalValue)}` : ''}</td>
         <td class="py-1.5 px-2 text-center">${Array.isArray(rec.items) ? rec.items.length : 0}</td>
         <td class="py-1.5 px-2 text-right whitespace-nowrap">
@@ -1753,75 +1771,288 @@ function magicPopulate(){
   updateGreetingStat();showToast('Magic data generated');
 }
 
+/* ================= IMPORT FUNCTIONS ================= */
 function importICS(){
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'application/json';
 
-  input.onchange = e => {
+  input.onchange = async e => {
     const file = e.target.files[0];
     if(!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try{
-        const imported = JSON.parse(reader.result);
+        const parsed = JSON.parse(reader.result);
 
-        if(!Array.isArray(imported)){
-          throw new Error('Invalid ICS file structure');
+        /* ===== Detect format ===== */
+        let incomingRecords;
+        if(Array.isArray(parsed)) incomingRecords = parsed;
+        else if(parsed?.records && Array.isArray(parsed.records)) incomingRecords = parsed.records;
+        else if(parsed?.icsNo) incomingRecords = [parsed];
+        else throw new Error('Invalid import file.');
+
+        if(!Array.isArray(records)) records = [];
+
+        /* ===== Normalize ===== */
+        const normalized = [];
+        let skipped = 0;
+
+        incomingRecords.forEach(r => {
+          try{
+            const n = normalizeICSRecord(r);
+            if(!n.icsNo || !n.entity) throw '';
+            normalized.push(n);
+          }catch{ skipped++; }
+        });
+
+        if(!normalized.length){
+          throw new Error('No valid ICS records found.');
         }
 
-        // ✅ NORMALIZE RECORDS
-        records = imported.map(r => ({
-          icsNo: r.icsNo || '',
-          entity: r.entity || '',
-          fund: r.fund || '',
-          date: r.date || new Date().toISOString(),
+        /* ===== Calculate impact ===== */
+        let willUpdate = 0;
+        let willAdd = 0;
 
-          issuedBy: {
-            name: r.issuedBy?.name || '',
-            designation: r.issuedBy?.designation || '',
-            date: r.issuedBy?.date || ''   // IMPORTANT
-          },
+        normalized.forEach(n => {
+          records.some(r => r.icsNo === n.icsNo)
+            ? willUpdate++
+            : willAdd++;
+        });
 
-          receivedBy: {
-            name: r.receivedBy?.name || '',
-            designation: r.receivedBy?.designation || '',
-            date: r.receivedBy?.date || ''
-          },
+        /* ===== Per-ICS overwrite warning ===== */
+        if(normalized.length === 1 && willUpdate === 1){
+          const incoming = normalized[0];
+          const existing = records.find(r => r.icsNo === incoming.icsNo);
 
-          items: Array.isArray(r.items)
-            ? r.items.map(it => ({
-                qty: safeNumber(it.qty),
-                unit: it.unit || '',
-                unitCost: safeNumber(it.unitCost),
-                total: safeNumber(it.total),
-                desc: it.desc || '',
-                eul: it.eul || '',
-                itemNo: it.itemNo || ''
-              }))
-            : []
-        }));
+          const action = await openImportConfirm({
+            title: 'Overwrite ICS?',
+            subtitle: `ICS ${incoming.icsNo}`,
+            body: `
+              <div>Existing items: <b>${existing.items.length}</b></div>
+              <div>Imported items: <b>${incoming.items.length}</b></div>
+              <div class="text-red-600 mt-2">
+                Inspection logs will be replaced.
+              </div>
+            `,
+            mode: 'overwrite'
+          });
 
+          if(action !== 'merge') return; // cancel = safe exit
+        }
+
+        /* ===== Merge vs Replace ===== */
+          const isSingleICS = normalized.length === 1;
+          const isBatch = normalized.length > 1;
+
+          // SINGLE ICS → NO REPLACE ALL
+          if(isSingleICS){
+            const action = await openImportConfirm({
+              title: 'Update ICS',
+              subtitle: `ICS ${normalized[0].icsNo}`,
+              body: `
+                <div>This will update the selected ICS only.</div>
+                <div class="mt-2 text-slate-500">
+                  Other records will remain unchanged.
+                </div>
+              `,
+              mode: 'overwrite'
+            });
+
+            if(action !== 'merge') return;
+
+            // Apply overwrite safely
+            const n = normalized[0];
+            const idx = records.findIndex(r => r.icsNo === n.icsNo);
+            if(idx !== -1){
+              records[idx] = { ...records[idx], ...n, items: n.items };
+            } else {
+              records.push(n);
+            }
+
+          }
+
+          // BATCH IMPORT → MERGE or REPLACE
+          if(isBatch){
+            const action = await openImportConfirm({
+              title: 'Apply Import',
+              subtitle: 'Review changes before applying',
+              body: `
+                <div>Will update: <b>${willUpdate}</b></div>
+                <div>Will add: <b>${willAdd}</b></div>
+                <div>Skipped: <b>${skipped}</b></div>
+                <div class="mt-2 text-slate-500">
+                  Merge is recommended.
+                </div>
+              `,
+              mode: 'batch'
+            });
+
+            if(action === 'cancel') return;
+
+            if(action === 'merge'){
+              normalized.forEach(n => {
+                const idx = records.findIndex(r => r.icsNo === n.icsNo);
+                if(idx !== -1){
+                  records[idx] = { ...records[idx], ...n, items: n.items };
+                } else {
+                  records.push(n);
+                }
+              });
+            }
+
+            if(action === 'replace'){
+              records = normalized;
+            }
+          }
+
+        /* ===== Finalize ===== */
         localStorage.setItem('icsRecords', JSON.stringify(records));
-
         populateAutoSuggest();
         populateYearFilter();
         renderRecords();
         updateDashboard();
 
-        showToast('ICS records imported successfully');
+        showModal(
+          `Import completed.\n\nUpdated: ${willUpdate}\nAdded: ${willAdd}\nSkipped: ${skipped}`,
+          { title: 'Import Result' }
+        );
 
       }catch(err){
-        showModal(
-          'Invalid ICS file. The file structure is not supported.',
-          { title: 'Import Error' }
-        );
+        showModal(err.message || 'Import failed', { title: 'Import Error' });
       }
     };
+
     reader.readAsText(file);
   };
+
   input.click();
+}
+
+let importConfirmResolver = null;
+
+function openImportConfirm({ title, subtitle, body, mode = 'merge' }){
+  qs('importConfirmTitle').textContent = title;
+  qs('importConfirmSubtitle').textContent = subtitle || '';
+  qs('importConfirmBody').innerHTML = body;
+
+  const primary = qs('importConfirmPrimary');
+  const secondary = qs('importConfirmSecondary');
+
+  if(mode === 'overwrite'){
+  // Single-ICS overwrite
+  primary.textContent = 'Overwrite ICS';
+  secondary.classList.add('hidden');
+
+} else if(mode === 'batch'){
+  // Batch import: allow replace all
+  primary.textContent = 'Merge Records';
+  secondary.classList.remove('hidden');
+
+} else {
+  // Fallback safety
+  primary.textContent = 'Confirm';
+  secondary.classList.add('hidden');
+}
+  qs('importConfirmModal').classList.remove('hidden');
+  qs('importConfirmModal').classList.add('flex');
+
+  return new Promise(resolve => {
+    importConfirmResolver = resolve;
+  });
+}
+
+function closeImportConfirm(action){
+  qs('importConfirmModal').classList.add('hidden');
+  qs('importConfirmModal').classList.remove('flex');
+
+  if(importConfirmResolver){
+    importConfirmResolver(action);
+    importConfirmResolver = null;
+  }
+}
+
+/* -------------------------
+   Import Summary Modal
+   ------------------------- */
+function applyImport(){
+  if(!pendingImport) return;
+
+  const mode =
+    document.querySelector('input[name="importMode"]:checked')?.value;
+
+  if(mode === 'replace'){
+    records = pendingImport.valid;
+  } else {
+    const existing = new Set(records.map(r => r.icsNo));
+    records = [
+      ...records,
+      ...pendingImport.valid.filter(r => !existing.has(r.icsNo))
+    ];
+  }
+
+  localStorage.setItem('icsRecords', JSON.stringify(records));
+
+  pendingImport = null;
+  closeImportSummaryModal();
+
+  populateAutoSuggest();
+  populateYearFilter();
+  renderRecords();
+  updateDashboard();
+
+  showToast('Import completed');
+}
+
+/* ================= IMPORT SUMMARY MODAL HELPERS ================= */
+function openImportSummaryModal(){
+  const modal = qs('importSummaryModal');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeImportSummaryModal(){
+  const modal = qs('importSummaryModal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+  pendingImport = null;
+}
+
+function normalizeICSRecord(r){
+  return {
+    icsNo: r.icsNo || '',
+    entity: r.entity || '',
+    fund: r.fund || '',
+    date: r.date || new Date().toISOString(),
+
+    issuedBy: {
+      name: r.issuedBy?.name || '',
+      designation: r.issuedBy?.designation || '',
+      date: r.issuedBy?.date || ''
+    },
+
+    receivedBy: {
+      name: r.receivedBy?.name || '',
+      designation: r.receivedBy?.designation || '',
+      date: r.receivedBy?.date || ''
+    },
+
+    items: Array.isArray(r.items)
+      ? r.items.map(it => ({
+          qty: Number(it.qty) || 0,
+          unit: it.unit || '',
+          unitCost: Number(it.unitCost) || 0,
+          total: Number(it.total) || 0,
+          desc: it.desc || '',
+          eul: it.eul || '',
+          itemNo: it.itemNo || '',
+          inspectionHistory: Array.isArray(it.inspectionHistory)
+            ? it.inspectionHistory
+            : []
+        }))
+      : []
+  };
 }
 
 /* ================= MONTH FILTER WITH COUNTS ================= */
@@ -2005,7 +2236,6 @@ function bindLastItemHover() {
   el.onmouseleave = startLastItemAutoScroll;
 }
 
-
   /* ================= INIT ================= */
   function updateGreeting(){
   const textEl = qs('greetingText');
@@ -2054,7 +2284,6 @@ function updateGreetingStat(){
     labelEl.textContent = 'No items';
   }
 }
-
 
 /* ================= CLOCK STAT ================= */
 
@@ -2212,7 +2441,11 @@ function closeInspectionHistoryModal(){
 
 /* ================= PWA SERVICE WORKER ================= */
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js');
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('./sw.js')
+      .catch(err => console.warn('SW failed', err));
+  });
 }
 
 /* ================= INIT ================= */
@@ -2264,14 +2497,19 @@ window.addEventListener('DOMContentLoaded', () => {
 /* -------------------------
    UI Density Control
    ------------------------- */
-function setDensity(mode) {
-  document.body.setAttribute('data-density', mode);
-  localStorage.setItem('uiDensity', mode);
+function setDensity(level) {
+  // 1. Set the attribute on the body
+  document.body.setAttribute('data-density', level);
+  
+  // 2. Save the choice for next time
+  localStorage.setItem('user-density-pref', level);
 }
-  const savedDensity = localStorage.getItem('uiDensity');
-if (savedDensity) {
-  document.body.setAttribute('data-density', savedDensity);
-}
+
+// 3. Run this on page load
+window.addEventListener('DOMContentLoaded', () => {
+  const savedDensity = localStorage.getItem('user-density-pref') || 'default';
+  setDensity(savedDensity);
+});
   </script>
   <style>
     #toast{position:fixed;bottom:1rem;right:1rem;background:#0f172a;color:white;padding:.6rem 1rem;border-radius:.5rem;opacity:0;transition:.3s}
@@ -2308,210 +2546,220 @@ if (savedDensity) {
 </head>
 
 <style>
-/* ================= ICS v2 GLOBAL THEME ================= */
+/* ================= ICS v2 GLOBAL THEME - ELEGANT LIGHT ================= */
 :root {
   /* Brand / Accent */
-  --accent: #4f8cff;
-  --accent-soft: #e8f0ff;
+  --accent: #3b82f6;
+  --accent-soft: #eff6ff;
+  --accent-hover: #2563eb;
 
-  /* Backgrounds */
-  --bg-app: linear-gradient(135deg, #eef3fb 0%, #e6ecf8 100%);
-  --bg-card: rgba(255, 255, 255, 0.75);
+  /* Backgrounds - The "Frosted Ice" Look */
+  --bg-app: #f8fafc; 
+  --bg-card: rgba(255, 255, 255, 0.7); /* Translucent White */
   --bg-card-solid: #ffffff;
-  --bg-muted: #f5f7fb;
+  --bg-muted: #f1f5f9;
 
-  /* Text */
-  --text-main: #1f2937;
-  --text-muted: #64748b;
+  /* Text - High Legibility */
+  --text-main: #0f172a;
+  --text-muted: #475569;
   --text-soft: #94a3b8;
 
   /* Borders & Radius */
-  --radius-lg: 16px;
+  --radius-lg: 20px;
   --radius-md: 12px;
   --radius-sm: 8px;
 
-  /* Shadows */
-  --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.08);
-  --shadow-card: 0 6px 20px rgba(15, 23, 42, 0.06);
-
-  /* Overlays */
-  --overlay: rgba(15, 23, 42, 0.35);
+  /* Shadows - Soft and Airy */
+  --shadow-bento: 
+    0 4px 6px -1px rgba(0, 0, 0, 0.05), 
+    0 10px 15px -3px rgba(0, 0, 0, 0.03);
+  
+  --overlay: rgba(15, 23, 42, 0.1);
 }
 
-/* ================= BASE APP OK ================= */
+/* ================= BASE APP ================= */
 body {
-  background-color: #ffffff; color: #334155;
-  }
-
-/* ================= CARDS ================= */
-.card {
-  background: linear-gradient(
-    180deg,
-    rgb(255, 255, 255),
-    rgb(255, 255, 255)
-  );
-
-  backdrop-filter: blur(12px);
-  border-radius: var(--radius-lg);
-
-  /* ✨ DEPTH */
-  box-shadow:
-    0 1px 0 rgba(255,255,255,0.6) inset,   /* top highlight */
-    0 8px 24px rgba(15,23,42,0.08),        /* main lift */
-    0 2px 6px rgba(15,23,42,0.04);         /* grounding */
-
-  border: 1px solid rgba(255,255,255,0.5);
-}
-    .glass-pill {
-      background: rgba(255, 255, 255, 0.7);
-      backdrop-filter: blur(4px);
-}
-    .stat-inner-box {
-      /* Updated to an emerald green theme */
-      background: #000000;;
-      border: 1px solid rgba(0, 0, 0, 0.25);
-      backdrop-filter: blur(10px);
-      transition: all 0.3s ease;
-}
-    /* Glass effect for navigation and containers */
-    .glass-nav {
-      background: rgba(255, 255, 255, 0.75);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-}
-    .stats-divider {
-      width: 1px;
-      height: 40px;
-      margin: 0 1rem;
-      background: rgba(14, 14, 14, 0.1);
-}
-/* ================= HEADERS ================= */
-h1, h2, h3 {
-  letter-spacing: 0.2px;
-}
-
-/* ================= INPUTS ================= */
-input, select, textarea {
-  background: var(--bg-card-solid);
-  border-radius: var(--radius-sm);
-  border: 1px solid #d5d7db;
-}
-
-input:focus, select:focus, textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
-}
-
-/* ================= BUTTONS ================= */
-button {
-  border-radius: var(--radius-md);
-  transition: all 0.15s ease;
-}
-
-button:hover {
-  transform: translateY(-1px);
-}
-
-button:active {
-  transform: translateY(0);
-}
-
-/* Primary */
-.bg-emerald-600,
-.bg-blue-600,
-.bg-slate-900 {
-  background: var(--accent) !important;
-}
-
-/* ================= TABLES ================= */
-table {
-  border-collapse: separate;
-  border-spacing: 0;
-}
-
-thead {
-  background: var(--bg-muted);
-}
-
-tbody tr {
-  transition: background 0.12s ease;
-}
-
-tbody tr:hover {
-  background: #eef3ff;
-}
-
-/* ================= MODALS ================= */
-.fixed.inset-0.bg-black\/40 {
-  background: var(--overlay) !important;
-}
-
-.modal-card {
-  background: var(--bg-card);
-  backdrop-filter: blur(14px);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-soft);
-
-  /* Subtle edge glow */
-  outline: 1px solid rgba(255, 255, 255, 0.35);
-  outline-offset: -1px;
-}
-
-/* ================= TOAST / NOTIFICATIONS ================= */
-#toast {
-  background: var(--bg-card-solid);
+  background-color: var(--bg-app);
+  /* Subtle mesh gradient for texture */
+  background-image: 
+    radial-gradient(at 0% 0%, #e0e7ff 0px, transparent 50%),
+    radial-gradient(at 100% 100%, #f1f5f9 0px, transparent 50%);
   color: var(--text-main);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-soft);
+  font-family: 'Inter', sans-serif;
 }
 
-/* ================= BADGES ================= */
-.badge {
-  border-radius: 999px;
-  padding: 2px 8px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-/* ================= SCROLLBARS ================= */
-::-webkit-scrollbar {
-  width: 8px;
-}
-::-webkit-scrollbar-thumb {
-  background: #c7d2fe;
-  border-radius: 999px;
-}
-
+/* ================= THE BENTO CARDS ================= */
 .card {
-  transition: transform .15s ease, box-shadow .15s ease;
+  background: var(--bg-card);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.8); /* White border creates "Edge Light" */
+  box-shadow: var(--shadow-bento);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .card:hover {
-  transform: translateY(-2px);
-  box-shadow:
-    0 1px 0 rgba(255,255,255,0.7) inset,
-    0 14px 32px rgba(15,23,42,0.12),
-    0 6px 12px rgba(15,23,42,0.06);
+  transform: translateY(-4px);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.08);
+  border-color: var(--accent-soft);
 }
 
-/* ================= LEFT COLUMN GROUPING ================= */
-.left-panel {
-  background: linear-gradient(
-    180deg,
-    rgba(4, 17, 31, 0.288),
-    rgba(3, 10, 17, 0.205)
-  );
+/* Inner Boxes (Stat containers) */
+.stat-inner-box {
+  background: var(--bg-muted) !important;
+  border: 1px solid rgba(0, 0, 0, 0.03) !important;
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+}
 
-  border-radius: 14px;
-  padding: 12px;
+.stat-inner-box:hover {
+  background: #ffffff !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
 
-  box-shadow:
-    inset 0 1px 0 rgb(255, 255, 255),
-    
+/* ================= MODERN TABLES ================= */
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 10px;
+}
 
+thead th {
+  color: var(--text-soft);
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0 16px;
+}
 
+tbody tr {
+  background: #ffffff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+  transition: all 0.2s ease;
+}
+
+tbody tr:hover {
+  background: var(--accent-soft);
+  transform: scale(1.005);
+}
+
+tbody td {
+  padding: 16px;
+  border-top: 1px solid #f1f5f9;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+/* Rounded corners for rows */
+tbody td:first-child { border-left: 1px solid #f1f5f9; border-radius: 12px 0 0 12px; }
+tbody td:last-child { border-right: 1px solid #f1f5f9; border-radius: 0 12px 12px 0; }
+
+/* ================= INPUTS & BUTTONS ================= */
+input, select {
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  padding: 10px 14px;
+  transition: all 0.2s ease;
+}
+
+input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+}
+
+button {
+  background: var(--accent) !important;
+  color: white !important;
+  font-weight: 600;
+  border: none;
+  box-shadow: 0 4px 10px rgba(59, 130, 246, 0.25);
+}
+
+button:hover {
+  background: var(--accent-hover) !important;
+  box-shadow: 0 6px 15px rgba(59, 130, 246, 0.35);
+}
+
+/* Sidebar Card Refinement */
+.left-panel .card {
+  background: white;
+  border: 1px solid #f1f5f9;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+  margin-bottom: 1.5rem; /* Better spacing between Agency, Items, and Signatories */
+}
+
+/* Make Labels look sophisticated */
+.left-panel label {
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  color: #64748b; /* Slate-500 */
+  font-weight: 700 !important;
+}
+
+/* Modern Input Look */
+.sidebar-section-card input {
+  background: #fdfdfd; /* Not quite pure white, much softer */
+  border: 1px solid #e2e8f0; /* Matches your table borders */
+  border-radius: 10px;
+  color: #1e293b; /* Slate-800 for better readability */
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.left-panel input:focus {
+  border-color: var(--accent);
+  background: #fff;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+
+#total:disabled {
+  background: #f8fafc !important; /* Slightly darker slate tint */
+  border: 1.5px dashed #cbd5e1 !important;
+  color: #334155 !important;
+}
+
+/* Sidebar Button Style */
+.left-panel button {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 12px !important;
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+/* Container for the whole left side */
+.left-panel-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px; /* Space between individual cards */
+  padding: 10px;
+}
+
+/* Individual sections as Bento Cards */
+.sidebar-section-card input:focus {
+  background: #ffffff;
+  border-color: #3b82f6; /* Your brand blue */
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1); /* Soft blue aura */
+  outline: none;
+}
+
+/* Make inputs sit side-by-side */
+.input-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Scannable Labels */
+.sidebar-section-card label {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: var(--text-muted);
 }
 
 /* Hide scrollbar but keep scroll */
@@ -2522,58 +2770,392 @@ tbody tr:hover {
   display: none;              /* Chrome / Edge */
 }
 
+.glass-header {
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+/* Subtle texture for the header background */
+.glass-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.02;
+  pointer-events: none;
+}
+
+/* Specific density handling for the header */
+body[data-density="compact"] .glass-header {
+  padding-top: 1rem !important;
+  padding-bottom: 1rem !important;
+}
+
+body[data-density="compact"] .glass-header h2 {
+  font-size: 1.75rem !important;
+}
+
+body[data-density="compact"] .glass-pill-container {
+  transform: scale(0.9);
+}
+
+.glass-nav {
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.5) !important;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
+}
+
+/* The container that holds the buttons */
+.density-group {
+  display: inline-flex; /* Keeps buttons in a row with NO gaps */
+  background: #f1f5f9; /* Soft gray background for the "track" */
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+/* Base button style inside the group */
+.density-group button {
+  border: none;
+  background: transparent;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  border-radius: 8px; /* Inner buttons get slightly smaller radius */
+  transition: all 0.2s ease;
+}
+body[data-density="compact"] .left-panel .card {
+  padding: 0.75rem !important;
+  margin-bottom: 0.75rem !important;
+}
+
+body[data-density="compact"] .left-panel input {
+  padding: 4px 8px !important;
+}
+
+body[data-density="compact"] .left-panel label {
+  font-size: 9px !important;
+  margin-bottom: 2px !important;
+}
+
+/* ✨ The Magic: Active State Colors */
+/* This highlights ONLY the button that matches the current body attribute */
+body[data-density="compact"] #btn-compact,
+body[data-density="default"] #btn-default,
+body:not([data-density]) #btn-default,
+body[data-density="comfortable"] #btn-comfortable {
+  background: white !important;
+  color: #2563eb !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+.density-group button {
+  /* ... keep your existing properties ... */
+  padding: 8px 20px;       /* Increased horizontal padding from 16px to 20px */
+  margin: 0 2px;           /* Adds a tiny 2px gap between the inner buttons */
+  min-width: 100px;        /* Ensures all buttons have a consistent width */
+  letter-spacing: 0.02em;  /* Slightly pushes the letters apart for clarity */
+}
+
+/* Optional: Make the container slightly wider to accommodate the margins */
+.density-group {
+  padding: 6px;            /* More space around the buttons inside the track */
+  gap: 4px;                /* Modern way to add space between buttons */
+}
+
+/*==========================GLOBAL MODAL STYLES==============*/
+/* Glass-Style Modal Backdrop */
+.modal-overlay {
+  background: rgba(15, 23, 42, 0.4); /* Slate-900 at 40% */
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: all 0.3s ease-out;
+}
+
+/* 2. The Universal Container */
+.modal-container {
+  background: #ffffff;
+  border-radius: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+  width: min(92vw, 1100px); /* fluid + cap */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Narrow / form modals */
+.modal-container--narrow {
+  width: min(92vw, 720px);
+}
+
+/* Wide / table-heavy modals */
+.modal-container--wide {
+  width: min(96vw, 1200px);
+}
+
+/* 3. Standardized Modal Parts */
+.modal-header {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+@keyframes modal-pop {
+  0% { opacity: 0; transform: scale(0.95) translateY(10px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Modal Headers */
+.modal-body {
+  padding: 1.5rem;
+  overflow-y: auto;
+}
+
+.modal-footer {
+  padding: 1rem 1.5rem;
+  background: #f8fafc;
+  border-top: 1px solid #f1f5f9;
+  display: flex;
+  justify-content: end;
+  gap: 0.75rem;
+}
+
+/* ================= MODAL TABLE CORRECTIONS ================= */
+
+/* 1. Normalize tables INSIDE modals only */
+.modal-container table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+/* 2. Proper inner bento frame for table */
+.modal-container .flex-1 {
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: var(--radius-md);
+  border: 1px solid #e2e8f0;
+  overflow: hidden;
+}
+
+/* 3. Table header looks attached, not floating */
+.modal-container thead {
+  background: #f8fafc;
+}
+
+.modal-container thead th {
+  border-bottom: 1px solid #e2e8f0;
+}
+
+/* 4. Clean row separation */
+.modal-container tbody tr {
+  background: #ffffff;
+}
+
+.modal-container tbody tr + tr td {
+  border-top: 1px solid #f1f5f9;
+}
+
+/* 5. Slightly reduce blur for data clarity */
+.modal-container {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Inputs inside inspection modal */
+#inspectionModal input,
+#inspectionModal textarea {
+  background: #ffffff;                 /* visible surface */
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #1e293b;
+}
+
+/* Focus state */
+#inspectionModal input:focus,
+#inspectionModal textarea:focus {
+  background: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+
+/* Placeholder clarity */
+#inspectionModal textarea::placeholder,
+#inspectionModal input::placeholder {
+  color: #94a3b8;
+}
+
+/* ===== ICS Preview – Unboxed Inspection Logs ===== */
+
+#icsPreview #pvLogs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Individual log row */
+#icsPreview #pvLogs > div {
+  position: relative;
+  padding: 6px 8px 6px 16px;
+  font-size: 11px;
+  line-height: 1.35;
+  left: 12px;
+  top: 12px;
+}
+
+/* Status colors */
+#icsPreview #pvLogs > div.serviceable::before {
+  background: #22c55e;
+}
+
+#icsPreview #pvLogs > div.unserviceable::before {
+  background: #ef4444;
+}
+
+/* Status text */
+#icsPreview #pvLogs .status {
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Date */
+#icsPreview #pvLogs .date {
+  font-size: 10px;
+  color: #64748b;
+}
+
+/* Notes */
+#icsPreview #pvLogs .notes {
+  margin-top: 2px;
+  color: #334155;
+}
+
+#icsPreview #pvLogs > div:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.modal-overlay.hidden {
+  pointer-events: none;
+}
+
 <style>
 /* =================================================
-   UI DENSITY SYSTEM
+   COMPLETE UI DENSITY SYSTEM (3-TIER)
    ================================================= */
 
-/* ---------- COMFORTABLE ---------- */
-body[data-density="comfortable"] .card {
-  padding: 1rem;
+/* ---------------- 1. COMPACT (Tight) ---------------- */
+body[data-density="compact"] .glass-nav { padding: 0.5rem 1.25rem; min-height: 54px; }
+body[data-density="compact"] .card { padding: 0.75rem; gap: 0.75rem; }
+body[data-density="compact"] .bento-grid { gap: 10px; }
+body[data-density="compact"] td, 
+body[data-density="compact"] th { padding: 8px 12px; font-size: 0.85rem; }
+body[data-density="compact"] .text-xl { font-size: 1.1rem; }
+body[data-density="compact"] .text-xs { font-size: 0.7rem; }
+body[data-density="compact"] .stat-inner-box { padding: 0.75rem; }
+body[data-density="compact"] .stats-divider { height: 20px; margin: 0 0.5rem; }
+
+/* ---------------- 2. NORMAL (Balanced) ---------------- */
+/* Note: We use the "default" attribute or just the base classes */
+body[data-density="default"] .glass-nav,
+body:not([data-density]) .glass-nav { padding: 0.9rem 1.75rem; min-height: 70px; }
+
+body[data-density="default"] .card,
+body:not([data-density]) .card { padding: 1.25rem; }
+
+body[data-density="default"] .bento-grid,
+body:not([data-density]) .bento-grid { gap: 20px; }
+
+body[data-density="default"] td, 
+body[data-density="default"] th,
+body:not([data-density]) td { padding: 14px 18px; font-size: 0.95rem; }
+
+body[data-density="default"] .text-xl,
+body:not([data-density]) .text-xl { font-size: 1.4rem; }
+
+body[data-density="default"] .stat-inner-box,
+body:not([data-density]) .stat-inner-box { padding: 1.25rem; }
+
+/* ---------------- 3. COMFORTABLE (Spacious) ---------------- */
+body[data-density="comfortable"] .glass-nav { padding: 1.5rem 2.5rem; min-height: 90px; }
+body[data-density="comfortable"] .card { padding: 2rem; }
+body[data-density="comfortable"] .bento-grid { gap: 30px; }
+body[data-density="comfortable"] td, 
+body[data-density="comfortable"] th { padding: 20px 24px; font-size: 1.05rem; }
+body[data-density="comfortable"] .text-xl { font-size: 1.75rem; }
+body[data-density="comfortable"] .text-xs { font-size: 0.95rem; }
+body[data-density="comfortable"] .stat-inner-box { padding: 1.75rem; }
+body[data-density="comfortable"] .stats-divider { height: 40px; margin: 0 1.5rem; 
+
+/* =================================================
+   NAV DENSITY ADAPTATION
+   ================================================= */
+
+/* 1. COMPACT NAV (Slim & Efficient) */
+body[data-density="compact"] .glass-nav {
+  padding-top: 0.4rem !important;
+  padding-bottom: 0.4rem !important;
+  padding-left: 1.25rem !important;
+  padding-right: 1.25rem !important;
 }
 
-body[data-density="comfortable"] .text-xs {
-  font-size: 0.85rem;
+body[data-density="compact"] .glass-nav .w-9 {
+  width: 1.8rem !important; /* Smaller Logo box */
+  height: 1.8rem !important;
+  font-size: 9px !important;
 }
 
-body[data-density="comfortable"] .text-xl {
-  font-size: 1.35rem;
+body[data-density="compact"] .glass-nav span.text-slate-800 {
+  font-size: 11px !important; /* Main title smaller */
 }
 
-body[data-density="comfortable"] .gap-3 {
-  gap: 1rem;
-}
-body[data-density="comfortable"] .gap-4 {
-  gap: 1.25rem;
+body[data-density="compact"] .glass-nav span.text-slate-400 {
+  display: none; /* Hide version info in compact to save vertical space */
 }
 
-/* ---------- COMPACT ---------- */
-body[data-density="compact"] .card {
-  padding: 0.55rem;
+body[data-density="compact"] .glass-nav button {
+  padding: 6px 12px !important; /* Slimmer buttons */
+  font-size: 10px !important;
 }
 
-body[data-density="compact"] .text-xs {
-  font-size: 0.65rem;
+/* 2. NORMAL NAV (Balanced - Default) */
+body[data-density="default"] .glass-nav,
+body:not([data-density]) .glass-nav {
+  padding-top: 0.8rem !important;
+  padding-bottom: 0.8rem !important;
 }
 
-body[data-density="compact"] .text-xl {
-  font-size: 1rem;
+/* 3. COMFORTABLE NAV (Spacious & Modern) */
+body[data-density="comfortable"] .glass-nav {
+  padding-top: 1.5rem !important;
+  padding-bottom: 1.5rem !important;
+  padding-left: 2.5rem !important;
 }
 
-body[data-density="compact"] .gap-3 {
-  gap: 0.45rem;
-}
-body[data-density="compact"] .gap-4 {
-  gap: 0.6rem;
+body[data-density="comfortable"] .glass-nav .w-9 {
+  width: 2.5rem !important;
+  height: 2.5rem !important;
+  font-size: 13px !important;
 }
 
-/* Widget icon boxes */
-body[data-density="compact"] .w-9,
-body[data-density="compact"] .w-8 {
-  width: 1.7rem;
-  height: 1.7rem;
-  font-size: 0.85rem;
+body[data-density="comfortable"] .glass-nav span.text-slate-800 {
+  font-size: 15px !important;
 }
+
+body[data-density="comfortable"] .glass-nav button {
+  padding: 10px 24px !important;
+  font-size: 13px !important;  
+}
+
 </style>
 
  <!-- TOP NAVIGATIONAL MENU -->
@@ -2604,43 +3186,46 @@ body[data-density="compact"] .w-8 {
     <header class="bg-white bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-indigo-50/20 via-white to-white px-12 py-7 flex items-center justify-between gap-6 relative overflow-hidden border-b border-slate-200/50">
 
 <!-- LEFT CONTENT -->
-      <div class="relative z-10 space-y-4">
+      <div class="relative z-10 space-y-3">
         <!-- Professional Badge -->
-        <div class="inline-flex items-center px-2.5 py-1 glass-pill text-[#4f46e5] rounded-lg text-[10px] font-bold uppercase tracking-[0.15em] border border-indigo-100/50 shadow-sm">
-          <span class="flex gap-1.5 mr-2.5">
-            <span class="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse"></span>
-            <span class="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-pulse"></span>
-            <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-          </span>
-          System Live <span class="mx-2 text-slate-300">|</span> Oquendo Elementary School
-        </div>
+        <div class="inline-flex items-center px-3 py-1.5 bg-white/60 backdrop-blur-md rounded-full text-[10px] font-bold uppercase tracking-[0.15em] border border-white/80 shadow-sm text-slate-500">
+              <span class="flex gap-1.5 mr-3">
+                <span class="w-1.5 h-1.5 bg-red-400 rounded-full animate-pulse"></span>
+                <span class="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
+                <span class="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+              </span>
+              System Live <span class="mx-2 text-slate-300">|</span> <span class="text-indigo-600">Oquendo Elementary School</span>
+            </div>
 
     <!-- Greeting Line -->
-    <h2 class="flex items-center gap-3 text-5xl font-extrabold text-[#1e293b] tracking-tight leading-none">
-      <span id="greetingText">Good Evening, Admin</span>
-      <span id="greetingIcon" class="animate-greeting-bounce text-4xl ml-1">🌚</span>
-</h2>
-          <p class="text-slate-500 font-medium text-lg leading-tight">
-            Document and track inventory distributions seamlessly with real-time analytics.
-          </p>
-        </div>
-      </div>
+<div class="flex flex-col">
+      <h2 class="flex items-center gap-3 text-4xl font-black text-slate-800 tracking-tight leading-tight">
+        <span id="greetingText">Good Evening, Admin</span>
+        <span id="greetingIcon" class="animate-greeting-bounce text-3xl">🌚</span>
+      </h2>
+      <p class="text-slate-400 font-medium text-base">
+        Document and track inventory distributions seamlessly.
+      </p>
+    </div>
+  </div>
 
   <!-- RIGHT STAT PILL -->
-      <div class="relative z-10 shrink-0 pl-10 pr-4 py-4 rounded-[1.8rem] flex items-center gap-1 ">
+      <div class="relative z-10 glass-pill-container p-1 rounded-[2rem] flex items-center gap-2 border border-white/60 bg-white/30 backdrop-blur-xl shadow-xl shadow-slate-200/40">
         <!-- Time Section -->
-        <div class="flex flex-col items-end">
-          <span id="greetingClock" class="text-4xl font-black text-black leading-none tracking-tighter uppercase">--:-- --</span>
-          <span class="text-[9px] font-bold text-slate-500 uppercase tracking-[0.2em] mt-2">Server Time (PST)</span>
-        </div>
-        <div class="stats-divider"></div>
+  <div class="flex flex-col items-end px-6">
+      <span id="greetingClock" class="text-3xl font-black text-slate-800 leading-none tracking-tighter">--:-- --</span>
+      <span class="text-[8px] font-bold text-slate-400 uppercase tracking-[0.2em] mt-1.5">Server Time (PST)</span>
+    </div>
+
+<div class="h-10 w-[1px] bg-slate-200/60"></div>
+
 <!-- Active Slips Box -->
-        <div id="slipsContainer" class="stat-inner-box px-6 py-4 rounded-2xl flex flex-col items-center justify-center min-w-[100px]">
-          <span id="greetingStatCount" class="text-2xl font-black text-white leading-none transition-all duration-300">54</span>
-          <span id="greetingStatLabel" class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1.5 whitespace-nowrap">Active Slips</span>
-        </div>
-      </div>
-    </header>
+<div id="slipsContainer" class="bg-slate-900 px-6 py-3 rounded-[1.5rem] flex flex-col items-center justify-center min-w-[110px] shadow-lg shadow-slate-900/20">
+      <span id="greetingStatCount" class="text-2xl font-black text-white leading-none">54</span>
+      <span id="greetingStatLabel" class="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Active Slips</span>
+    </div>
+  </div>
+</header>
 
 <main class="p-4">
  <div class="px-4">
@@ -2651,173 +3236,162 @@ body[data-density="compact"] .w-8 {
 <div class="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-6 items-start">
 
   <!-- LEFT COLUMN -->
-<div class="left-panel space-y-4">
+<div class="left-panel-container">
 
   <!-- AGENCY INFO -->
-  <div class="card p-3">
-    <h2 class="font-semibold mb-2">🏫 Agency Info</h2>
+<div class="sidebar-section-card card">
+  <div class="flex items-center gap-2 mb-4 pb-2 border-b border-slate-50"> 
+    <span class="text-xl">🏫</span>
+    <h2 class="font-bold text-slate-800 tracking-tight">Agency Info</h2>
+  </div>
 
-    <div class="flex flex-col mb-2">
-      <label class="text-[11px] font-medium text-slate-600 mb-1">
-        Entity Name
-      </label>
-      <input id="entity" list="entityList"
-             class="border p-1.5 w-full text-xs"
-             placeholder="Entity Name">
-    </div>
-
-    <div class="flex flex-col mb-2">
-      <label class="text-[11px] font-medium text-slate-600 mb-1">
-        Fund Cluster
-      </label>
-      <input id="fund" list="fundList"
-             class="border p-1.5 w-full text-xs"
-             placeholder="Fund Cluster">
-    </div>
-
+  <div class="space-y-4">
     <div class="flex flex-col">
-      <label class="text-[11px] font-medium text-slate-600 mb-1">
-        ICS No.
-      </label>
-      <input id="icsNo" maxlength="12"
-             class="border p-1.5 w-full text-xs"
-             placeholder="YYYY-MM-XXX">
+      <label>Entity Name</label>
+      <input id="entity" list="entityList" 
+             class="p-2 text-xs border rounded-md focus:ring-2 focus:ring-blue-100 outline-none transition-all" 
+             placeholder="Search Entity...">
+    </div>
+
+    <div class="grid grid-cols-2 gap-3">
+      <div class="flex flex-col">
+        <label>Fund Cluster</label>
+        <input id="fund" 
+               class="p-2 text-xs border rounded-md focus:ring-2 focus:ring-blue-100 outline-none transition-all" 
+               placeholder="Cluster">
+      </div>
+      <div class="flex flex-col">
+        <label>ICS No.</label>
+        <input id="icsNo" 
+               class="p-2 text-xs font-mono border rounded-md focus:ring-2 focus:ring-blue-100 outline-none transition-all" 
+               placeholder="2026-02-XXX">
+      </div>
     </div>
   </div>
+</div>
 
 
   <!-- ADD ITEM -->
-  <div class="card p-3">
-    <h2 class="font-semibold mb-2">📝 Add Item</h2>
+ <div class="sidebar-section-card card">
+  <div class="flex items-center gap-2 mb-4 pb-2 border-b border-slate-50">
+    <span class="text-xl">📝</span>
+    <h2 class="font-bold text-slate-800 tracking-tight">Add Item</h2>
+  </div>
 
-    <div class="grid grid-cols-2 gap-2">
+  <div class="grid grid-cols-2 gap-3">
+    <div class="flex flex-col">
+      <label>Quantity</label>
+      <input id="qty" type="number"
+             class="p-2 text-xs border rounded-md focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+             placeholder="Qty">
+    </div>
 
-      <div class="flex flex-col">
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Quantity
-        </label>
-        <input id="qty" type="number"
-               class="border p-1.5 text-xs w-full"
-               placeholder="Qty">
-      </div>
+    <div class="flex flex-col">
+      <label>Unit</label>
+      <input id="unit"
+             class="p-2 text-xs border rounded-md focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+             placeholder="Unit">
+    </div>
 
-      <div class="flex flex-col">
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Unit
-        </label>
-        <input id="unit"
-               class="border p-1.5 text-xs w-full"
-               placeholder="Unit">
-      </div>
+    <div class="flex flex-col">
+      <label>Unit Cost</label>
+      <input id="unitCost" type="number"
+             class="p-2 text-xs border rounded-md focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+             placeholder="0.00">
+    </div>
 
-      <div class="flex flex-col">
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Unit Cost
-        </label>
-        <input id="unitCost" type="number"
-               class="border p-1.5 text-xs w-full"
-               placeholder="Unit Cost">
-      </div>
+    <div class="flex flex-col">
+      <label>Total Cost</label>
+      <input id="total" disabled
+             class="p-2 text-xs font-bold border rounded-md"
+             placeholder="Total">
+    </div>
 
-      <div class="flex flex-col">
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Total Cost
-        </label>
-        <input id="total" disabled
-               class="border p-1.5 bg-slate-50 text-xs w-full"
-               placeholder="Total">
-      </div>
+    <div class="col-span-2 flex flex-col">
+      <label>Description</label>
+      <input id="desc" list="descList"
+             class="p-2 text-xs border rounded-md focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+             placeholder="Item description...">
+    </div>
 
-      <div class="col-span-2 flex flex-col">
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Description
-        </label>
-        <input id="desc" list="descList"
-               class="border p-1.5 text-xs w-full"
-               placeholder="Description">
-      </div>
+    <div class="flex flex-col">
+      <label>EUL</label>
+      <input id="eul" type="number"
+             class="p-2 text-xs border rounded-md focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+             placeholder="Years">
+    </div>
 
-      <div class="flex flex-col">
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          EUL
-        </label>
-        <input id="eul" type="number"
-               class="border p-1.5 text-xs w-full"
-               placeholder="EUL">
-      </div>
+    <div class="flex flex-col">
+      <label>Item No.</label>
+      <input id="itemNo"
+             class="p-2 text-xs font-mono border rounded-md focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+             placeholder="YYYY-MM-XXX-QQ-SS">
+    </div>
 
-      <div class="flex flex-col">
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Item No.
-        </label>
-        <input id="itemNo"
-               class="border p-1.5 text-xs w-full"
-               placeholder="YYYY-MM-XXX-QQ-SS">
-      </div>
-
-      <div class="col-span-2">
-        <button onclick="addItem()"
-                class="w-full bg-slate-900 text-white rounded p-2">
-          Add Item
-        </button>
-      </div>
-
+    <div class="col-span-2 pt-2">
+      <button onclick="addItem()"
+              class="w-full bg-slate-900 text-white rounded-xl py-2.5 font-bold text-xs uppercase tracking-wider hover:bg-slate-800 transition-all shadow-md shadow-slate-200">
+        Add Item
+      </button>
     </div>
   </div>
+</div>
 
   <!-- SIGNATORIES -->
-  <div class="card p-3">
-    <h2 class="font-semibold mb-2">✍️ Signatories</h2>
+  <div class="sidebar-section-card card">
+  <div class="flex items-center gap-2 mb-4 pb-2 border-b border-slate-50">
+    <span class="text-xl">✍️</span>
+    <h2 class="font-bold text-slate-800 tracking-tight">Signatories</h2>
+  </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-      <div class="flex flex-col">
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Issued By Name
-        </label>
-        <input id="issuedByName" list="issuedByList"
-               class="border p-1.5 w-full text-xs mb-2">
-
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Designation
-        </label>
-        <input id="issuedByDesignation" list="designationList"
-               class="border p-1.5 w-full text-xs mb-2">
-
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Date Issued
-        </label>
-        <input id="issuedByDate" type="date"
-               class="border p-1.5 w-full text-xs">
+    <div class="flex flex-col space-y-3">
+      <div class="bg-slate-50/50 p-2 rounded-lg border border-slate-100/50">
+        <label class="text-[10px] uppercase tracking-wider font-bold text-slate-500 block mb-1">Issued By</label>
+        
+        <div class="space-y-2">
+          <input id="issuedByName" list="issuedByList"
+                 class="p-2 text-xs border rounded-md w-full focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+                 placeholder="Name">
+          
+          <input id="issuedByDesignation" list="designationList"
+                 class="p-2 text-xs border rounded-md w-full focus:ring-2 focus:ring-blue-100 outline-none transition-all"
+                 placeholder="Designation">
+          
+          <input id="issuedByDate" type="date"
+                 class="p-2 text-xs border rounded-md w-full focus:ring-2 focus:ring-blue-100 outline-none transition-all">
+        </div>
       </div>
-
-      <div class="flex flex-col">
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Received By Name
-        </label>
-        <input id="receivedByName" list="receivedByList"
-               class="border p-1.5 w-full text-xs mb-2">
-
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Designation
-        </label>
-        <input id="receivedByDesignation" list="designationList"
-               class="border p-1.5 w-full text-xs mb-2">
-
-        <label class="text-[11px] font-medium text-slate-600 mb-1">
-          Date Received
-        </label>
-        <input id="receivedByDate" type="date"
-               class="border p-1.5 w-full text-xs">
-      </div>
-
     </div>
 
-    <button onclick="saveICS()"
-            class="mt-3 w-full bg-emerald-600 text-white rounded p-2">
-      Save ICS
-    </button>
+    <div class="flex flex-col space-y-3">
+      <div class="bg-emerald-50/30 p-2 rounded-lg border border-emerald-100/50">
+        <label class="text-[10px] uppercase tracking-wider font-bold text-emerald-700/70 block mb-1">Received By</label>
+        
+        <div class="space-y-2">
+          <input id="receivedByName" list="receivedByList"
+                 class="p-2 text-xs border rounded-md w-full focus:ring-2 focus:ring-emerald-100 outline-none transition-all"
+                 placeholder="Name">
+          
+          <input id="receivedByDesignation" list="designationList"
+                 class="p-2 text-xs border rounded-md w-full focus:ring-2 focus:ring-emerald-100 outline-none transition-all"
+                 placeholder="Designation">
+          
+          <input id="receivedByDate" type="date"
+                 class="p-2 text-xs border rounded-md w-full focus:ring-2 focus:ring-emerald-100 outline-none transition-all">
+        </div>
+      </div>
+    </div>
+
+    <div class="col-span-full pt-2">
+      <button onclick="saveICS()"
+              class="w-full bg-emerald-600 text-white rounded-xl py-3 font-bold text-xs uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200/50 flex items-center justify-center gap-2">
+        <span>💾</span> Save ICS Record
+      </button>
+    </div>
   </div>
+</div>
 
 </div>
 
@@ -2916,7 +3490,7 @@ body[data-density="compact"] .w-8 {
 <div class="card p-3 flex rounded-2xl flex items-center gap-3 cursor-pointer
          hover:ring-2 hover:ring-red-400"
   onclick="toggleEULActionCenter()"
-
+>
   <!-- Icon -->
   <div class="shrink-0">
     <div class="w-12 h-12 bg-red-50 rounded-xl flex items-center justify-center text-2xl">
@@ -2977,16 +3551,10 @@ body[data-density="compact"] .w-8 {
       </table>
 <br
 <!-- Density Mode Toggle -->
-<div class="flex items-center gap-1 text-xs">
-  <button onclick="setDensity('compact')" class="px-2 py-1 rounded border">
-    Compact
-  </button>
-  <button onclick="setDensity('normal')" class="px-2 py-1 rounded border">
-    Normal
-  </button>
-  <button onclick="setDensity('comfortable')" class="px-2 py-1 rounded border">
-    Comfortable
-  </button>
+<div class="density-group">
+  <button id="btn-compact" onclick="setDensity('compact')">Compact</button>
+  <button id="btn-default" onclick="setDensity('default')">Normal</button>
+  <button id="btn-comfortable" onclick="setDensity('comfortable')">Comfortable</button>
 </div>
 
     </div>
@@ -3019,6 +3587,7 @@ body[data-density="compact"] .w-8 {
         <caption class="sr-only">Manage ICS</caption>
         <thead class="border-b text-slate-600">
           <tr class="text-left">
+            
             <th class="py-2 px-2 w-56">ICS No.</th>
             <th class="py-2 px-2 w-40">Entity</th>
             <th class="py-2 px-2 w-28">Issued Date</th>
@@ -3051,167 +3620,245 @@ body[data-density="compact"] .w-8 {
 <div id="toast"></div>
 
 <!-- GLOBAL CUSTOM MODAL (for messages except toast) -->
-<div id="appModal" class="fixed inset-0 hidden items-center justify-center bg-black/40 z-60">
-  <div class="bg-white rounded-xl shadow-lg w-full max-w-sm p-4">
-    <h3 id="appModalTitle" class="font-semibold text-base mb-2">Message</h3>
-    <p id="appModalMessage" class="text-sm text-slate-700 mb-4"></p>
-    <div class="flex justify-end gap-2">
-      <button id="appModalCancel" class="px-3 py-1.5 text-sm rounded bg-slate-200 hidden">Cancel</button>
-      <button id="appModalOk" class="px-3 py-1.5 text-sm rounded bg-blue-600 text-white">OK</button>
+<div id="appModal" class="fixed inset-0 z-[100] hidden items-center justify-center p-4 modal-overlay">
+  <div class="modal-container w-full max-w-md">
+    <div class="modal-header">
+      <h3 id="appModalTitle" class="text-xl font-bold text-slate-800 tracking-tight">Message</h3>
+    </div>
+    
+    <div class="p-8">
+      <p id="appModalMessage" class="text-slate-600 leading-relaxed font-medium">--</p>
+    </div>
+
+    <div class="modal-footer flex items-center justify-end gap-3">
+      <button id="appModalCancel" class="px-5 py-2 text-sm font-semibold text-slate-500 hover:text-slate-800 transition-colors">
+        Cancel
+      </button>
+      <button id="appModalOk" class="px-6 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-bold shadow-lg shadow-slate-200 hover:bg-slate-800 transition-all">
+        Confirm
+      </button>
     </div>
   </div>
 </div>
 
 <!-- ================= EUL ACTION CENTER MODAL ================= -->
 <div id="eulActionCenterModal"
-     class="fixed inset-0 hidden items-center justify-center bg-black/40 z-[60]">
+     class="modal-overlay hidden fixed inset-0 z-[70] flex items-center justify-center">
 
-  <div class="modal-card w-full max-w-4xl p-4 flex flex-col">
+  <!-- ================= MODAL CONTAINER (BENTO CARD) ================= -->
+  <div class="modal-container w-full max-w-4xl flex flex-col">
 
-    <!-- Header -->
-    <div class="flex items-center justify-between mb-3">
-      <div>
-        <h3 class="text-lg font-semibold">EUL Action Center</h3>
+    <!-- ================= HEADER ================= -->
+    <div class="modal-header">
+      <div class="flex flex-col">
+        <h3 class="text-lg font-semibold tracking-tight">
+          EUL Action Center
+        </h3>
         <p class="text-xs text-slate-500">
           Consolidated EUL alerts (view-only)
         </p>
       </div>
 
       <div class="flex gap-2">
-        <button onclick="printEULReport()"
-                class="px-3 py-1.5 text-xs rounded border">
+        <button
+          onclick="printEULReport()"
+          class="text-xs px-3 py-1.5 rounded-md border">
           Print Report
         </button>
 
-        <button onclick="closeEULActionCenter()"
-                class="px-3 py-1.5 text-xs rounded border">
+        <button
+          onclick="closeEULActionCenter()"
+          class="text-xs px-3 py-1.5 rounded-md border">
           Close
         </button>
       </div>
     </div>
 
-    <!-- Table -->
-    <div class="flex-1 overflow-auto border rounded-lg">
-      <table class="w-full text-xs">
-        <thead class="bg-slate-100">
-          <tr>
-            <th class="py-2 px-2">Item</th>
-            <th class="py-2 px-2">ICS No.</th>
-            <th class="py-2 px-2">Entity</th>
-            <th class="py-2 px-2">Issued Date</th>
-            <th class="py-2 px-2">EUL</th>
-            <th class="py-2 px-2">Status</th>
-            <th class="py-2 px-2">Days</th>
-          </tr>
-        </thead>
-        <tbody id="eulActionCenterBody"></tbody>
-      </table>
+    <!-- ================= CONTENT ================= -->
+    <div class="flex-1 flex flex-col p-4 gap-3">
+
+      <!-- Inner Bento Table Card -->
+      <div class="flex-1 overflow-auto rounded-xl border">
+
+        <table class="w-full text-xs">
+          <thead>
+            <tr>
+              <th class="py-2 px-2 text-left">Item</th>
+              <th class="py-2 px-2 text-left">ICS No.</th>
+              <th class="py-2 px-2 text-left">Entity</th>
+              <th class="py-2 px-2 text-left">Issued Date</th>
+              <th class="py-2 px-2 text-left">EUL</th>
+              <th class="py-2 px-2 text-left">Status</th>
+              <th class="py-2 px-2 text-left">Days</th>
+            </tr>
+          </thead>
+
+          <tbody id="eulActionCenterBody">
+            <!-- dynamically injected rows -->
+          </tbody>
+        </table>
+
+      </div>
+
+      <!-- ================= FOOTER / PAGINATION ================= -->
+      <div class="flex items-center justify-between text-xs">
+        <span id="eulPageInfo" class="text-slate-500"></span>
+
+        <div class="flex gap-2">
+          <button
+            onclick="changeEULPage(-1)"
+            class="px-2 py-1 rounded-md border">
+            Prev
+          </button>
+
+          <button
+            onclick="changeEULPage(1)"
+            class="px-2 py-1 rounded-md border">
+            Next
+          </button>
+        </div>
+      </div>
+
     </div>
 
-    <!-- Pagination -->
-    <div class="flex items-center justify-between mt-3 text-xs">
-      <span id="eulPageInfo"></span>
+  </div>
+</div>
+
+<!-- ================= EUL PER-ICS MODAL ================= -->
+<div id="eulModal"
+     class="modal-overlay hidden fixed inset-0 z-[70] flex items-center justify-center">
+
+  <!-- ================= MODAL CONTAINER (BENTO CARD) ================= -->
+  <div class="modal-container w-full max-w-3xl flex flex-col">
+
+    <!-- ================= HEADER ================= -->
+    <div class="modal-header">
+      <div class="flex flex-col">
+        <h3 class="text-base font-semibold tracking-tight">
+          EUL Details
+        </h3>
+        <div id="eulModalMeta" class="text-xs text-slate-500 mt-0.5"></div>
+      </div>
+
+      <!-- Header Actions (same as EUL Action Center) -->
       <div class="flex gap-2">
-        <button onclick="changeEULPage(-1)" class="px-2 py-1 border rounded">Prev</button>
-        <button onclick="changeEULPage(1)" class="px-2 py-1 border rounded">Next</button>
+        <button
+          onclick="closeEULModal()"
+          class="text-xs px-3 py-1.5 rounded-md border">
+          Close
+        </button>
       </div>
     </div>
 
+    <!-- ================= CONTENT ================= -->
+    <div class="flex-1 flex flex-col p-4 gap-3">
+
+      <!-- Inner Bento Table -->
+      <div class="flex-1 overflow-auto rounded-xl border">
+
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="text-left">
+              <th class="py-2 px-2">Item</th>
+              <th class="py-2 px-2 w-20">EUL</th>
+              <th class="py-2 px-2 w-28">Issued</th>
+              <th class="py-2 px-2 w-28">Status</th>
+              <th class="py-2 px-2 w-24 text-right">Days</th>
+              <th class="py-2 px-2 w-32">Inspection Status</th>
+            </tr>
+          </thead>
+
+          <tbody id="eulModalBody">
+            <!-- dynamically injected rows -->
+          </tbody>
+        </table>
+
+      </div>
+
+    </div>
+
   </div>
 </div>
 
-<!-- EUL PER-ICS MODAL -->
-<div id="eulModal" class="fixed inset-0 hidden items-center justify-center bg-black/40 z-[70]">
-  <div class="modal-card w-full max-w-4xl p-4">
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="font-semibold text-base">EUL Details</h3>
-      <button onclick="closeEULModal()" class="text-slate-500 hover:text-black">✕</button>
-    </div>
-
-    <div id="eulModalMeta" class="text-xs text-slate-500 mb-2"></div>
-
-    <table class="w-full text-xs border-collapse">
-      <thead class="border-b text-slate-600">
-        <tr class="text-left">
-          <th class="py-2 px-2">Item</th>
-          <th class="py-2 px-2 w-20">EUL</th>
-          <th class="py-2 px-2 w-28">Issued</th>
-          <th class="py-2 px-2 w-28">Status</th>
-          <th class="py-2 px-2 w-24 text-right">Days</th>
-	  <th class="py-2 px-2 w-32">Inspection Status</th>
-        </tr>
-      </thead>
-      <tbody id="eulModalBody"></tbody>
-    </table>
-
-    <div class="flex justify-end mt-4">
-      <button onclick="closeEULModal()" class="text-xs px-3 py-1.5 rounded-lg
-                 border border-slate-300
-                 hover:bg-slate-100">
-        Close
-      </button>
-    </div>
-  </div>
-</div>
-
-<!-- UNSERVICEABLE INSPECTION MODAL -->
+<!-- ================= UNSERVICEABLE INSPECTION MODAL ================= -->
 <div id="inspectionModal"
-     class="fixed inset-0 hidden items-center justify-center bg-black/40 z-[75]">
+     class="modal-overlay hidden fixed inset-0 z-[75] flex items-center justify-center">
 
-  <div class="modal-card w-full max-w-4xl p-4">
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="font-semibold text-base">
-        Unserviceable Inspection
-      </h3>
-      <button onclick="closeInspectionModal()"
-              class="text-slate-500 hover:text-black">
-        ✕
-      </button>
+  <!-- ================= MODAL CONTAINER (BENTO CARD) ================= -->
+  <div class="modal-container modal-container--narrow flex flex-col">
+
+    <!-- ================= HEADER ================= -->
+    <div class="modal-header">
+      <div class="flex flex-col">
+        <h3 class="text-base font-semibold tracking-tight">
+          Unserviceable Inspection
+        </h3>
+        <p class="text-xs text-slate-500">
+          Inspection details for unserviceable property
+        </p>
+      </div>
+
+      <!-- Header Actions (system-consistent) -->
+      <div class="flex gap-2">
+        <button
+          onclick="closeInspectionModal()"
+          class="text-xs px-3 py-1.5 rounded-md border">
+          Close
+        </button>
+      </div>
     </div>
 
-    <div class="space-y-3 text-xs">
+    <!-- ================= CONTENT ================= -->
+    <div class="flex-1 flex flex-col p-4 gap-4 text-xs">
 
       <!-- Inspection Date -->
-      <div>
-        <label class="block text-slate-600 mb-1">
+      <div class="flex flex-col gap-1">
+        <label for="inspDate" class="font-semibold text-slate-600">
           Inspection Date <span class="text-red-500">*</span>
         </label>
-        <input id="inspDate"
-               type="date"
-               class="border rounded p-2 w-full text-xs">
+        <input
+          id="inspDate"
+          type="date"
+          class="w-full">
       </div>
 
       <!-- Reason -->
-      <div>
-        <label class="block text-slate-600 mb-1">
+      <div class="flex flex-col gap-1">
+        <label for="inspReason" class="font-semibold text-slate-600">
           Situation / Reason <span class="text-red-500">*</span>
         </label>
-        <textarea id="inspReason"
-                  rows="3"
-                  class="border rounded p-2 w-full text-xs"
-                  placeholder="Describe why the item is unserviceable"></textarea>
+        <textarea
+          id="inspReason"
+          rows="3"
+          placeholder="Describe why the item is unserviceable"
+          class="w-full"></textarea>
       </div>
 
       <!-- Notes -->
-      <div>
-        <label class="block text-slate-600 mb-1">
+      <div class="flex flex-col gap-1">
+        <label for="inspNotes" class="font-semibold text-slate-600">
           Remarks / Notes (optional)
         </label>
-        <textarea id="inspNotes"
-                  rows="2"
-                  class="border rounded p-2 w-full text-xs"
-                  placeholder="Additional notes (optional)"></textarea>
+        <textarea
+          id="inspNotes"
+          rows="2"
+          placeholder="Additional notes (optional)"
+          class="w-full"></textarea>
       </div>
 
     </div>
 
-    <div class="flex justify-end gap-2 mt-4">
-      <button onclick="closeInspectionModal()"
-              class="px-3 py-1.5 text-sm rounded bg-slate-200">
+    <!-- ================= FOOTER ================= -->
+    <div class="flex justify-end gap-2 p-4 border-t">
+      <button
+        onclick="closeInspectionModal()"
+        class="text-xs px-3 py-1.5 rounded-md border">
         Cancel
       </button>
-      <button onclick="saveUnserviceableInspection()"
-              class="px-3 py-1.5 text-sm rounded bg-red-600 text-white">
+
+      <button
+        onclick="saveUnserviceableInspection()"
+        class="text-xs px-3 py-1.5 rounded-md">
         Save Inspection
       </button>
     </div>
@@ -3221,257 +3868,399 @@ body[data-density="compact"] .w-8 {
 
 <!-- ================= ICS PREVIEW (SINGLE SOURCE OF TRUTH) ================= -->
 <div id="icsPreview"
-     class="fixed inset-0 hidden flex items-center justify-center bg-black/40 modal-overlay z-[65]">
+     class="modal-overlay hidden fixed inset-0 z-[65] flex items-center justify-center">
 
-  <div class="modal-card w-full max-w-6xl p-6">
+  <!-- ================= MODAL CONTAINER (WIDE BENTO) ================= -->
+  <div class="modal-container lg:grid-cols-[3fr_2fr] flex flex-col">
 
-    <!-- Header -->
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
-        <span class="text-xs font-bold px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full">
-          ICS PREVIEW
-        </span>
-        <h3 id="pvICSNo" class="text-lg font-semibold"></h3>
-      </div>
-
-      <button onclick="closeICSPreview()"
-              class="text-xs px-3 py-1.5 rounded-lg
-                 border border-slate-300
-                 hover:bg-slate-100">
-        Close
-      </button>
+    <!-- ================= HEADER ================= -->
+<div class="modal-header">
+  <div class="flex flex-col">
+    <div class="text-xs uppercase tracking-wide text-slate-400">
+      ICS Preview
     </div>
+    <h3 id="pvICSNo" class="text-lg font-semibold tracking-tight">
+      <!-- injected ICS no -->
+    </h3>
+  </div>
 
-    <!-- Content -->
-    <div class="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
-
-      <!-- LEFT -->
-      <div class="space-y-4">
-
-        <!-- Meta -->
-        <div class="grid grid-cols-2 gap-4">
-          <div class="p-3 rounded-xl bg-slate-50">
-            <div class="text-xs text-slate-400 uppercase">Entity</div>
-            <div id="pvEntity" class="font-semibold"></div>
-          </div>
-
-          <div class="p-3 rounded-xl bg-slate-50">
-            <div class="text-xs text-slate-400 uppercase">Fund</div>
-            <div id="pvFund" class="font-semibold"></div>
-          </div>
-        </div>
-
-        <!-- Items -->
-        <div class="border rounded-xl overflow-hidden">
-          <table class="w-full text-xs">
-            <thead class="bg-slate-100">
-              <tr>
-                <th class="p-2 text-left">Description</th>
-                <th class="p-2 text-center">Qty</th>
-                <th class="p-2 text-right">Unit Cost</th>
-                <th class="p-2 text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody id="pvItems"></tbody>
-            <tfoot class="bg-slate-50 font-semibold">
-              <tr>
-                <td colspan="3" class="p-2 text-right">Grand Total</td>
-                <td id="pvTotal" class="p-2 text-right"></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-
-        <!-- Signatories -->
-        <div class="grid grid-cols-2 gap-4 text-xs">
-          <div>
-            <div class="text-slate-400 uppercase">Issued By</div>
-            <div id="pvIssuedBy" class="font-semibold"></div>
-            <div id="pvIssuedPos"></div>
-            <div id="pvIssuedDate"></div>
-          </div>
-
-          <div>
-            <div class="text-slate-400 uppercase">Received By</div>
-            <div id="pvReceivedBy" class="font-semibold"></div>
-            <div id="pvReceivedPos"></div>
-            <div id="pvReceivedDate"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- RIGHT -->
-      <div class="rounded-xl border border-slate-200 bg-slate-50/40 p-4 flex flex-col justify-between">
-        <h4 class="text-sm font-semibold mb-3">Inspection Logs</h4>
-
-        <div id="pvLogs" class="flex-1 overflow-auto space-y-3 text-xs text-slate-500">
-          <div class="italic text-center">No inspection history</div>
-        </div>
-      </div>
-
-    </div>
+  <div class="flex gap-2">
+    <button
+      onclick="closeICSPreview()"
+      class="text-xs px-3 py-1.5 rounded-md border">
+      Close
+    </button>
   </div>
 </div>
 
-<!-- INSPECTION HISTORY MODAL -->
+    <!-- ================= CONTENT ================= -->
+    <div class="flex-1 p-4">
+
+      <div class="grid grid-cols-1 lg:grid-cols-[2fr_320px] gap-4">
+
+        <!-- ================= LEFT ================= -->
+        <div class="flex flex-col gap-4">
+
+          <!-- Meta (Inner Bento) -->
+          <div class="grid grid-cols-2 gap-4">
+            <div class="stat-inner-box">
+              <div class="text-xs uppercase text-slate-400">Entity</div>
+              <div id="pvEntity" class="font-semibold"></div>
+            </div>
+
+            <div class="stat-inner-box">
+              <div class="text-xs uppercase text-slate-400">Fund</div>
+              <div id="pvFund" class="font-semibold"></div>
+            </div>
+          </div>
+
+          <!-- Items Table (Inner Bento) -->
+          <div class="flex-1 rounded-xl border overflow-hidden">
+            <table class="w-full text-xs">
+              <thead>
+                <tr>
+                  <th class="p-2 text-left">Description</th>
+                  <th class="p-2 text-center">Qty</th>
+                  <th class="p-2 text-right">Unit Cost</th>
+                  <th class="p-2 text-right">Total</th>
+                </tr>
+              </thead>
+
+              <tbody id="pvItems"></tbody>
+
+              <tfoot>
+                <tr class="font-semibold">
+                  <td colspan="3" class="p-2 text-right">Grand Total</td>
+                  <td id="pvTotal" class="p-2 text-right"></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <!-- Signatories -->
+          <div class="grid grid-cols-2 gap-4 text-xs">
+            <div>
+              <div class="text-slate-400 uppercase">Issued By</div>
+              <div id="pvIssuedBy" class="font-semibold"></div>
+              <div id="pvIssuedPos"></div>
+              <div id="pvIssuedDate"></div>
+            </div>
+
+            <div>
+              <div class="text-slate-400 uppercase">Received By</div>
+              <div id="pvReceivedBy" class="font-semibold"></div>
+              <div id="pvReceivedPos"></div>
+              <div id="pvReceivedDate"></div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ================= RIGHT (INSPECTION LOGS) ================= -->
+            <div class="flex flex-col">
+              <h4 class="text-sm font-semibold mb-2">
+                Inspection Logs
+              </h4>
+
+              <div id="pvLogs"
+                  class="flex-1 overflow-auto space-y-2 text-xs text-slate-500">
+                <div class="italic text-center">
+                  No inspection history
+                </div>
+              </div>
+            </div>
+
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<!-- ================= INSPECTION HISTORY MODAL ================= -->
 <div id="inspectionHistoryModal"
-     class="fixed inset-0 hidden items-center justify-center bg-black/40 z-[80]">
-  <div class="modal-card w-full max-w-md p-4">
-    <div class="flex items-center justify-between mb-4">
-      <h3 class="font-semibold text-base">Inspection History</h3>
-      <button onclick="closeInspectionHistoryModal()"
-              class="text-xs px-3 py-1.5 rounded-lg
-                 border border-slate-300
-                 hover:bg-slate-100">
-        Close
-      </button>
+     class="modal-overlay hidden fixed inset-0 z-[80] flex items-center justify-center">
+
+  <!-- ================= MODAL CONTAINER (NARROW) ================= -->
+  <div class="modal-container modal-container--narrow flex flex-col">
+
+    <!-- ================= HEADER ================= -->
+    <div class="modal-header">
+      <div class="flex flex-col">
+        <div class="text-xs uppercase tracking-wide text-slate-400">
+          Inspection
+        </div>
+        <h3 class="text-base font-semibold tracking-tight">
+          History
+        </h3>
+      </div>
+
+      <div class="flex gap-2">
+        <button
+          onclick="closeInspectionHistoryModal()"
+          class="text-xs px-3 py-1.5 rounded-md border">
+          Close
+        </button>
+      </div>
     </div>
-    <div class="overflow-x-auto border rounded-lg">
-      <table class="w-full text-xs border-collapse">
-        <thead class="bg-slate-100 text-slate-700">
-          <tr>
-            <th class="py-2 px-3">Date</th>
-            <th class="py-2 px-3">Status</th>
-            <th class="py-2 px-3">Reason</th>
-            <th class="py-2 px-3">Notes</th>
-            <th class="py-2 px-3">Recorded At</th>
-          </tr>
-        </thead>
-        <tbody id="inspectionHistoryBody"></tbody>
-      </table>
+
+    <!-- ================= CONTENT ================= -->
+    <div class="flex-1 p-4">
+
+      <!-- Inner Bento Table -->
+      <div class="rounded-xl border overflow-hidden">
+
+        <table class="w-full text-xs">
+          <thead>
+            <tr>
+              <th class="py-2 px-3 text-left">Date</th>
+              <th class="py-2 px-3 text-left">Status</th>
+              <th class="py-2 px-3 text-left">Reason</th>
+              <th class="py-2 px-3 text-left">Notes</th>
+              <th class="py-2 px-3 text-left">Recorded At</th>
+            </tr>
+          </thead>
+
+          <tbody id="inspectionHistoryBody">
+            <!-- dynamically injected rows -->
+          </tbody>
+        </table>
+
+      </div>
+
     </div>
+
   </div>
 </div>
 
 <!-- ================= EXPORT CENTER MODAL ================= -->
 <div id="exportCenterModal"
-     class="fixed inset-0 hidden flex items-center justify-center bg-black/40 modal-overlay z-[65]">
+     class="modal-overlay hidden fixed inset-0 z-[65] flex items-center justify-center">
 
-  <div class="modal-card ring-1 ring-white/40 w-full max-w-3xl p-6 flex flex-col">
+  <!-- ================= MODAL CONTAINER ================= -->
+  <div class="modal-container modal-container--narrow flex flex-col">
 
-   <!-- Header -->
-<div class="flex items-start justify-between mb-5">
-  <div>
-    <h3 class="text-base font-semibold text-slate-800">
-      Export Center
-    </h3>
-    <p class="text-xs text-slate-500 mt-0.5">
-      Export Inventory Custodian Slip records
-    </p>
-  </div>
-
-  <button onclick="closeExportCenter()"
-          class="text-xs px-3 py-1.5 rounded-lg
-                 border border-slate-300
-                 hover:bg-slate-100">
-    Close
-  </button>
-</div>
-
-
-    <!-- Export Controls -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
-
-      <!-- Filters -->
-      <div class="border rounded-xl p-4 space-y-3">
-        <div class="text-xs font-semibold text-slate-700">
-          Filters
-        </div>
-
-         <!-- Month / Year -->
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label class="block text-[11px] font-medium text-slate-500 mb-1">
-              Month
-            </label>
-            <select id="exportMonth"
-                    class="border rounded-lg w-full p-2 text-sm">
-              <option value="">All Months</option>
-              <option value="0">January</option>
-              <option value="1">February</option>
-              <option value="2">March</option>
-              <option value="3">April</option>
-              <option value="4">May</option>
-              <option value="5">June</option>
-              <option value="6">July</option>
-              <option value="7">August</option>
-              <option value="8">September</option>
-              <option value="9">October</option>
-              <option value="10">November</option>
-              <option value="11">December</option>
-            </select>
-          </div>
-
-          <div>
-            <label class="block text-[11px] font-medium text-slate-500 mb-1">
-              Year
-            </label>
-            <select id="exportYear"
-                    class="border rounded-lg w-full p-2 text-sm">
-              <option value="">All Years</option>
-            </select>
-          </div>
-        </div>
-
-        <p class="text-[11px] text-slate-400">
-          Leave filters empty to export all records.
+    <!-- ================= HEADER ================= -->
+    <div class="modal-header">
+      <div class="flex flex-col">
+        <h3 class="text-base font-semibold tracking-tight">
+          Export Center
+        </h3>
+        <p class="text-xs text-slate-500">
+          Export Inventory Custodian Slip records
         </p>
       </div>
 
-      <!-- Action Panel -->
-      <div class="rounded-xl border border-slate-200 bg-slate-50/40 p-4 flex flex-col justify-between">
+      <div class="flex gap-2">
+        <button
+          onclick="closeExportCenter()"
+          class="text-xs px-3 py-1.5 rounded-md border">
+          Close
+        </button>
+      </div>
+    </div>
 
-        <div>
-          <div class="text-xs font-semibold text-slate-700 mb-2">
-            Export Action
+    <!-- ================= CONTENT ================= -->
+    <div class="flex-1 p-4 flex flex-col gap-4">
+
+      <!-- Export Controls -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+        <!-- Filters (Inner Bento) -->
+        <div class="stat-inner-box p-4 space-y-3">
+          <div class="text-xs font-semibold text-slate-700">
+            Filters
           </div>
 
-          <p class="text-xs text-slate-500 mb-3">
-            The system will automatically determine the export scope
-            based on the filters you selected.
-          </p>
+          <!-- Month / Year -->
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[11px] font-medium text-slate-500 mb-1">
+                Month
+              </label>
+              <select id="exportMonth" class="w-full">
+                <option value="">All Months</option>
+                <option value="0">January</option>
+                <option value="1">February</option>
+                <option value="2">March</option>
+                <option value="3">April</option>
+                <option value="4">May</option>
+                <option value="5">June</option>
+                <option value="6">July</option>
+                <option value="7">August</option>
+                <option value="8">September</option>
+                <option value="9">October</option>
+                <option value="10">November</option>
+                <option value="11">December</option>
+              </select>
+            </div>
 
-          <ul class="text-[11px] text-slate-400 space-y-1">
-            <li>• Month + Year → export monthly batch</li>
-            <li>• Year only → export yearly batch</li>
-            <li>• No filter → export all records</li>
-          </ul>
+            <div>
+              <label class="block text-[11px] font-medium text-slate-500 mb-1">
+                Year
+              </label>
+              <select id="exportYear" class="w-full">
+                <option value="">All Years</option>
+              </select>
+            </div>
+          </div>
+
+          <p class="text-[11px] text-slate-400">
+            Leave filters empty to export all records.
+          </p>
         </div>
 
-        <button onclick="runExportCenter()"
-             class="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-4 py-2 text-sm font-medium">
-          Export Records
-        </button>
+        <!-- Export Action (Inner Bento) -->
+                <div class="stat-inner-box p-4 flex flex-col justify-between">
+                  <div>
+                    <div class="text-xs font-semibold text-slate-700 mb-2">
+                      Export Action
+                    </div>
+
+                    <p class="text-xs text-slate-500 mb-3">
+                      The system will automatically determine the export scope
+                      based on the filters you selected.
+                    </p>
+
+                    <ul class="text-[11px] text-slate-400 space-y-1">
+                      <li>• Month + Year → export monthly batch</li>
+                      <li>• Year only → export yearly batch</li>
+                      <li>• No filter → export all records</li>
+                    </ul>
+                  </div>
+
+                  <button
+                    onclick="runExportCenter()"
+                    class="mt-4 px-4 py-2 text-sm font-medium rounded-md">
+                    Export Records
+                  </button>
+                </div>
+
+              </div>
+
+              <!-- Export Logs -->
+              <div class="border-t pt-3">
+                <div class="text-xs font-semibold text-slate-700 mb-2">
+                  Recent Exports
+                </div>
+
+                <div class="max-h-40 overflow-auto text-xs">
+                  <table class="w-full">
+                    <thead>
+                      <tr>
+                        <th class="text-left py-1">Date</th>
+                        <th class="text-left py-1">Scope</th>
+                        <th class="text-right py-1">Count</th>
+                      </tr>
+                    </thead>
+                    <tbody id="exportLogBody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+
+<!-- ================= IMPORT SUMMARY MODAL ================= -->
+<div id="importSummaryModal"
+     class="modal-overlay hidden fixed inset-0 z-[90] flex items-center justify-center">
+
+  <div class="modal-container modal-container--narrow flex flex-col">
+
+    <!-- Header -->
+    <div class="modal-header">
+      <div class="flex flex-col">
+        <h3 class="text-base font-semibold tracking-tight">
+          Import Summary
+        </h3>
+        <p class="text-xs text-slate-500">
+          Review import results before applying changes
+        </p>
+      </div>
+
+      <button onclick="closeImportSummaryModal()"
+              class="text-xs px-3 py-1.5 rounded-md border">
+        Cancel
+      </button>
+    </div>
+
+    <!-- Content -->
+    <div class="p-4 space-y-4 text-xs">
+
+      <div id="importSummaryStats" class="space-y-1 text-slate-700"></div>
+
+      <!-- Mode -->
+      <div class="stat-inner-box p-3 space-y-2">
+        <div class="font-semibold text-slate-700">Import Mode</div>
+
+        <label class="flex items-center gap-2">
+          <input type="radio" name="importMode" value="merge" checked>
+          <span>Merge (skip duplicate ICS)</span>
+        </label>
+
+        <label class="flex items-center gap-2">
+          <input type="radio" name="importMode" value="replace">
+          <span>Replace all existing records</span>
+        </label>
       </div>
 
     </div>
 
-    <!-- Export Logs -->
-    <div class="border-t pt-3">
-      <div class="flex items-center justify-between mb-2">
-        <div class="text-xs font-semibold text-slate-700">
-          Recent Exports
-        </div>
-      </div>
-
-      <div class="max-h-40 overflow-auto text-xs">
-        <table class="w-full border-collapse">
-          <thead class="text-slate-500 border-b">
-            <tr>
-              <th class="text-left py-1">Date</th>
-              <th class="text-left py-1">Scope</th>
-              <th class="text-right py-1">Count</th>
-            </tr>
-          </thead>
-          <tbody id="exportLogBody"></tbody>
-        </table>
-      </div>
+    <!-- Footer -->
+    <div class="modal-footer">
+      <button onclick="applyImport()"
+              class="px-4 py-2 text-sm rounded-md">
+        Apply Import
+      </button>
     </div>
 
   </div>
 </div>
 
+<!-- ================= IMPORT CONFIRMATION MODAL ================= -->
+<div id="importConfirmModal"
+     class="modal-overlay hidden fixed inset-0 z-[95] flex items-center justify-center">
+
+  <div class="modal-container modal-container--narrow flex flex-col">
+
+    <!-- Header -->
+    <div class="modal-header">
+      <div>
+        <h3 id="importConfirmTitle"
+            class="text-base font-semibold tracking-tight">
+          Import Confirmation
+        </h3>
+        <p id="importConfirmSubtitle"
+           class="text-xs text-slate-500"></p>
+      </div>
+
+    <!-- Body -->
+    <div id="importConfirmBody"
+         class="p-4 text-xs text-slate-700 space-y-2"></div>
+
+    <!-- Footer -->
+    <div class="modal-footer">
+      <button onclick="closeImportConfirm('cancel')"
+              class="px-3 py-1.5 text-sm rounded-md border">
+        Cancel
+      </button>
+
+      <button id="importConfirmSecondary"
+              onclick="closeImportConfirm('replace')"
+              class="px-4 py-2 text-sm rounded-md border hidden">
+        Replace All
+      </button>
+
+      <button id="importConfirmPrimary"
+              onclick="closeImportConfirm('merge')"
+              class="px-4 py-2 text-sm rounded-md">
+        Merge Records
+      </button>
+    </div>
+
+</div>
 
 </body>
-
 </html>
