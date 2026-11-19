@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { firestoreRecords, auth, observeAuth, signInWithGoogle, logOut, type User as FirebaseUser } from './firebase';
+import { LogOut, LoaderCircle } from 'lucide-react';
 import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown } from 'lucide-react';
 
 type TxType = 'E-Load' | 'Cash In' | 'Cash Out' | 'Top-Up';
@@ -72,25 +74,12 @@ function writeStoredRecords(collection:string, records:any[]){
   try { localStorage.setItem(`${STORAGE_PREFIX}${collection}`, JSON.stringify(records)); }
   catch { throw new Error('Could not save records in this browser. Check available storage and try again.'); }
 }
+let activeUser: FirebaseUser | null = null;
 async function api(action:string, args:any){
-  const {collection, id, value}=args||{};
-  if(!collection) throw new Error('A record collection is required.');
-  const records=readStoredRecords(collection);
-  if(action==='records.list') return {records:records.slice(0, args.limit || records.length)};
-  if(action==='records.create'){
-    const row={id:uid(), value};
-    records.unshift(row); writeStoredRecords(collection, records); return row;
-  }
-  if(action==='records.replace'){
-    const index=records.findIndex((row:any)=>row.id===id);
-    if(index<0) throw new Error('Record not found. Please refresh and try again.');
-    const row={id, value}; records[index]=row; writeStoredRecords(collection, records); return row;
-  }
-  if(action==='records.delete'){
-    writeStoredRecords(collection, records.filter((row:any)=>row.id!==id)); return {id};
-  }
-  throw new Error(`Unsupported action: ${action}`);
+  if (!activeUser) throw new Error('Sign in with Google to access your synced records.');
+  return firestoreRecords(action, args, activeUser);
 }
+
 function applyTransaction(w:Wallets, tx:Tx, sign=1):Wallets{
   let cash = w.cash; let maribank = w.maribank;
   if(tx.type==='E-Load'){ maribank -= sign * (tx.amount-eLoadDiscount(tx)); cash += sign * ((tx.selling || tx.amount) + (tx.fee || 0)); }
@@ -180,7 +169,7 @@ function handleModalArrowKeys(e:React.KeyboardEvent, container:HTMLElement):bool
   return false;
 }
 
-export default function App(){
+function Dashboard(){
   const [tab,setTab]=useState<'home'|'transactions'|'customers'|'wallets'|'report'|'settings'|'utang'>('home');
   const [records,setRecords]=useState<TxRecord[]>([]);
   const [customers,setCustomers]=useState<CustomerRecord[]>([]);
@@ -1499,4 +1488,17 @@ function ServicesModal({highlight,onHighlight,onClose,onSelect}:{highlight:numbe
       <button onClick={onClose} className="big-btn border border-[var(--line)] w-full mt-4">Cancel</button>
     </div>
   </div>;
+}
+
+
+export default function App(){
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [authError, setAuthError] = useState('');
+  useEffect(() => observeAuth(auth, u => { activeUser = u; setUser(u); setAuthReady(true); }), []);
+  const handleSignIn = async () => { setSigningIn(true); setAuthError(''); try { await signInWithGoogle(); } catch (e) { setAuthError(e instanceof Error ? e.message : 'Google sign-in failed. Please try again.'); } finally { setSigningIn(false); } };
+  if (!authReady) return <div className="min-h-screen grid place-items-center bg-[#f5f8f6] text-[#163b2a]"><LoaderCircle className="animate-spin" size={30}/><span className="sr-only">Checking sign-in…</span></div>;
+  if (!user) return <div className="min-h-screen bg-[#f5f8f6] text-[#163b2a] flex items-center justify-center p-5"><section className="w-full max-w-md rounded-[28px] bg-white shadow-xl border border-[#e1ebe5] p-7 sm:p-9 text-center"><div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-[#e9f7ef] text-[#16834c]"><Smartphone size={28}/></div><p className="text-xs font-black uppercase tracking-[.18em] text-[#16834c]">E-Load Tracker</p><h1 className="mt-2 font-display text-3xl font-extrabold">Your store, in sync.</h1><p className="mt-3 text-sm leading-6 text-slate-600">Sign in with Google to securely access your dashboard and sync your store records across devices.</p><button type="button" onClick={handleSignIn} disabled={signingIn} className="mt-7 flex min-h-12 w-full items-center justify-center gap-3 rounded-xl bg-[#163b2a] px-5 font-bold text-white disabled:opacity-60">{signingIn?<LoaderCircle className="animate-spin" size={20}/>:<span className="grid h-6 w-6 place-items-center rounded-full bg-white text-sm font-black text-[#4285F4]">G</span>}{signingIn?'Connecting…':'Continue with Google'}</button>{authError&&<p role="alert" className="mt-4 text-sm font-semibold text-red-600">{authError}</p>}<p className="mt-6 text-xs text-slate-500">Your data is stored privately in your Google-account workspace.</p></section></div>;
+  return <><div className="fixed right-3 top-3 z-[60] flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--surface)] px-2 py-1 shadow-sm"><span className="hidden max-w-36 truncate text-xs font-bold sm:inline">{user.displayName || user.email}</span><button onClick={()=>logOut()} aria-label="Sign out" title="Sign out" className="grid h-9 w-9 place-items-center rounded-full text-[var(--muted)] hover:bg-[var(--surface2)]"><LogOut size={17}/></button></div><Dashboard/></>;
 }
