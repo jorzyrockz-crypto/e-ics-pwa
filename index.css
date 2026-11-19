@@ -276,3 +276,30 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
   .dash-col-right > section:last-child{grid-column:auto}
   .dash-col-middle [class~="lg:grid-cols-4"]{grid-template-columns:repeat(4,minmax(0,1fr))}
 }
+
+/* Landscape tablet kiosk: use the full canvas and keep touch navigation visible. */
+@media (pointer:coarse) and (orientation:landscape) and (min-width:1024px) and (max-height:1100px){
+  .app-shell{display:block}
+  .desktop-sidebar{display:none!important}
+  .app-main-wrap{margin-left:0;min-width:0}
+  .app-main{max-width:1560px;padding-inline:24px;padding-bottom:40px}
+  .top-nav{display:flex!important;gap:8px}
+  .top-nav button{flex:0 0 auto;min-height:56px;padding-inline:16px}
+  .dashboard-grid{grid-template-columns:minmax(250px,.9fr) minmax(280px,.95fr) minmax(360px,1.2fr);gap:14px}
+  .dash-col-right{grid-column:auto;display:flex;min-width:0}
+  .dash-col-right > div:first-child{grid-row:auto}
+  .dash-col-right > section:last-child{grid-column:auto}
+  .dash-summary-grid{grid-template-columns:1fr 1fr!important}
+  .quick-actions-grid{grid-template-columns:1fr 1fr}
+  .app-main-wrap header{position:relative}
+}
+
+@media (min-width:768px) and (max-width:1023px){
+  .app-main{max-width:100%;padding-inline:20px}
+  .top-nav{width:100%;overscroll-behavior-x:contain;scrollbar-width:none}
+  .top-nav button{flex:0 0 auto}
+  .dashboard-grid,.dash-col{min-width:0}
+  .dashboard-grid>*{min-width:0}
+  .top-suki-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}
+  .mobile-header-wallet{max-width:340px}
+}
