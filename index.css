@@ -94,6 +94,11 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .tx-type-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:900;white-space:nowrap}
 .tx-status-pill{display:inline-flex;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:900;white-space:nowrap}
 
+/* Top Suki cards expand to available width in landscape/narrow dashboard columns. */
+.top-suki-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px}
+.top-suki-card{min-width:0}
+.top-suki-actions button{min-width:0;padding-inline:4px;white-space:nowrap}
+
 /* Report layout */
 .report-grid{display:flex;flex-direction:column;gap:12px}
 .report-grid > *{margin-top:0!important}
