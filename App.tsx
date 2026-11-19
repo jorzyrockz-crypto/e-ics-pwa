@@ -214,6 +214,8 @@ function Dashboard(){
   const [loadingProgress,setLoadingProgress]=useState(8);
   const [apiError,setApiError]=useState('');
   const [saving,setSaving]=useState(false);
+  const [statementImportBusy,setStatementImportBusy]=useState(false);
+  const statementImportRef=useRef<HTMLInputElement|null>(null);
   const [saveMsg,setSaveMsgState]=useState('');
   const [toastKind,setToastKind]=useState<'success'|'error'>('success');
   const [toastActionLabel,setToastActionLabel]=useState('');
@@ -792,6 +794,25 @@ function Dashboard(){
     downloadCSV('eload-records.csv', rows as any);
     showToast('CSV exported.');
   }
+  async function importStatementSales(file:File){
+    setStatementImportBusy(true);
+    try{
+      const parsed=JSON.parse(await file.text());
+      if(!Array.isArray(parsed) || !parsed.length) throw new Error('Import file must contain a non-empty array of transactions.');
+      const rows=parsed.map(item=>{
+        if(!item || typeof item.id!=='string' || !item.id.startsWith('mari-oct-2026-') || !item.value || item.value.type!=='E-Load' || !['Globe','Smart','DITO'].includes(item.value.network) || !/^2026-10-\\d{2}$/.test(item.value.date) || !(Number(item.value.amount)>0)) throw new Error('This file contains a row that is not a valid October 2026 E-Load sale. Nothing was imported.');
+        return item;
+      });
+      let imported=0, skipped=0;
+      for(const item of rows){
+        const result:any=await api('records.create',{collection:'transactions',id:item.id,value:item.value});
+        if(result.skipped) skipped++; else imported++;
+      }
+      await reloadRecords();
+      showToast(`Imported ${imported} customer sales${skipped?` • ${skipped} already existed`:''}. Historical import did not change current wallet balances.`);
+    }catch(e){ showErrorToast(e instanceof Error?e.message:'Could not import these statement sales.'); }
+    finally{ setStatementImportBusy(false); if(statementImportRef.current) statementImportRef.current.value=''; }
+  }
   function exportDailyCSV(){
     const rows:any[]=[['Date','Type','Customer','Number','Amount','Fee','Notes','Status']];
     dayTxs.forEach(t=>{ rows.push([t.date, t.type, t.customerName||'', t.phone, String(t.amount), String(t.fee||0), t.notes||'', t.utang ? (t.utangStatus==='paid'?'Paid (Utang)':'Unpaid (Utang)') : 'Paid']); });
@@ -1213,6 +1234,9 @@ function Dashboard(){
               <p className="text-sm font-semibold text-[var(--muted)] mt-3">Fee = Amount × % ÷ 100. E-Load customers pay the load amount plus its profit/fee; Cash In/Out fees are added on top. Example: Cash In ₱500 at 2% = ₱10 fee, so the customer pays ₱510.</p>
               <button disabled={saving} onClick={async()=>{ setSaving(true); try{ await saveMeta(meta); setSaveMsg('Settings saved.'); } catch(e){ setSaveMsg(e instanceof Error?e.message:String(e)); } setSaving(false); }} className="big-btn bg-[var(--green)] text-white px-6 mt-4 w-full sm:w-auto">{saving?'Saving…':'Save Settings'}</button>
               <button onClick={exportAllCSV} className="big-btn border-2 border-[var(--line)] px-5 mt-3 w-full sm:w-auto"><FileDown size={18}/> Export CSV — All Transactions</button>
+              <input ref={statementImportRef} type="file" accept="application/json,.json" className="hidden" aria-label="Choose statement sales JSON file" onChange={e=>{const file=e.target.files?.[0]; if(file) void importStatementSales(file);}} />
+              <button type="button" disabled={statementImportBusy||saving} onClick={()=>statementImportRef.current?.click()} className="big-btn border-2 border-[var(--line)] px-5 mt-3 w-full sm:w-auto"><Download size={18}/>{statementImportBusy?'Importing statement sales…':'Import statement sales JSON'}</button>
+              <p className="text-xs font-bold text-[var(--muted)] mt-2">Imports past E-Load records to transaction history. Existing wallet balances are preserved; repeat imports skip already-imported rows.</p>
             </section>
             <section className="card p-4 sm:p-5">
               <h2 className="font-display font-bold text-xl">Sample data</h2><p className="text-sm font-semibold text-[var(--muted)] mt-1">If older sample transactions are still in your ledger, clear them to start with a clean ledger.</p>

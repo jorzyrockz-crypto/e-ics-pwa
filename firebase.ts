@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, type User } from 'firebase/auth';
-import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDSzRMrsCvxA6faVN7TUsL9-tfCNTJJTzk',
@@ -44,9 +44,13 @@ export async function firestoreRecords(action: string, args: any, user: User) {
     return { records: records.slice(0, args.limit || records.length) };
   }
   if (action === 'records.create') {
-    const row = doc(recordsRef);
+    const row = id ? doc(recordsRef, String(id)) : doc(recordsRef);
+    if (id) {
+      const existing = await getDoc(row);
+      if (existing.exists()) return { id: row.id, value: existing.data().value, skipped: true };
+    }
     await setDoc(row, { value });
-    return { id: row.id, value };
+    return { id: row.id, value, skipped: false };
   }
   if (action === 'records.replace') {
     const row = doc(recordsRef, id);
