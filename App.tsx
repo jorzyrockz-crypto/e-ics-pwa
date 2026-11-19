@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Store, Landmark, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown } from 'lucide-react';
+import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown } from 'lucide-react';
 
 type TxType = 'E-Load' | 'Cash In' | 'Cash Out' | 'Top-Up';
-type Tx = { kind?:string; type:TxType; network:string; provider:string; amount:number; fee:number; selling:number; phone:string; customerName?:string; payment:string; notes:string; date:string; time:string; createdAt:number; sample?:boolean; utang?:boolean; utangStatus?:'unpaid'|'paid'; promiseDate?:string; paidAmount?:number; history?:{oldAmount:number;newAmount:number;time:string;date:string}[] };
+type Tx = { kind?:string; type:TxType; network:string; eloadKind?:'regular'|'promo'; promoName?:string; promoDetails?:string; promoValidity?:string; provider:string; amount:number; fee:number; selling:number; discount?:number; phone:string; customerName?:string; payment:string; notes:string; date:string; time:string; createdAt:number; sample?:boolean; utang?:boolean; utangStatus?:'unpaid'|'paid'; promiseDate?:string; paidAmount?:number; history?:{oldAmount:number;newAmount:number;time:string;date:string}[] };
 type Wallets = { cash:number; maribank:number };
 type Meta = { kind:string; businessName:string; eloadPct:number; cashInPct:number; cashOutPct:number; palawanFee:number; wallets:Wallets; lastClosed:string; lowThreshold:number; startingFloat?:number; startingFloatDate?:string };
 type TxRecord = { id:string; value:Tx };
@@ -26,6 +26,27 @@ const utangPromiseLabel = (t:Tx):string=>{ const s=utangPromiseStatus(t); if(s==
 const utangPromiseDateLabel = (t:Tx)=> t.promiseDate ? dateLabel(t.promiseDate) : 'No date yet';
 const uid = ()=> Math.random().toString(36).slice(2,10)+Date.now().toString(36);
 const round2 = (n:number)=> Math.round(n*100)/100;
+const eLoadDiscount = (t:Tx)=> t.type==='E-Load' ? Math.min(Math.max(0,round2(t.discount||0)),t.amount) : 0;
+const txPortion = (tx:Tx, amount:number):Tx=>{ const ratio=tx.amount>0?amount/tx.amount:0; return {...tx, amount:round2(amount), selling:tx.type==='E-Load'?round2(amount):tx.selling, fee:round2((tx.fee||0)*ratio), discount:round2(eLoadDiscount(tx)*ratio)}; };
+const txProfit = (t:Tx)=> t.type==='Top-Up' ? -round2(t.fee||0) : round2((t.fee||0)+eLoadDiscount(t));
+type PromoOffer={id:string; network:string; name:string; amount:number; details:string; validity:string};
+const promoOffers:PromoOffer[]=[
+  {id:'globe-go99',network:'Globe',name:'Go+99',amount:99,details:'20GB total (8GB all sites + 4GB 5G + 8GB chosen apps), unli all-net texts',validity:'7 days'},
+  {id:'globe-go109',network:'Globe',name:'Go+109',amount:109,details:'22GB total (10GB all sites + 4GB 5G + 8GB chosen apps), unli all-net texts',validity:'7 days'},
+  {id:'globe-go149',network:'Globe',name:'Go+149',amount:149,details:'29GB total (13GB all sites + 8GB 5G + 8GB chosen apps), unli all-net texts',validity:'7 days'},
+  {id:'globe-go250',network:'Globe',name:'Go+250',amount:250,details:'38GB total (15GB all sites + 8GB 5G + 15GB chosen apps)',validity:'15 days'},
+  {id:'smart-pa99',network:'Smart',name:'Power All 99',amount:99,details:'Power All offer; confirm current inclusions on retailer menu',validity:'Check retailer menu'},
+  {id:'smart-pa149',network:'Smart',name:'Power All 149',amount:149,details:'Power All offer; confirm current inclusions on retailer menu',validity:'Check retailer menu'},
+  {id:'smart-md149',network:'Smart',name:'Magic Data 149',amount:149,details:'3GB data, no expiry',validity:'No expiry'},
+  {id:'smart-md249',network:'Smart',name:'Magic Data 249',amount:249,details:'8GB data, no expiry',validity:'No expiry'},
+  {id:'smart-ad99',network:'Smart',name:'All Data 99',amount:99,details:'6GB open-access data',validity:'7 days'},
+  {id:'tnt-aa99',network:'TNT',name:'All Access+ 99',amount:99,details:'5GB open-access data, unli calls and texts',validity:'15 days'},
+  {id:'dito-lu99',network:'DITO',name:'Level-Up 99',amount:99,details:'7GB data, unli DITO calls, 300 mins other-network calls, unli texts',validity:'30 days'},
+  {id:'dito-lu99-15',network:'DITO',name:'New Level-Up 99',amount:99,details:'9GB data, unli DITO calls, 150 mins other-network calls, unli texts',validity:'15 days'},
+  {id:'dito-lu109',network:'DITO',name:'Level-Up 109',amount:109,details:'10GB data, unli DITO calls, 300 mins other-network calls, unli texts',validity:'30 days'},
+  {id:'dito-lu129',network:'DITO',name:'Level-Up 129',amount:129,details:'12GB data, unli DITO calls, 300 mins other-network calls, unli texts',validity:'30 days'},
+  {id:'dito-socials50',network:'DITO',name:'Level-Up Socials 50',amount:50,details:'7GB data (3.5GB app + 3.5GB all-access)',validity:'3 days'},
+];
 const defaultWallets:Wallets={cash:10000, maribank:5000};
 const defaultMeta:Meta={kind:'meta', businessName:'May E-Load & Cash In/Out', eloadPct:3, cashInPct:2, cashOutPct:2, palawanFee:10, wallets:{...defaultWallets}, lastClosed:'', lowThreshold:1000};
 const digitsOnly = (s:string)=> (s||'').replace(/\D/g,'');
@@ -40,23 +61,58 @@ const daysAgoLabel = (dateKey:string)=>{ if(!dateKey) return ''; const [y,m,d]=d
 const csvCell = (v:any)=> `"${String(v ?? '').replace(/"/g,'""')}"`;
 function downloadCSV(filename:string, rows:string[][]){ const csv = rows.map(r=>r.map(csvCell).join(',')).join('\n'); const blob = new Blob([csv], {type:'text/csv'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 800); }
 
+const STORAGE_PREFIX = 'eics.records.';
+function readStoredRecords(collection:string):any[]{
+  try { const value=localStorage.getItem(`${STORAGE_PREFIX}${collection}`); return value ? JSON.parse(value) : []; }
+  catch { return []; }
+}
+function writeStoredRecords(collection:string, records:any[]){
+  try { localStorage.setItem(`${STORAGE_PREFIX}${collection}`, JSON.stringify(records)); }
+  catch { throw new Error('Could not save records in this browser. Check available storage and try again.'); }
+}
 async function api(action:string, args:any){
-  const res = await fetch("actions", {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({action, args})});
-  const json = await res.json().catch(()=>({error:'Unexpected response'}));
-  if(!res.ok || json.error) throw new Error(json.error || `Request failed (${res.status})`);
-  return json.data;
+  const {collection, id, value}=args||{};
+  if(!collection) throw new Error('A record collection is required.');
+  const records=readStoredRecords(collection);
+  if(action==='records.list') return {records:records.slice(0, args.limit || records.length)};
+  if(action==='records.create'){
+    const row={id:uid(), value};
+    records.unshift(row); writeStoredRecords(collection, records); return row;
+  }
+  if(action==='records.replace'){
+    const index=records.findIndex((row:any)=>row.id===id);
+    if(index<0) throw new Error('Record not found. Please refresh and try again.');
+    const row={id, value}; records[index]=row; writeStoredRecords(collection, records); return row;
+  }
+  if(action==='records.delete'){
+    writeStoredRecords(collection, records.filter((row:any)=>row.id!==id)); return {id};
+  }
+  throw new Error(`Unsupported action: ${action}`);
 }
 function applyTransaction(w:Wallets, tx:Tx, sign=1):Wallets{
   let cash = w.cash; let maribank = w.maribank;
-  if(tx.type==='E-Load'){ maribank -= sign * tx.amount; cash += sign * ((tx.selling || tx.amount) + (tx.fee || 0)); }
+  if(tx.type==='E-Load'){ maribank -= sign * (tx.amount-eLoadDiscount(tx)); cash += sign * ((tx.selling || tx.amount) + (tx.fee || 0)); }
   else if(tx.type==='Cash In'){ maribank -= sign * tx.amount; cash += sign * (tx.amount + (tx.fee || 0)); }
   else if(tx.type==='Cash Out'){ maribank += sign * (tx.amount + (tx.fee || 0)); cash += sign * (-tx.amount); }
   else if(tx.type==='Top-Up'){ cash -= sign * (tx.amount + (tx.fee || 0)); maribank += sign * tx.amount; }
   return { cash: round2(cash), maribank: round2(maribank) };
 }
 function reverseTransaction(w:Wallets, tx:Tx):Wallets{ return applyTransaction(w, tx, -1); }
+function transactionWalletEffect(tx:Tx):Tx|null{
+  if(tx.utang && tx.utangStatus==='unpaid'){
+    const paid=Math.min(tx.amount, Math.max(0,tx.paidAmount||0));
+    return paid>0 ? txPortion(tx,paid) : null;
+  }
+  return tx;
+}
+function updateWalletsForEdit(wallets:Wallets, oldTx:Tx, newTx:Tx):Wallets{
+  let next={...wallets};
+  const oldEffect=transactionWalletEffect(oldTx); if(oldEffect) next=reverseTransaction(next,oldEffect);
+  const newEffect=transactionWalletEffect(newTx); if(newEffect) next=applyTransaction(next,newEffect,1);
+  return next;
+}
 const walletDefs:{key:keyof Wallets; label:string; color:string; hint:string}[]=[
-  {key:'maribank', label:'MariBank Wallet', color:'#0e2a47', hint:'Main wallet — load, Cash In & Cash Out'},
+  {key:'maribank', label:'Main Wallet', color:'#0e2a47', hint:'Main wallet — load, Cash In & Cash Out'},
   {key:'cash', label:'Cash on Hand', color:'#0e9f5f', hint:'Bills & coins in the till'},
 ];
 function normalizeTx(v:any):Tx|null{
@@ -64,8 +120,8 @@ function normalizeTx(v:any):Tx|null{
   let type = v.type as string;
   if(type==='Transfer' || type==='Adjustment') type='Top-Up';
   if(!['E-Load','Cash In','Cash Out','Top-Up'].includes(type)) return null;
-  const provider = type==='Top-Up' ? 'PalawanPay' : 'MariBank';
-  const network = type==='Top-Up' ? 'PalawanPay' : type==='E-Load' ? (v.network||'Globe') : 'MariBank';
+  const provider = type==='Top-Up' ? 'External Provider' : 'Main Wallet';
+  const network = type==='Top-Up' ? 'External Provider' : type==='E-Load' ? (v.network||'Globe') : 'Main Wallet';
   return {...v, type:type as TxType, provider, network};
 }
 function normalizeCustomer(v:any):Customer|null{
@@ -129,6 +185,7 @@ export default function App(){
   const [meta,setMeta]=useState<Meta>(defaultMeta);
   const [metaId,setMetaId]=useState<string|null>(null);
   const [loading,setLoading]=useState(true);
+  const [loadingProgress,setLoadingProgress]=useState(8);
   const [apiError,setApiError]=useState('');
   const [saving,setSaving]=useState(false);
   const [saveMsg,setSaveMsgState]=useState('');
@@ -139,6 +196,11 @@ export default function App(){
   const showToast=(msg:string, kind:'success'|'error'='success', actionLabel='', actionFn?:()=>void)=>{ setToastKind(kind); setSaveMsgState(msg); setToastActionLabel(actionLabel); toastActionRef.current=actionFn||null; };
   const showErrorToast=(msg:string)=>showToast(msg,'error');
   useEffect(()=>{ if(!saveMsg) return; const t=setTimeout(()=>{setSaveMsgState(''); setToastActionLabel(''); toastActionRef.current=null;}, toastActionLabel?10000:3000); return ()=>clearTimeout(t); },[saveMsg, toastActionLabel]);
+  useEffect(()=>{
+    if(!loading) return;
+    const timer=window.setInterval(()=>setLoadingProgress(p=>p>=91?91:Math.min(91,p+Math.max(1,Math.ceil((91-p)*0.12)))),100);
+    return ()=>window.clearInterval(timer);
+  },[loading]);
   const [showTx,setShowTx]=useState(false);
   const [showServices,setShowServices]=useState(false);
   const [servicesHighlight,setServicesHighlight]=useState(0);
@@ -166,8 +228,6 @@ export default function App(){
   const [dailyReports,setDailyReports]=useState<DailyReportRecord[]>([]);
   const [favorites,setFavorites]=useState<FavoriteRecord[]>([]);
   const [isOnline,setIsOnline]=useState(typeof navigator!=='undefined' ? navigator.onLine : true);
-  const [pending,setPending]=useState<{tx:Tx; wallets:Wallets; key:string}[]>([]);
-  const pendingRef=useRef(pending); pendingRef.current=pending;
   const [actualCash,setActualCash]=useState(0);
   const [tomorrowFloat,setTomorrowFloat]=useState(0);
   const [tomorrowTouched,setTomorrowTouched]=useState(false);
@@ -208,10 +268,15 @@ export default function App(){
 
   const [fType,setFType]=useState<TxType>('E-Load');
   const [fNetwork,setFNetwork]=useState('Globe');
-  const [fProvider,setFProvider]=useState('MariBank');
+  const [fEloadKind,setFEloadKind]=useState<'regular'|'promo'>('regular');
+  const [fPromoName,setFPromoName]=useState('');
+  const [fPromoDetails,setFPromoDetails]=useState('');
+  const [fPromoValidity,setFPromoValidity]=useState('');
+  const [fProvider,setFProvider]=useState('Main Wallet');
   const [fAmount,setFAmount]=useState(100);
   const [fCustom,setFCustom]=useState('');
   const [fFee,setFFee]=useState(3);
+  const [fDiscount,setFDiscount]=useState(0);
   const [fPhone,setFPhone]=useState('');
   const [fCustomerName,setFCustomerName]=useState('');
   const [fCustomerQuery,setFCustomerQuery]=useState('');
@@ -282,6 +347,7 @@ export default function App(){
   }
 
   useEffect(()=>{ (async()=>{
+    const loadingStartedAt=Date.now();
     try{
       await reloadRecords();
       const m:any = await api("records.list", {collection:'meta', limit:10});
@@ -298,6 +364,10 @@ export default function App(){
         await reloadRecords();
       }
     } catch(e){ setApiError('The saved records could not be loaded yet. Your entries will be kept in this view until the connection returns — please try again.'); }
+    const remainingSplashTime=Math.max(0,1000-(Date.now()-loadingStartedAt));
+    if(remainingSplashTime) await new Promise<void>(resolve=>window.setTimeout(resolve,remainingSplashTime));
+    setLoadingProgress(100);
+    await new Promise<void>(resolve=>window.setTimeout(resolve,220));
     setLoading(false);
   })(); },[]);
 
@@ -307,27 +377,13 @@ export default function App(){
     window.addEventListener('online', onOnline); window.addEventListener('offline', onOffline);
     return ()=>{ window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
   },[]);
-  // Flush pending offline transactions when back online
-  useEffect(()=>{
-    if(!isOnline || !pending.length) return;
-    (async()=>{
-      const queue=[...pending];
-      for(const item of queue){
-        try{ await api("records.create", {collection:'transactions', value:item.tx, idempotency_key:item.key}); await saveMeta({...metaRef.current, wallets:item.wallets}); }catch{}
-      }
-      setPending([]);
-      try{ await reloadRecords(); }catch{}
-      if(queue.length) showToast(`Synced ${queue.length} offline transaction${queue.length>1?'s':''}.`);
-    })();
-  },[isOnline]);
-
   const txs = useMemo(()=>records.map(r=>r.value),[records]);
   const todayTxs = txs.filter(t=>t.date===todayKey());
   const dayTxs = txs.filter(t=>t.date===selectedDay);
   const sum = (arr:Tx[], fn:(t:Tx)=>number)=> arr.reduce((s,t)=>s+fn(t),0);
   const salesTypes = ['E-Load','Cash In','Cash Out'];
   const todaySales = sum(todayTxs.filter(t=>salesTypes.includes(t.type)),t=>t.amount);
-  const todayProfit = sum(todayTxs.filter(t=>salesTypes.includes(t.type)),t=>t.fee||0) - sum(todayTxs.filter(t=>t.type==='Top-Up'),t=>t.fee||0);
+  const todayProfit = sum(todayTxs,t=>txProfit(t));
   const eloadToday = todayTxs.filter(t=>t.type==='E-Load');
   const cashInToday = todayTxs.filter(t=>t.type==='Cash In');
   const cashOutToday = todayTxs.filter(t=>t.type==='Cash Out');
@@ -356,7 +412,7 @@ export default function App(){
     return seen.slice(0,5);
   },[records]);
   const frequentCustomers = useMemo(()=>{ return [...customers].sort((a,b)=> (customerStats.get(digitsOnly(b.value.phone))?.count||0)-(customerStats.get(digitsOnly(a.value.phone))?.count||0)).slice(0,5); },[customers,customerStats]);
-  const last7 = useMemo(()=>{ const out=[]; for(let i=6;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); const k=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; const arr=txs.filter(t=>t.date===k); out.push({key:k, label:d.toLocaleDateString('en-PH',{weekday:'short'}), sales: sum(arr.filter(t=>salesTypes.includes(t.type)),t=>t.amount), profit: sum(arr.filter(t=>salesTypes.includes(t.type)),t=>t.fee||0) - sum(arr.filter(t=>t.type==='Top-Up'),t=>t.fee||0), count:arr.filter(t=>salesTypes.includes(t.type)).length }); } return out; },[txs]);
+  const last7 = useMemo(()=>{ const out=[]; for(let i=6;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); const k=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; const arr=txs.filter(t=>t.date===k); out.push({key:k, label:d.toLocaleDateString('en-PH',{weekday:'short'}), sales: sum(arr.filter(t=>salesTypes.includes(t.type)),t=>t.amount), profit: sum(arr,t=>txProfit(t)), count:arr.filter(t=>salesTypes.includes(t.type)).length }); } return out; },[txs]);
   const maxSales = Math.max(1,...last7.map(d=>d.sales));
   const todayCashMove = useMemo(()=>{ let cash=0; todayTxs.forEach(t=>{ if(t.utang && t.utangStatus==='unpaid') return; const d=applyTransaction({cash:0, maribank:0}, t, 1); cash+=d.cash; }); return round2(cash); },[todayTxs]);
   const startingFloat = useMemo(()=>{
@@ -380,29 +436,30 @@ export default function App(){
   const filtered = useMemo(()=>{
     let arr=[...records];
     if(filter!=='All') arr=arr.filter(r=>r.value.type===filter);
-    if(search.trim()){ const q=search.toLowerCase(); const qd=digitsOnly(search); arr=arr.filter(r=>{ const cust=customerByPhone.get(digitsOnly(r.value.phone||'')); const hay=(r.value.network+r.value.provider+r.value.phone+r.value.notes+r.value.type+(cust?.value.name||'')+(r.value.customerName||'')+r.value.date).toLowerCase(); return hay.includes(q) || (qd && digitsOnly(r.value.phone||'').includes(qd)) || String(r.value.amount).includes(q); }); }
+    if(search.trim()){ const q=search.toLowerCase(); const qd=digitsOnly(search); arr=arr.filter(r=>{ const cust=customerByPhone.get(digitsOnly(r.value.phone||'')); const hay=(r.value.network+r.value.provider+(r.value.promoName||'')+r.value.phone+r.value.notes+r.value.type+(cust?.value.name||'')+(r.value.customerName||'')+r.value.date).toLowerCase(); return hay.includes(q) || (qd && digitsOnly(r.value.phone||'').includes(qd)) || String(r.value.amount).includes(q); }); }
     return arr;
   },[records,filter,search,customerByPhone]);
   const grouped = useMemo(()=>{ const map=new Map<string,TxRecord[]>(); filtered.forEach(r=>{ if(!map.has(r.value.date)) map.set(r.value.date,[]); map.get(r.value.date)!.push(r); }); return [...map.entries()].sort((a,b)=>b[0].localeCompare(a[0])); },[filtered]);
 
   const reportTxs = useMemo(()=>{
     const today=todayKey(); const y=new Date(); y.setDate(y.getDate()-1); const yKey=`${y.getFullYear()}-${String(y.getMonth()+1).padStart(2,'0')}-${String(y.getDate()).padStart(2,'0')}`;
-    if(reportPeriod==='Week') return txs.filter(t=>t.date>=last7[0].key);
-    if(reportPeriod==='Month') return txs.filter(t=>t.date.startsWith(today.slice(0,7)));
+    const inRange=(date:string,start:string)=>date>=start && date<=today;
+    if(reportPeriod==='Week') return txs.filter(t=>inRange(t.date,last7[0].key));
+    if(reportPeriod==='Month') return txs.filter(t=>t.date.startsWith(today.slice(0,7)) && t.date<=today);
     if(reportRange==='Today') return txs.filter(t=>t.date===today);
     if(reportRange==='Yesterday') return txs.filter(t=>t.date===yKey);
-    if(reportRange==='This Week') return txs.filter(t=>t.date>=last7[0].key);
-    return txs.filter(t=>t.date.startsWith(today.slice(0,7)));
+    if(reportRange==='This Week') return txs.filter(t=>inRange(t.date,last7[0].key));
+    return txs.filter(t=>t.date.startsWith(today.slice(0,7)) && t.date<=today);
   },[txs,reportRange,last7,reportPeriod]);
   const reportSales = sum(reportTxs.filter(t=>t.type==='E-Load'),t=>t.amount);
   const reportCashIn = sum(reportTxs.filter(t=>t.type==='Cash In'),t=>t.amount);
   const reportCashOut = sum(reportTxs.filter(t=>t.type==='Cash Out'),t=>t.amount);
   const reportTopUp = sum(reportTxs.filter(t=>t.type==='Top-Up'),t=>t.amount);
   const reportTopUpFees = sum(reportTxs.filter(t=>t.type==='Top-Up'),t=>t.fee||0);
-  const reportProfit = sum(reportTxs.filter(t=>salesTypes.includes(t.type)),t=>t.fee||0) - reportTopUpFees;
+  const reportProfit = sum(reportTxs,t=>txProfit(t));
   const denom = useMemo(()=>{ const m=new Map<number,number>(); reportTxs.filter(t=>t.type==='E-Load').forEach(t=>m.set(t.amount,(m.get(t.amount)||0)+1)); return [...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5); },[reportTxs]);
   const todayWalletMoves = useMemo(()=>{ const m:Record<string,number>={cash:0, maribank:0}; todayTxs.forEach(t=>{ if(t.utang && t.utangStatus==='unpaid') return; const d=applyTransaction({cash:0, maribank:0}, t, 1); m.cash=round2(m.cash+d.cash); m.maribank=round2(m.maribank+d.maribank); }); return m; },[todayTxs]);
-  const profitPerDay = useMemo(()=>{ const map=new Map<string,{date:string; sales:number; profit:number; count:number}>(); reportTxs.forEach(t=>{ const cur=map.get(t.date)||{date:t.date,sales:0,profit:0,count:0}; if(salesTypes.includes(t.type)){ cur.sales+=t.amount; cur.profit+=t.fee||0; cur.count+=1; } if(t.type==='Top-Up') cur.profit-=t.fee||0; map.set(t.date,cur); }); return [...map.values()].sort((a,b)=>b.date.localeCompare(a.date)); },[reportTxs]);
+  const profitPerDay = useMemo(()=>{ const map=new Map<string,{date:string; sales:number; profit:number; count:number}>(); reportTxs.forEach(t=>{ const cur=map.get(t.date)||{date:t.date,sales:0,profit:0,count:0}; if(salesTypes.includes(t.type)){ cur.sales+=t.amount; cur.count+=1; } cur.profit+=txProfit(t); map.set(t.date,cur); }); return [...map.values()].sort((a,b)=>b.date.localeCompare(a.date)); },[reportTxs]);
 
   const topSuki = useMemo(()=>{
     const cutoff=last7[0]?.key||todayKey();
@@ -425,7 +482,7 @@ export default function App(){
     else arr.sort((a,b)=> (customerStats.get(digitsOnly(b.value.phone))?.lastDate||'').localeCompare(customerStats.get(digitsOnly(a.value.phone))?.lastDate||'') || b.value.createdAt-a.value.createdAt);
     return arr;
   },[customers,customerSearch,customerSort,customerStats,customerNameFilter]);
-  const dashboardRecent = useMemo(()=>{ let a=[...records].slice(0,5); if(dashboardSearch.trim()){ const q=dashboardSearch.toLowerCase(); const qd=digitsOnly(dashboardSearch); a=records.filter(r=>{ const cust=customerByPhone.get(digitsOnly(r.value.phone||'')); const hay=(r.value.network+r.value.provider+r.value.phone+r.value.notes+r.value.type+(cust?.value.name||'')+(r.value.customerName||'')+r.value.date).toLowerCase(); return hay.includes(q)|| (qd && digitsOnly(r.value.phone||'').includes(qd)) || String(r.value.amount).includes(q); }).slice(0,5); } return a; },[records,dashboardSearch,customerByPhone]);
+  const dashboardRecent = useMemo(()=>{ let a=[...records].slice(0,5); if(dashboardSearch.trim()){ const q=dashboardSearch.toLowerCase(); const qd=digitsOnly(dashboardSearch); a=records.filter(r=>{ const cust=customerByPhone.get(digitsOnly(r.value.phone||'')); const hay=(r.value.network+r.value.provider+(r.value.promoName||'')+r.value.phone+r.value.notes+r.value.type+(cust?.value.name||'')+(r.value.customerName||'')+r.value.date).toLowerCase(); return hay.includes(q)|| (qd && digitsOnly(r.value.phone||'').includes(qd)) || String(r.value.amount).includes(q); }).slice(0,5); } return a; },[records,dashboardSearch,customerByPhone]);
 
   useEffect(()=>{ if(tab==='transactions' && filtered.length && !filtered.some(r=>r.id===selectedTxId)) setSelectedTxId(filtered[0].id); if(tab==='transactions' && !filtered.length) setSelectedTxId(null); },[filtered, tab, selectedTxId]);
   useEffect(()=>{ if(tab==='customers' && sortedCustomers.length && !sortedCustomers.some(c=>c.id===selectedCustomerId)) setSelectedCustomerId(sortedCustomers[0].id); if(tab==='customers' && !sortedCustomers.length) setSelectedCustomerId(null); },[sortedCustomers, tab, selectedCustomerId]);
@@ -480,19 +537,19 @@ export default function App(){
     setAddNameSaving(false);
   }
   function openNew(type:TxType, cust?:CustomerRecord|null, preset?:{amount?:number; network?:string}){
-    setEditing(null); setFType(type); setFNetwork(preset?.network || 'Globe'); setFProvider(type==='Top-Up'?'PalawanPay':'MariBank'); setFAmount(preset?.amount ?? (type==='Top-Up'?1000:100)); setFCustom(''); setFFee(type==='E-Load'?Math.round((preset?.amount ?? 100)*meta.eloadPct/100*100)/100: type==='Top-Up'?meta.palawanFee:autoFee(type,preset?.amount ?? 100));
+    setEditing(null); setFType(type); setFNetwork(preset?.network || 'Globe'); setFEloadKind('regular'); setFPromoName(''); setFPromoDetails(''); setFPromoValidity(''); setFProvider(type==='Top-Up'?'External Provider':'Main Wallet'); setFAmount(preset?.amount ?? (type==='Top-Up'?1000:100)); setFDiscount(0); setFCustom(''); setFFee(type==='E-Load'?Math.round((preset?.amount ?? 100)*meta.eloadPct/100*100)/100: type==='Top-Up'?meta.palawanFee:autoFee(type,preset?.amount ?? 100));
     setShowNameField(false); setNamePromptSkipped(false); setNameMsg(''); setDuplicateInfo(null); setIsUtang(false); setFPromiseDate('');
     if(cust){ setCustomerFromRecord(cust); } else { setFPhone(''); setFCustomerName(''); setFCustomerQuery(''); }
-    setFNotes(type==='Top-Up'?'Top-Up via PalawanPay':''); setFDate(todayKey()); setFTime('10:30 AM'); setFPayment('Cash'); setShowTx(true); setSaveMsg('');
+    setFNotes(type==='Top-Up'?'Top-Up via External Provider':''); setFDate(todayKey()); setFTime('10:30 AM'); setFPayment('Cash'); setShowTx(true); setSaveMsg('');
   }
   function repeatTx(r:TxRecord){
     const cust = customerByPhone.get(digitsOnly(r.value.phone||''));
-    setEditing(null); setFType(r.value.type); setFNetwork(r.value.network||'Globe'); setFProvider(r.value.provider||'MariBank'); setFAmount(r.value.amount); setFCustom(''); setFFee(r.value.fee);
+    setEditing(null); setFType(r.value.type); setFNetwork(r.value.network||'Globe'); setFEloadKind(r.value.eloadKind||'regular'); setFPromoName(r.value.promoName||''); setFPromoDetails(r.value.promoDetails||''); setFPromoValidity(r.value.promoValidity||''); setFProvider(r.value.provider||'Main Wallet'); setFAmount(r.value.amount); setFDiscount(eLoadDiscount(r.value)); setFCustom(''); setFFee(r.value.fee);
     if(cust) setCustomerFromRecord(cust); else { setFPhone(r.value.phone||''); setFCustomerName(r.value.customerName||''); setFCustomerQuery(displayNamePhone(r.value.customerName, r.value.phone)); }
     setIsUtang(false); setFPromiseDate(''); setDuplicateInfo(null); setFNotes(r.value.notes||''); setFDate(todayKey()); setFTime(r.value.time||'10:30 AM'); setFPayment(r.value.payment||'Cash'); setShowNameField(false); setShowTx(true);
   }
   function openEdit(r:TxRecord){
-    setEditing(r); const v=r.value; setFType(v.type); setFNetwork(v.network||'Globe'); setFProvider(v.provider||'MariBank'); setFAmount(v.amount); setFFee(v.fee);
+    setEditing(r); const v=r.value; setFType(v.type); setFNetwork(v.network||'Globe'); setFEloadKind(v.eloadKind||'regular'); setFPromoName(v.promoName||''); setFPromoDetails(v.promoDetails||''); setFPromoValidity(v.promoValidity||''); setFProvider(v.provider||'Main Wallet'); setFAmount(v.amount); setFDiscount(eLoadDiscount(v)); setFFee(v.fee);
     const cust = customerByPhone.get(digitsOnly(v.phone||''));
     const rawName = cust?.value.name || v.customerName || '';
     const name = isRealName(rawName, v.phone) ? rawName : '';
@@ -522,7 +579,7 @@ export default function App(){
     const v=r.value; const existing=favorites.find(f=>digitsOnly(f.value.phone)===digitsOnly(v.phone) && f.value.amount===v.amount && f.value.type===v.type && f.value.network===v.network);
     try{
       if(existing){ await api("records.delete", {collection:'favorites', id:existing.id}); setFavorites(prev=>prev.filter(f=>f.id!==existing.id)); showToast('Removed from Favorites.'); }
-      else { const fav:Favorite={phone:digitsOnly(v.phone), name:isRealName(v.customerName, v.phone)?v.customerName:customerByPhone.get(digitsOnly(v.phone))?.value.name||'', type:v.type, amount:v.amount, network:v.network, createdAt:Date.now()}; const created:any=await api("records.create", {collection:'favorites', value:fav, idempotency_key:`fav-${fav.phone}-${fav.amount}-${fav.type}-${uid()}`}); setFavorites(prev=>[{id:created.id, value:fav}, ...prev]); showToast('Added to Favorites.'); }
+      else { const fav:Favorite={phone:digitsOnly(v.phone), name:isRealName(v.customerName, v.phone)?(v.customerName||''):customerByPhone.get(digitsOnly(v.phone))?.value.name||'', type:v.type, amount:v.amount, network:v.network, createdAt:Date.now()}; const created:any=await api("records.create", {collection:'favorites', value:fav, idempotency_key:`fav-${fav.phone}-${fav.amount}-${fav.type}-${uid()}`}); setFavorites(prev=>[{id:created.id, value:fav}, ...prev]); showToast('Added to Favorites.'); }
     }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
   }
   async function toggleFavoriteForCustomer(c:CustomerRecord, type:TxType='E-Load', amount=100, network='Globe'){
@@ -536,8 +593,7 @@ export default function App(){
     setSaving(true);
     try{
       const remaining=utangRemaining(r.value);
-      const feeRemaining = r.value.amount>0 ? round2((r.value.fee||0) * remaining / r.value.amount) : (r.value.fee||0);
-      const partialTx:Tx={...r.value, amount:remaining, fee:feeRemaining};
+      const partialTx=txPortion(r.value, remaining);
       const nextWallets=applyTransaction(metaRef.current.wallets, partialTx, 1);
       const updated:Tx={...r.value, utang:true, utangStatus:'paid', paidAmount:r.value.amount};
       await api("records.replace", {collection:'transactions', id:r.id, value:updated});
@@ -554,8 +610,7 @@ export default function App(){
     setSaving(true);
     try{
       if(paid>=remaining){ await markUtangPaid(r); return; }
-      const feePaid = r.value.amount>0 ? round2((r.value.fee||0) * paid / r.value.amount) : 0;
-      const partialTx:Tx={...r.value, amount:paid, fee:feePaid};
+      const partialTx=txPortion(r.value, paid);
       const nextWallets=applyTransaction(metaRef.current.wallets, partialTx, 1);
       const updated:Tx={...r.value, utang:true, utangStatus:'unpaid', paidAmount:round2((r.value.paidAmount||0)+paid)};
       await api("records.replace", {collection:'transactions', id:r.id, value:updated});
@@ -566,7 +621,9 @@ export default function App(){
   }
   async function saveTransaction(keepOpen=false, forceDuplicate=false){
     if(!fAmount || fAmount<=0){ showErrorToast('Enter an amount greater than zero.'); return; }
+    if(fType==='E-Load' && (fDiscount<0 || fDiscount>fAmount)){ showErrorToast('Provider discount must be between ₱0 and the load amount.'); return; }
     if(fType==='E-Load' && !fNetwork){ showErrorToast('Choose a network.'); return; }
+    if(fType==='E-Load' && fEloadKind==='promo' && !fPromoName.trim()){ showErrorToast('Enter the promo/package name.'); return; }
     if(fType!=='Top-Up' && digitsOnly(fPhone).length!==11){ showErrorToast('Choose or type a customer — enter an 11-digit number (09XX XXX XXXX) or pick a name.'); return; }
     if(fType==='Top-Up' && fPhone && digitsOnly(fPhone).length!==11){ showErrorToast('Customer number must be 11 digits, or leave it blank.'); return; }
     const phone=digitsOnly(fPhone);
@@ -580,58 +637,32 @@ export default function App(){
     }
     const isUtangTx = isUtang && fType!=='Top-Up';
     const history = editing && editing.value.amount!==fAmount ? [...(editing.value.history||[]), {oldAmount:editing.value.amount, newAmount:fAmount, time:fTime, date:fDate}] : editing?.value.history;
-    const tx:Tx={ type:fType, network: fType==='Top-Up' ? 'PalawanPay' : fType==='E-Load' ? fNetwork : 'MariBank', provider: fType==='Top-Up' ? 'PalawanPay' : 'MariBank', amount:fAmount, fee:fFee, selling:fType==='E-Load'?fAmount:0, phone, customerName: phone?custName:'', payment:fType==='Cash Out'?'MariBank':'Cash', notes:fNotes, date:fDate, time:fTime, createdAt: editing?editing.value.createdAt:Date.now(), sample:editing?editing.value.sample:false, utang:isUtangTx, utangStatus: isUtangTx ? 'unpaid' : editing?.value.utangStatus, promiseDate: isUtangTx ? (fPromiseDate||undefined) : editing?.value.promiseDate, paidAmount: editing?.value.paidAmount ?? 0, history };
+    const previouslyPaid = editing?.value.utang ? Math.min(fAmount, Math.max(0,editing.value.paidAmount||0)) : 0;
+    const nextPaidAmount = isUtangTx ? previouslyPaid : (editing?.value.paidAmount ?? 0);
+    const tx:Tx={ type:fType, network: fType==='Top-Up' ? 'External Provider' : fType==='E-Load' ? fNetwork : 'Main Wallet', provider: fType==='Top-Up' ? 'External Provider' : 'Main Wallet', amount:fAmount, fee:fFee, selling:fType==='E-Load'?fAmount:0, discount:fType==='E-Load'?round2(fDiscount):0, eloadKind:fType==='E-Load'?fEloadKind:undefined, promoName:fType==='E-Load'&&fEloadKind==='promo'?fPromoName.trim():undefined, promoDetails:fType==='E-Load'&&fEloadKind==='promo'?fPromoDetails.trim():undefined, promoValidity:fType==='E-Load'&&fEloadKind==='promo'?fPromoValidity.trim():undefined, phone, customerName: phone?custName:'', payment:fType==='Cash Out'?'Main Wallet':'Cash', notes:fNotes, date:fDate, time:fTime, createdAt: editing?editing.value.createdAt:Date.now(), sample:editing?editing.value.sample:false, utang:isUtangTx, utangStatus: isUtangTx ? (nextPaidAmount>=fAmount && nextPaidAmount>0?'paid':'unpaid') : editing?.value.utangStatus, promiseDate: isUtangTx ? (fPromiseDate||undefined) : editing?.value.promiseDate, paidAmount: nextPaidAmount, history };
     setSaving(true); setSaveMsg('');
-    // Offline path: keep in local state + pending queue, sync when back
-    if(!navigator.onLine){
-      const nextWallets = isUtangTx ? {...meta.wallets} : (editing ? applyTransaction(reverseTransaction(meta.wallets, editing.value), tx, 1) : applyTransaction(meta.wallets, tx, 1));
-      const tempId=`pending-${uid()}`;
-      setRecords(prev=> editing ? prev.map(p=>p.id===editing.id?{...p, value:tx}:p) : [{id:tempId, value:tx}, ...prev]);
-      setMeta(prev=>({...prev, wallets:nextWallets}));
-      setPending(prev=>[...prev, {tx, wallets:nextWallets, key:`tx-${tx.date}-${tx.createdAt}-${uid()}`}]);
-      setSaving(false); setShowTx(false); setDuplicateInfo(null); showToast(isUtangTx?'Utang saved offline — will sync when back online.':'Saved offline — will sync when back online.');
-      return;
-    }
     try{
       if(phone) await ensureCustomer(phone, custName);
       let nextWallets={...meta.wallets};
       if(editing){
-        // reverse only if old tx affected wallets
-        const oldAffected = !(editing.value.utang && editing.value.utangStatus==='unpaid');
-        const newAffected = !isUtangTx;
-        const oldPartial = (editing.value.utang && editing.value.utangStatus!=='paid') ? (editing.value.paidAmount||0) : 0;
-        if(oldAffected) nextWallets=reverseTransaction(nextWallets, editing.value);
-        if(newAffected){
-          if(oldPartial>0 && !oldAffected){
-            const remAmt=Math.max(0, round2(fAmount-oldPartial));
-            const remFee = fAmount>0 ? round2(fFee * remAmt / fAmount) : 0;
-            nextWallets=applyTransaction(nextWallets, {...tx, amount:remAmt, fee:remFee}, 1);
-          } else nextWallets=applyTransaction(nextWallets, tx, 1);
-        }
+        nextWallets=updateWalletsForEdit(nextWallets, editing.value, tx);
         await api("records.replace", {collection:'transactions', id:editing.id, value:tx});
       }
       else {
         if(!isUtangTx) nextWallets=applyTransaction(nextWallets, tx, 1);
         await createRow(tx);
       }
-      if(nextWallets.maribank < 0) setSaveMsg('Warning: MariBank balance went below ₱0. Check the amount before saving again.');
+      if(nextWallets.maribank < 0) setSaveMsg('Warning: Main Wallet balance went below ₱0. Check the amount before saving again.');
       await saveMeta({...metaRef.current, wallets:nextWallets});
       await reloadRecords();
       if(keepOpen){
         const keepType=fType;
-        setEditing(null); setFAmount(keepType==='Top-Up'?1000:100); setFCustom(''); setFFee(autoFee(keepType, keepType==='Top-Up'?1000:100)); setFNotes(keepType==='Top-Up'?'Top-Up via PalawanPay':''); setFDate(todayKey()); setDuplicateInfo(null); setIsUtang(false); setFPromiseDate('');
+        setEditing(null); if(keepType==='E-Load'){setFEloadKind('regular'); setFPromoName(''); setFPromoDetails(''); setFPromoValidity('');} setFAmount(keepType==='Top-Up'?1000:100); setFDiscount(0); setFCustom(''); setFFee(autoFee(keepType, keepType==='Top-Up'?1000:100)); setFNotes(keepType==='Top-Up'?'Top-Up via External Provider':''); setFDate(todayKey()); setDuplicateInfo(null); setIsUtang(false); setFPromiseDate('');
         setSaveMsg('Saved — ready for the next one. Same customer kept.');
       } else {
         setShowTx(false); setDuplicateInfo(null); setSaveMsg(editing?'Transaction updated and wallets adjusted.':'Transaction saved — wallets updated automatically.');
       }
-    } catch(e){
-      // Network drop during save: keep locally + queue for sync
-      const msg=e instanceof Error?e.message:String(e);
-      if(msg.toLowerCase().includes('failed') || msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')){
-        const nextWallets = isUtangTx ? {...meta.wallets} : applyTransaction(meta.wallets, tx, 1);
-        setRecords(prev=>[{id:`pending-${uid()}`, value:tx}, ...prev]); setMeta(prev=>({...prev, wallets:nextWallets})); setPending(prev=>[...prev, {tx, wallets:nextWallets, key:`tx-${tx.date}-${tx.createdAt}-${uid()}`}]); setShowTx(false); showToast('Saved offline — will sync when back online.');
-      } else showErrorToast(msg);
-    }
+    } catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
     setSaving(false);
   }
   async function saveCustomerFromForm(){
@@ -667,7 +698,7 @@ export default function App(){
     try{
       const isUnpaidUtang = !!(r.value.utang && r.value.utangStatus==='unpaid');
       const paidPortion = r.value.paidAmount||0;
-      const next = isUnpaidUtang ? (paidPortion>0 ? reverseTransaction(meta.wallets, {...r.value, amount:paidPortion, fee: r.value.amount>0 ? round2((r.value.fee||0)*paidPortion/r.value.amount) : 0}) : {...meta.wallets}) : reverseTransaction(meta.wallets, r.value);
+      const next = isUnpaidUtang ? (paidPortion>0 ? reverseTransaction(meta.wallets, txPortion(r.value, paidPortion)) : {...meta.wallets}) : reverseTransaction(meta.wallets, r.value);
       await api("records.delete", {collection:'transactions', id:r.id});
       await saveMeta({...metaRef.current, wallets:next});
       await reloadRecords(); setDetail(null); setConfirmDelete(null);
@@ -708,8 +739,8 @@ export default function App(){
     setSaving(false);
   }
   function exportAllCSV(){
-    const rows:string[][] = [['Date','Type','Customer','Number','Amount','Fee','Profit','Notes','Status','Promise to Pay','Paid Amount','Remaining'].map(String) as any];
-    records.forEach(r=>{ const v=r.value; rows.push([v.date, v.type, v.customerName||'', v.phone, String(v.amount), String(v.fee||0), String(v.type==='Top-Up'? -(v.fee||0):(v.fee||0)), v.notes||'', v.utang ? (v.utangStatus==='paid'?'Paid (Utang)':utangPromiseLabel(v)) : 'Paid', v.promiseDate||'', String(v.paidAmount||0), String(v.utang?utangRemaining(v):0)]); });
+    const rows:string[][] = [['Date','Type','Network','Load Kind','Promo Name','Promo Inclusions','Promo Validity','Customer','Number','Amount','Fee','Profit','Notes','Status','Promise to Pay','Paid Amount','Remaining'].map(String) as any];
+    records.forEach(r=>{ const v=r.value; rows.push([v.date, v.type, v.network||'', v.eloadKind||'', v.promoName||'', v.promoDetails||'', v.promoValidity||'', v.customerName||'', v.phone, String(v.amount), String(v.fee||0), String(txProfit(v)), v.notes||'', v.utang ? (v.utangStatus==='paid'?'Paid (Utang)':utangPromiseLabel(v)) : 'Paid', v.promiseDate||'', String(v.paidAmount||0), String(v.utang?utangRemaining(v):0)]); });
     downloadCSV('eload-transactions.csv', rows as any);
     showToast('CSV exported.');
   }
@@ -717,7 +748,7 @@ export default function App(){
     const rows:any[]=[['Date','Type','Customer','Number','Amount','Fee','Notes','Status']];
     dayTxs.forEach(t=>{ rows.push([t.date, t.type, t.customerName||'', t.phone, String(t.amount), String(t.fee||0), t.notes||'', t.utang ? (t.utangStatus==='paid'?'Paid (Utang)':'Unpaid (Utang)') : 'Paid']); });
     rows.push(['', 'Total Sales', '', '', String(sum(dayTxs.filter(t=>salesTypes.includes(t.type)),t=>t.amount)), '', '', '']);
-    rows.push(['', 'Total Profit', '', '', String(sum(dayTxs.filter(t=>salesTypes.includes(t.type)),t=>t.fee||0) - sum(dayTxs.filter(t=>t.type==='Top-Up'),t=>t.fee||0)), '', '', '']);
+    rows.push(['', 'Total Profit', '', '', String(sum(dayTxs,t=>txProfit(t))), '', '', '']);
     downloadCSV(`daily-report-${selectedDay}.csv`, rows);
     showToast('Daily report exported.');
   }
@@ -873,7 +904,16 @@ export default function App(){
     return ()=> window.removeEventListener('keydown', onKeyDown);
   }, [showTx, detail, customerDetail, showCustomerForm, showWalletAction, showEOD, addNameTarget, confirmDelete, confirmDeleteCustomer, confirmClear, showHelp, shortcutsOn, tab, filtered, sortedCustomers, selectedTxId, selectedCustomerId, fType, fAmount, last7, selectedDay, meta, showServices, dashboardRecent, recentIndex, expectedCash, startingFloat]);
 
-  if(loading) return <div className="min-h-screen grid place-items-center bg-[var(--bg)]"><div className="text-center"><div className="w-14 h-14 rounded-full bg-[var(--green)] text-white grid place-items-center mx-auto animate-pulse"><Store size={28}/></div><p className="font-display font-bold text-xl mt-4">Loading your tindahan…</p></div></div>;
+  if(loading) return <main className="min-h-screen grid place-items-center bg-[var(--bg)] px-5 py-10" role="status" aria-live="polite" aria-label={`Loading E-LOAD Tracker, ${loadingProgress}%`}>
+    <section className="w-full max-w-sm rounded-[28px] border border-[var(--line)] bg-[var(--surface)] p-7 sm:p-8 text-center shadow-[0_18px_50px_rgba(23,37,28,.09)]">
+      <div className="relative mx-auto h-[76px] w-[76px]"><img src="/icons/eload-tracker-192.png?v=2" alt="" aria-hidden="true" className="h-full w-full rounded-[25px] object-cover shadow-[0_10px_24px_rgba(14,42,71,.2)]"/><span className="absolute -right-1 -top-1 h-4 w-4 rounded-full border-[3px] border-[var(--surface)] bg-[var(--green)] animate-pulse"/></div>
+      <p className="mt-5 text-[11px] font-black uppercase tracking-[.18em] text-[var(--muted)]">E-LOAD Tracker</p>
+      <h1 className="mt-1 font-display text-2xl font-extrabold">Loading your tindahan…</h1>
+      <p className="mt-2 text-sm font-semibold text-[var(--muted)]">Preparing your dashboard and saved records.</p>
+      <div className="mt-7 flex items-center justify-between text-xs font-black"><span className="text-[var(--muted)]">Getting things ready</span><span className="tabular-nums text-[var(--green)]">{loadingProgress}%</span></div>
+      <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-[var(--surface2)]" role="progressbar" aria-label="Loading progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={loadingProgress}><div className="h-full rounded-full bg-[var(--green)] transition-[width] duration-200 ease-out" style={{width:`${loadingProgress}%`}}/></div>
+    </section>
+  </main>;
 
   const tabs:{id:typeof tab; label:string; icon:any; key:string}[]=[{id:'home',label:'Dashboard',icon:Home,key:'D'},{id:'transactions',label:'Transactions',icon:ArrowLeftRight,key:'T'},{id:'customers',label:'Customers',icon:Users,key:'U'},{id:'utang',label:'Utang',icon:HandCoins,key:'G'},{id:'wallets',label:'Wallets',icon:Wallet,key:'W'},{id:'report',label:'Report',icon:BarChart3,key:'R'},{id:'settings',label:'Settings',icon:SettingsIcon,key:'S'}];
   const amountShortcuts:{amt:number; key:string}[]=[{amt:20,key:'A'},{amt:50,key:'S'},{amt:100,key:'D'},{amt:200,key:'F'},{amt:500,key:'G'}];
@@ -885,26 +925,27 @@ export default function App(){
     <div data-safe-area-inset-root style={{boxSizing:'border-box', paddingTop:'var(--safe-area-inset-top)'}} className="min-h-screen bg-[var(--bg)] text-[var(--ink)] overflow-x-clip">
       {saveMsg && <div className="toast-wrap fixed left-0 right-0 z-[70] pointer-events-none px-3 flex justify-center" style={{top:'calc(var(--safe-area-inset-top) + 12px)'}}><div data-toast role="status" aria-live="polite" onKeyDown={(e)=>{ if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); setSaveMsg(''); } }} className="pointer-events-auto flex w-full max-w-[560px] items-center gap-2.5 rounded-full bg-white px-3 py-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.16)] border border-[var(--line)]"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full" style={{background: toastKind==='error' ? '#fef2f2' : '#e6f7ee'}}>{toastKind==='error' ? <AlertTriangle size={18} className="text-[var(--red)]"/> : <CheckCircle2 size={18} className="text-[var(--green)]"/>}</span><p className="min-w-0 flex-1 text-[13px] sm:text-sm font-bold leading-snug break-words">{saveMsg}</p>{toastActionLabel && <button type="button" onClick={()=>{ const fn=toastActionRef.current; setSaveMsg(''); if(fn) fn(); }} className="shrink-0 min-h-[32px] px-3 rounded-full bg-[var(--ink)] text-white text-xs font-black flex items-center gap-1"><Undo2 size={14}/> {toastActionLabel}</button>}<button type="button" onClick={()=>setSaveMsg('')} aria-label="Dismiss notification" className="grid h-7 w-7 shrink-0 place-items-center rounded-full hover:bg-[var(--surface2)]"><X size={16}/></button></div></div>}
       <aside className="desktop-sidebar" aria-label="Desktop navigation">
-        <div className="flex items-center gap-2"><span className="w-10 h-10 rounded-xl bg-[#0e2a47] text-white grid place-items-center shrink-0"><Landmark size={22}/></span><div className="min-w-0"><p className="font-display font-extrabold leading-tight truncate" style={{fontSize:17}}>{meta.businessName}</p><p className="text-[11px] font-black tracking-[0.12em] uppercase text-[var(--muted)]">MariBank • Sari-Sari</p></div></div>
+        <div className="flex items-center gap-2"><img src="/icons/eload-tracker-192.png?v=2" alt="" aria-hidden="true" className="w-10 h-10 rounded-xl shrink-0 object-cover shadow-sm"/><div className="min-w-0"><p className="font-display font-extrabold leading-tight truncate" style={{fontSize:17}}>E-LOAD Tracker</p><p className="text-[11px] font-black tracking-[0.12em] uppercase text-[var(--muted)]">Loads • Cash • Tracking</p></div></div>
         <nav className="flex flex-col gap-1" aria-label="Sidebar navigation">
           {tabs.map(t=>{ const Icon=t.icon; const active=tab===t.id; return <button key={t.id} onClick={()=>{setTab(t.id); setSaveMsg('');}} className={`sidebar-nav-btn ${active?'active':''}`}><Icon size={18}/>{t.label}{t.id==='utang' && utangOutstanding>0 && <span className="ml-auto text-[11px] font-black bg-[#ede9fe] text-[#6d28d9] px-2 py-0.5 rounded-full">{peso(utangOutstanding)}</span>}</button> })}
         </nav>
         <div className="mt-auto flex flex-col gap-2">
-          <div className="rounded-2xl bg-[var(--surface2)] p-3"><p className="label">MariBank Wallet</p><p className="font-display font-extrabold text-xl text-[#0e2a47]">{peso(meta.wallets.maribank)}</p><p className="text-xs font-bold text-[var(--muted)]">Cash {peso(meta.wallets.cash)}</p></div>
+          <div className="relative isolate overflow-hidden rounded-2xl bg-[var(--surface2)] p-3"><svg aria-hidden="true" className="pointer-events-none absolute -right-1 bottom-0 z-0 h-[68px] w-[68px] opacity-70" viewBox="0 0 80 80" fill="none"><defs><linearGradient id="sidebarClay" x1="17" y1="20" x2="62" y2="68" gradientUnits="userSpaceOnUse"><stop stopColor="#c7f4d9"/><stop offset="1" stopColor="#42c783"/></linearGradient><filter id="sidebarClayShadow" x="4" y="5" width="72" height="72" filterUnits="userSpaceOnUse"><feDropShadow dx="0" dy="3" stdDeviation="3" floodColor="#087a48" floodOpacity=".22"/></filter></defs><g filter="url(#sidebarClayShadow)"><ellipse cx="38" cy="56" rx="25" ry="10" fill="#26a966"/><path d="M13 45v11c0 6 11 11 25 11s25-5 25-11V45" fill="url(#sidebarClay)"/><ellipse cx="38" cy="45" rx="25" ry="10" fill="#e3f8eb"/><ellipse cx="38" cy="45" rx="16" ry="6" stroke="#70cc96" strokeWidth="2"/><ellipse cx="48" cy="31" rx="19" ry="8" fill="#36b777"/><path d="M29 23v8c0 5 9 8 19 8s19-3 19-8v-8" fill="#9ce7b9"/><ellipse cx="48" cy="23" rx="19" ry="8" fill="#effcf3"/></g></svg><div className="relative z-10"><p className="label">Main Wallet</p><p className="font-display font-extrabold text-xl text-[#0e2a47]">{peso(meta.wallets.maribank)}</p><p className="text-xs font-bold text-[var(--muted)]">Cash {peso(meta.wallets.cash)}</p></div></div>
           <button onClick={openEndDay} className="big-btn bg-[var(--ink)] text-white w-full text-sm">End Day</button>
           <button onClick={()=>setShowHelp(true)} className="big-btn border border-[var(--line)] w-full text-sm" aria-label="Help">? Keyboard Shortcuts</button>
         </div>
       </aside>
       <div className="app-main-wrap"><div className="app-main max-w-[1024px] mx-auto px-3 sm:px-5 pb-28 md:pb-10">
         <header data-safe-area-sticky-top style={{top:'var(--safe-area-inset-top)'}} className="sticky z-30 -mx-3 sm:-mx-5 px-3 sm:px-5 pt-3 pb-3 bg-[var(--bg)]/95 backdrop-blur">
-          <div className="flex flex-col sm:flex-row items-start sm:justify-between gap-3">
-            <div className="min-w-0 w-full sm:w-auto">
-              <div className="flex items-center gap-2 flex-wrap"><span className="w-9 h-9 rounded-xl bg-[#0e2a47] text-white grid place-items-center shrink-0"><Landmark size={20}/></span><p className="text-[11px] font-black tracking-[0.14em] uppercase text-[var(--muted)]">MariBank • Main App • Sari-Sari</p>{!isOnline && <span className="text-[10px] font-black bg-[#fef2f2] text-[var(--red)] px-2 py-1 rounded-full flex items-center gap-1"><WifiOff size={12}/> Offline</span>}{pending.length>0 && <span className="text-[10px] font-black bg-[#fffbeb] text-[#92400e] px-2 py-1 rounded-full">{pending.length} pending sync</span>}</div>
+          <div className="mobile-header-row flex flex-col sm:flex-row items-start sm:justify-between gap-3">
+            <div className="mobile-header-brand min-w-0 w-full sm:w-auto">
+              <div className="flex items-center gap-2 flex-wrap"><img src="/icons/eload-tracker-192.png?v=2" alt="" aria-hidden="true" className="w-9 h-9 rounded-xl shrink-0 object-cover shadow-sm"/><p className="text-[11px] font-black tracking-[0.14em] uppercase text-[var(--muted)]">E-LOAD Tracker • Main App • Sari-Sari</p>{!isOnline && <span className="text-[10px] font-black bg-[#fef2f2] text-[var(--red)] px-2 py-1 rounded-full flex items-center gap-1"><WifiOff size={12}/> Offline</span>}</div>
               <h1 className="font-display font-extrabold leading-[1.05] mt-1 break-words" style={{fontSize:'clamp(20px,5vw,38px)', overflowWrap:'anywhere', wordBreak:'break-word'}}>{meta.businessName}</h1>
               <p className="text-sm text-[var(--muted)] font-semibold flex items-center gap-1 flex-wrap break-words" style={{overflowWrap:'anywhere', wordBreak:'break-word'}}><CalendarDays size={14} className="shrink-0"/>{fullDate(todayKey())}</p>
             </div>
-            <div className="shrink-0 text-left sm:text-right w-full sm:w-auto">
-              <p className="label">MariBank Wallet</p>
+            <div className="mobile-header-wallet shrink-0 text-left sm:text-right w-full sm:w-auto">
+              <svg aria-hidden="true" className="mobile-wallet-art pointer-events-none absolute -right-1 bottom-0 z-0 h-[68px] w-[68px] opacity-40" viewBox="0 0 80 80" fill="none"><defs><linearGradient id="headerClay" x1="17" y1="20" x2="62" y2="68" gradientUnits="userSpaceOnUse"><stop stopColor="#c7f4d9"/><stop offset="1" stopColor="#42c783"/></linearGradient><filter id="headerClayShadow" x="4" y="5" width="72" height="72" filterUnits="userSpaceOnUse"><feDropShadow dx="0" dy="3" stdDeviation="3" floodColor="#087a48" floodOpacity=".22"/></filter></defs><g filter="url(#headerClayShadow)"><ellipse cx="38" cy="56" rx="25" ry="10" fill="#26a966"/><path d="M13 45v11c0 6 11 11 25 11s25-5 25-11V45" fill="url(#headerClay)"/><ellipse cx="38" cy="45" rx="25" ry="10" fill="#e3f8eb"/><ellipse cx="38" cy="45" rx="16" ry="6" stroke="#70cc96" strokeWidth="2"/><ellipse cx="48" cy="31" rx="19" ry="8" fill="#36b777"/><path d="M29 23v8c0 5 9 8 19 8s19-3 19-8v-8" fill="#9ce7b9"/><ellipse cx="48" cy="23" rx="19" ry="8" fill="#effcf3"/></g></svg>
+              <p className="label">Main Wallet</p>
               <p className="font-display font-extrabold text-[22px] sm:text-[26px] text-[#0e2a47]">{peso(meta.wallets.maribank)}</p>
               <p className="text-xs font-bold text-[var(--muted)]">Cash on hand {peso(meta.wallets.cash)}{utangOutstanding>0 ? ` • Utang outstanding ${peso(utangOutstanding)}` : ''}</p>
               <div className="flex gap-1.5 justify-start sm:justify-end mt-1 flex-wrap">
@@ -920,26 +961,41 @@ export default function App(){
         </header>
 
         {apiError && <div className="card p-3 mb-3 flex gap-2 bg-[#fff7ed]"><AlertTriangle className="text-[var(--orange)] shrink-0" size={20}/><p className="text-sm font-bold">{apiError}</p></div>}
-        {maribankLow && <div className="card p-4 mb-3 flex gap-3 items-start" style={{borderColor:'#fbbf24', background:'#fffbeb'}}><AlertTriangle className="text-[var(--amber)] shrink-0 mt-0.5" size={22}/><div className="flex-1"><p className="font-display font-bold">MariBank balance low — {peso(meta.wallets.maribank)}</p><p className="text-sm font-semibold text-[var(--muted)]">Need to top-up via PalawanPay before the next rush.</p></div><button onClick={()=>openNew('Top-Up')} className="shrink-0 min-h-[44px] px-4 rounded-xl bg-[#00a651] text-white font-black text-sm">Top-Up via PalawanPay</button></div>}
+        {maribankLow && <div className="card p-4 mb-3 flex gap-3 items-start" style={{borderColor:'#fbbf24', background:'#fffbeb'}}><AlertTriangle className="text-[var(--amber)] shrink-0 mt-0.5" size={22}/><div className="flex-1"><p className="font-display font-bold">Main Wallet balance low — {peso(meta.wallets.maribank)}</p><p className="text-sm font-semibold text-[var(--muted)]">Need to top-up via External Provider before the next rush.</p></div><button onClick={()=>openNew('Top-Up')} className="shrink-0 min-h-[44px] px-4 rounded-xl bg-[#00a651] text-white font-black text-sm">Top-Up via External Provider</button></div>}
         {tab==='home' && (
           <main>
-            {dayClosed && todayReport && <section className="card p-4 mb-3" style={{borderColor:'#0e9f5f', background:'#e8f8ef'}}><div className="flex justify-between items-start gap-2"><div><p className="text-xs font-black tracking-wide uppercase text-[#007a3d]">Day Closed • {dateLabel(todayKey())}</p><p className="font-display font-bold text-lg mt-1">Closed with {peso(todayReport.actualCash)} counted • {todayReport.difference===0?'Exact':todayReport.difference<0?`Short ${peso(Math.abs(todayReport.difference))}`:`Over ${peso(todayReport.difference)}`}</p><p className="text-sm font-semibold text-[var(--muted)]">Sales {peso(todayReport.sales)} • Profit {peso(todayReport.profit)} • Tomorrow float {peso(todayReport.tomorrowFloat)}</p></div><button onClick={()=>setTab('report')} className="text-sm font-black text-[var(--green)] shrink-0">View report →</button></div></section>}
+            {dayClosed && todayReport && <section className="card p-4 mb-3" style={{borderColor:'#0e9f5f', background:'#e8f8ef'}}><div className="flex justify-between items-start gap-2"><div><p className="text-xs font-black tracking-wide uppercase text-[#007a3d]">Day Closed • {dateLabel(todayKey())}</p><p className="font-display font-bold text-lg mt-1">Closed with {peso(todayReport.value.actualCash)} counted • {todayReport.value.difference===0?'Exact':todayReport.value.difference<0?`Short ${peso(Math.abs(todayReport.value.difference))}`:`Over ${peso(todayReport.value.difference)}`}</p><p className="text-sm font-semibold text-[var(--muted)]">Sales {peso(todayReport.value.sales)} • Profit {peso(todayReport.value.profit)} • Tomorrow float {peso(todayReport.value.tomorrowFloat)}</p></div><button onClick={()=>setTab('report')} className="text-sm font-black text-[var(--green)] shrink-0">View report →</button></div></section>}
             {utangOutstanding>0 && <section className="card p-4 mb-3"><div className="flex justify-between items-start gap-2 flex-wrap"><div><p className="label">Utang Outstanding</p><p className="font-display font-extrabold text-2xl">{peso(utangOutstanding)}</p><p className="text-xs font-bold text-[var(--muted)]">{utangList.filter(r=>r.value.utangStatus!=='paid').length} unpaid • Due Today: {utangDueTodayCount} • Overdue: {utangOverdueCount}</p></div><button onClick={()=>setTab('utang')} className="min-h-[44px] px-4 rounded-xl bg-[#7c3aed] text-white font-black text-sm shrink-0">View Utang →</button></div><div className="flex flex-wrap gap-2 mt-3">{utangOverdueCount>0 && <button onClick={()=>{setUtangFilter('Overdue'); setTab('utang');}} className="min-h-[40px] px-3 rounded-full bg-[#fef2f2] border border-red-200 text-[var(--red)] text-xs font-black">{utangOverdueCount} overdue — follow up →</button>}{utangDueTodayCount>0 && <button onClick={()=>{setUtangFilter('Due Today'); setTab('utang');}} className="min-h-[40px] px-3 rounded-full bg-[#fffbeb] border border-amber-200 text-[#92400e] text-xs font-black">Due Today: {utangDueTodayCount} →</button>}{utangDueTodayCount===0 && utangOverdueCount===0 && <span className="text-xs font-bold text-[var(--muted)]">No utang due today. Promise dates are tracked in the Utang tab.</span>}</div>{utangDueTodayList.slice(0,3).map(r=>{ const cust=customerByPhone.get(digitsOnly(r.value.phone||'')); return <button key={r.id} onClick={()=>{setUtangFilter('Due Today'); setTab('utang');}} className="w-full flex justify-between gap-2 mt-2 rounded-xl bg-[var(--surface2)] px-3 py-2 text-left"><span className="font-extrabold text-sm truncate">Due Today: {displayNameOnly(cust?.value.name||r.value.customerName, r.value.phone)}</span><span className="font-black text-sm shrink-0">{peso(utangRemaining(r.value))}</span></button> })}</section>}
             <div className="dashboard-grid"><div className="dash-col dash-col-left">
             <div className="dash-summary-grid grid grid-cols-2 gap-3">
-              <div className="card p-4 border-2" style={{borderColor:'#0e2a47'}}><p className="label">MariBank Balance</p><p className="font-display font-extrabold mt-1 text-[#0e2a47]" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(meta.wallets.maribank)}</p><p className="text-xs font-bold text-[var(--muted)]">Main wallet for all sales</p>{maribankLow && <p className="text-[11px] font-black text-[#92400e] bg-[#fffbeb] px-2 py-1 rounded-full mt-2 inline-block">MariBank low - top up soon</p>}</div>
+              <div className="card p-4 border-2" style={{borderColor:'#0e2a47'}}><p className="label">Main Wallet Balance</p><p className="font-display font-extrabold mt-1 text-[#0e2a47]" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(meta.wallets.maribank)}</p><p className="text-xs font-bold text-[var(--muted)]">Main wallet for all sales</p>{maribankLow && <p className="text-[11px] font-black text-[#92400e] bg-[#fffbeb] px-2 py-1 rounded-full mt-2 inline-block">Main Wallet low - top up soon</p>}</div>
               <div className="card p-4"><p className="label">Cash on Hand</p><p className="font-display font-extrabold mt-1" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(meta.wallets.cash)}</p><p className="text-xs font-bold text-[var(--muted)]">Ready for cash out • Float {peso(startingFloat)}</p></div>
-              <div className="card p-4"><p className="label">Today&apos;s Profit</p><p className="font-display font-extrabold mt-1 text-[var(--green)]" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(todayProfit)}</p><p className="text-xs font-bold text-[var(--muted)]">After PalawanPay top-up fees</p></div>
+              <div className="card p-4"><p className="label">Today&apos;s Profit</p><p className="font-display font-extrabold mt-1 text-[var(--green)]" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(todayProfit)}</p><p className="text-xs font-bold text-[var(--muted)]">After External Provider top-up fees</p></div>
               <div className="card p-4"><p className="label">Today&apos;s Sales</p><p className="font-display font-extrabold mt-1" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(todaySales)}</p><p className="text-xs font-bold text-[var(--muted)]">{todayTxs.filter(t=>salesTypes.includes(t.type)).length} transactions today</p></div>
             </div>
-            <div className="card p-4 mt-3 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between" style={{background:'#e8f8ef'}}><div><p className="font-display font-bold text-lg text-[#007a3d]">PalawanPay top-ups this week: {peso(weekTopUp)}</p><p className="text-sm font-semibold text-[var(--muted)]">PalawanPay is only a top-up source — not a customer wallet.</p></div><button onClick={()=>openNew('Top-Up')} className="big-btn bg-[#00a651] text-white px-5"><RefreshCw size={18}/> Top-Up via PalawanPay</button></div>
+            <div className="card relative isolate overflow-hidden p-4 mt-3 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between" style={{background:'#e8f8ef'}}>
+              <svg aria-hidden="true" className="eload-topup-art pointer-events-none absolute -right-2 -top-5 z-0 h-40 w-40 opacity-40 sm:right-4 sm:top-1 sm:h-36 sm:w-36" viewBox="0 0 180 180" fill="none">
+                <defs>
+                  <linearGradient id="clayPhone" x1="68" y1="20" x2="132" y2="150" gradientUnits="userSpaceOnUse"><stop stopColor="#fff"/><stop offset="1" stopColor="#c4f3d9"/></linearGradient>
+                  <linearGradient id="clayCoin" x1="36" y1="113" x2="112" y2="166" gradientUnits="userSpaceOnUse"><stop stopColor="#a8edc5"/><stop offset="1" stopColor="#4bc889"/></linearGradient>
+                  <filter id="clayShadow" x="8" y="8" width="164" height="172" colorInterpolationFilters="sRGB" filterUnits="userSpaceOnUse"><feDropShadow dx="0" dy="7" stdDeviation="6" floodColor="#087a48" floodOpacity=".2"/></filter>
+                </defs>
+                <g filter="url(#clayShadow)">
+                  <ellipse cx="71" cy="145" rx="39" ry="15" fill="#35b977"/><path d="M32 132v13c0 8 17 15 39 15s39-7 39-15v-13" fill="url(#clayCoin)"/><ellipse cx="71" cy="132" rx="39" ry="15" fill="#c7f4d9"/><ellipse cx="71" cy="132" rx="26" ry="9" stroke="#67ce96" strokeWidth="3"/>
+                  <ellipse cx="113" cy="151" rx="28" ry="11" fill="#2bad6a"/><path d="M85 140v11c0 6 13 11 28 11s28-5 28-11v-11" fill="#75d9a1"/><ellipse cx="113" cy="140" rx="28" ry="11" fill="#c4f3d9"/>
+                  <g transform="rotate(10 101 74)"><rect x="67" y="22" width="62" height="105" rx="18" fill="url(#clayPhone)" stroke="#fff" strokeWidth="4"/><rect x="74" y="37" width="48" height="70" rx="11" fill="#e3f8eb"/><rect x="88" y="29" width="20" height="3" rx="1.5" fill="#8bcda7"/><circle cx="98" cy="116" r="4" fill="#70bd8d"/><circle cx="98" cy="70" r="18" fill="#05a85b"/><path d="m90 70 6 6 11-13" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/></g>
+                </g>
+              </svg>
+              <div className="relative z-10 min-w-0"><p className="font-display font-bold text-lg text-[#007a3d]">External Provider top-ups this week: {peso(weekTopUp)}</p><p className="text-sm font-semibold text-[var(--muted)]">External Provider is only a top-up source — not a customer wallet.</p></div>
+              <button onClick={()=>openNew('Top-Up')} className="big-btn relative z-10 bg-[#00a651] text-white px-5"><RefreshCw size={18}/> Top-Up via External Provider</button>
+            </div>
             <section className="card p-4 sm:p-5 mt-3">
               <h2 className="font-display font-bold text-xl">Wallets + Float</h2>
               <p className="text-sm font-semibold text-[var(--muted)]">Starting float today: <b className="text-[var(--ink)]">{peso(startingFloat)}</b> • Expected cash {peso(expectedCash)}</p>
-              {maribankLow && <p className="text-[11px] font-black text-[#92400e] bg-[#fffbeb] border border-[#fbbf24] px-2.5 py-1.5 rounded-full mt-2 inline-block">MariBank low - top up soon</p>}
+              {maribankLow && <p className="text-[11px] font-black text-[#92400e] bg-[#fffbeb] border border-[#fbbf24] px-2.5 py-1.5 rounded-full mt-2 inline-block">Main Wallet low - top up soon</p>}
               <div className="space-y-2.5 mt-3">{walletDefs.map(w=><button key={w.key} onClick={()=>setTab('wallets')} className="w-full flex justify-between items-center p-3 rounded-2xl bg-[var(--surface2)] text-left"><span><span className="block font-extrabold text-sm">{w.label}</span><span className="text-xs font-bold text-[var(--muted)]">{todayWalletMoves[w.key]?`${todayWalletMoves[w.key]>0?'+':''}${peso(todayWalletMoves[w.key])} today`:'No movement today'}</span></span><span className="font-display font-extrabold" style={{color:w.color}}>{peso(meta.wallets[w.key])}</span></button>)}</div>
-              <button onClick={()=>openNew('Top-Up')} className="w-full flex justify-between items-center p-3 rounded-2xl text-left mt-2.5" style={{background:'#e8f8ef'}}><span><span className="block font-extrabold text-sm text-[#007a3d]">PalawanPay — Top-Up Source Only</span><span className="text-xs font-bold text-[var(--muted)]">Not a customer wallet • {peso(weekTopUp)} topped up this week</span></span><span className="font-display font-extrabold text-[#00a651]">Top-Up →</span></button>
-              <p className="text-xs font-bold text-[var(--muted)] mt-3">Total across MariBank + Cash: <b className="text-[var(--ink)]">{peso(totalWallet)}</b></p>
+              <button onClick={()=>openNew('Top-Up')} className="w-full flex justify-between items-center p-3 rounded-2xl text-left mt-2.5" style={{background:'#e8f8ef'}}><span><span className="block font-extrabold text-sm text-[#007a3d]">External Provider — Top-Up Source Only</span><span className="text-xs font-bold text-[var(--muted)]">Not a customer wallet • {peso(weekTopUp)} topped up this week</span></span><span className="font-display font-extrabold text-[#00a651]">Top-Up →</span></button>
+              <p className="text-xs font-bold text-[var(--muted)] mt-3">Total across Main Wallet + Cash: <b className="text-[var(--ink)]">{peso(totalWallet)}</b></p>
             </section>
             </div><div className="dash-col dash-col-middle">
 
@@ -954,18 +1010,18 @@ export default function App(){
             </section>
 
             <section className="card p-4 sm:p-5 mt-3">
-              <h2 className="font-display font-bold text-xl">Today&apos;s breakdown — all via MariBank</h2>
+              <h2 className="font-display font-bold text-xl">Today&apos;s breakdown — all via Main Wallet</h2>
               <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
-                <div className="rounded-2xl bg-[var(--surface2)] p-4"><div className="flex items-center gap-2 text-[var(--blue)] font-black text-sm"><Zap size={18}/> E-Load Sales</div><p className="font-display font-extrabold text-2xl mt-2">{eloadToday.length} sales • {peso(sum(eloadToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--green)]">Profit {peso(sum(eloadToday,t=>t.fee))}</p></div>
+                <div className="rounded-2xl bg-[var(--surface2)] p-4"><div className="flex items-center gap-2 text-[var(--blue)] font-black text-sm"><Zap size={18}/> E-Load Sales</div><p className="font-display font-extrabold text-2xl mt-2">{eloadToday.length} sales • {peso(sum(eloadToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--green)]">Profit {peso(sum(eloadToday,t=>txProfit(t)))}</p></div>
                 <div className="rounded-2xl bg-[var(--surface2)] p-4"><div className="flex items-center gap-2 text-[#2563eb] font-black text-sm"><ArrowDownToLine size={18}/> Cash In</div><p className="font-display font-extrabold text-2xl mt-2">{cashInToday.length} • {peso(sum(cashInToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--green)]">Fees {peso(sum(cashInToday,t=>t.fee))}</p></div>
                 <div className="rounded-2xl bg-[var(--surface2)] p-4"><div className="flex items-center gap-2 text-[var(--purple)] font-black text-sm"><ArrowUpFromLine size={18}/> Cash Out</div><p className="font-display font-extrabold text-2xl mt-2">{cashOutToday.length} • {peso(sum(cashOutToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--green)]">Fees {peso(sum(cashOutToday,t=>t.fee))}</p></div>
-                <div className="rounded-2xl p-4" style={{background:'#e8f8ef'}}><div className="flex items-center gap-2 text-[#007a3d] font-black text-sm"><RefreshCw size={18}/> PalawanPay Top-Ups</div><p className="font-display font-extrabold text-2xl mt-2">{topUpToday.length} • {peso(sum(topUpToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--muted)]">Fees paid {peso(sum(topUpToday,t=>t.fee))}</p></div>
+                <div className="rounded-2xl p-4" style={{background:'#e8f8ef'}}><div className="flex items-center gap-2 text-[#007a3d] font-black text-sm"><RefreshCw size={18}/> External Provider Top-Ups</div><p className="font-display font-extrabold text-2xl mt-2">{topUpToday.length} • {peso(sum(topUpToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--muted)]">Fees paid {peso(sum(topUpToday,t=>t.fee))}</p></div>
               </div>
               <div className="quick-actions-grid grid grid-cols-2 gap-2 mt-3">
                 <button onClick={()=>openNew('E-Load')} aria-label="E-Load Sale" className="big-btn bg-[var(--green)] text-white"><Smartphone size={20}/> E-Load Sale</button>
                 <button onClick={()=>openNew('Cash In')} aria-label="Cash In" className="big-btn bg-[#2563eb] text-white"><ArrowDownToLine size={20}/> Cash In</button>
                 <button onClick={()=>openNew('Cash Out')} aria-label="Cash Out" className="big-btn bg-[var(--purple)] text-white"><ArrowUpFromLine size={20}/> Cash Out</button>
-                <button onClick={()=>openNew('Top-Up')} aria-label="Top-Up via PalawanPay" className="big-btn bg-[#00a651] text-white ring-2 ring-[#00a651] ring-offset-2 ring-offset-[var(--surface)]"><RefreshCw size={20}/> Top-Up via PalawanPay</button>
+                <button onClick={()=>openNew('Top-Up')} aria-label="Top-Up via External Provider" className="big-btn bg-[#00a651] text-white ring-2 ring-[#00a651] ring-offset-2 ring-offset-[var(--surface)]"><RefreshCw size={20}/> Top-Up via External Provider</button>
               </div>
             </section>
 
@@ -980,7 +1036,7 @@ export default function App(){
                     <span className="text-[11px] font-black">{d.label}</span><span className="text-[10px] font-bold text-[var(--muted)]">{d.count} tx</span>
                   </button> })}
                 </div>
-                <div className="mt-4 rounded-2xl bg-[var(--surface2)] p-3 flex flex-wrap justify-between gap-2"><div><p className="label">Selected: {dateLabel(selectedDay)}</p><p className="font-display font-bold text-lg">{peso(sum(dayTxs.filter(t=>salesTypes.includes(t.type)),t=>t.amount))} sales • {peso(sum(dayTxs.filter(t=>salesTypes.includes(t.type)),t=>t.fee) - sum(dayTxs.filter(t=>t.type==='Top-Up'),t=>t.fee))} profit • {dayTxs.filter(t=>salesTypes.includes(t.type)).length} transactions</p></div><button onClick={()=>{setTab('transactions'); setFilter('All');}} className="font-black text-[var(--green)] text-sm flex items-center gap-1">View day <ChevronRight size={16}/></button></div>
+                <div className="mt-4 rounded-2xl bg-[var(--surface2)] p-3 flex flex-wrap justify-between gap-2"><div><p className="label">Selected: {dateLabel(selectedDay)}</p><p className="font-display font-bold text-lg">{peso(sum(dayTxs.filter(t=>salesTypes.includes(t.type)),t=>t.amount))} sales • {peso(sum(dayTxs,t=>txProfit(t)))} profit • {dayTxs.filter(t=>salesTypes.includes(t.type)).length} transactions</p></div><button onClick={()=>{setTab('transactions'); setFilter('All');}} className="font-black text-[var(--green)] text-sm flex items-center gap-1">View day <ChevronRight size={16}/></button></div>
               </section>
             </div>
 
@@ -997,12 +1053,12 @@ export default function App(){
         {tab==='transactions' && (
           <main>
             <div className="card p-4">
-              <div className="relative"><Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={18}/><input ref={txSearchRef} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search customer name, MariBank, PalawanPay, phone, note, amount…" className="field pl-10" aria-label="Search transactions"/></div>
-              <div ref={filterRef} className="flex gap-2 mt-3 overflow-x-auto no-scrollbar">{(['All','E-Load','Cash In','Cash Out','Top-Up'] as const).map(f=><button key={f} onClick={()=>setFilter(f)} onKeyDown={(e)=>{ if(e.key==='ArrowRight'||e.key==='ArrowLeft'){ e.preventDefault(); const opts:(typeof filter)[]=['All','E-Load','Cash In','Cash Out','Top-Up']; const i=opts.indexOf(filter); const n=e.key==='ArrowRight'?(i+1)%opts.length:(i-1+opts.length)%opts.length; setFilter(opts[n]); } }} className={`chip shrink-0 ${filter===f?'active':''}`}>{f==='Top-Up'?'Top-Up via PalawanPay':f}</button>)}</div>
+              <div className="relative"><Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={18}/><input ref={txSearchRef} value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search customer name, Main Wallet, External Provider, phone, note, amount…" className="field pl-10" aria-label="Search transactions"/></div>
+              <div ref={filterRef} className="flex gap-2 mt-3 overflow-x-auto no-scrollbar">{(['All','E-Load','Cash In','Cash Out','Top-Up'] as const).map(f=><button key={f} onClick={()=>setFilter(f)} onKeyDown={(e)=>{ if(e.key==='ArrowRight'||e.key==='ArrowLeft'){ e.preventDefault(); const opts:(typeof filter)[]=['All','E-Load','Cash In','Cash Out','Top-Up']; const i=opts.indexOf(filter); const n=e.key==='ArrowRight'?(i+1)%opts.length:(i-1+opts.length)%opts.length; setFilter(opts[n]); } }} className={`chip shrink-0 ${filter===f?'active':''}`}>{f==='Top-Up'?'Top-Up via External Provider':f}</button>)}</div>
             </div>
             {undoInfo && <div className="card p-3 mt-3 flex justify-between items-center gap-2 bg-[var(--surface)]"><p className="text-sm font-bold">Transaction deleted — wallets reversed.</p><button onClick={undoDelete} className="min-h-[40px] px-4 rounded-xl bg-[var(--ink)] text-white font-black text-sm flex items-center gap-1.5"><Undo2 size={16}/> Undo</button></div>}
             <div className="mt-3">
-              {filtered.length===0 ? <div className="card p-10 text-center"><p className="font-display font-bold text-xl">No transactions found</p><p className="text-sm font-semibold text-[var(--muted)] mt-1">Try a different search or filter, or add a new transaction.</p><button onClick={()=>openNew('E-Load')} className="big-btn bg-[var(--green)] text-white px-5 mt-4 mx-auto">+ Add Transaction</button></div> : <div className="tx-table-wrap"><table className="tx-table"><thead><tr><th>Date</th><th>Customer</th><th>Type</th><th style={{textAlign:'right'}}>Amount</th><th style={{textAlign:'right'}}>Fee</th><th style={{textAlign:'right'}}>Profit</th><th>Status</th><th style={{textAlign:'right'}}>Actions</th></tr></thead><tbody>{filtered.map(r=>{ const v=r.value; const cust=customerByPhone.get(digitsOnly(v.phone||'')); const hasName=cust ? isRealName(cust.value.name, v.phone) : isRealName(v.customerName, v.phone); const isFav=favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(v.phone) && f.value.amount===v.amount && f.value.type===v.type); const typeBg=v.type==='E-Load'?'#e0f2fe':v.type==='Cash In'?'#dbeafe':v.type==='Cash Out'?'#ede9fe':'#e8f8ef'; const typeColor=v.type==='E-Load'?'#0369a1':v.type==='Cash In'?'#1d4ed8':v.type==='Cash Out'?'#6d28d9':'#007a3d'; return <tr key={r.id} onClick={()=>{setSelectedTxId(r.id); setDetail(r);}} className={r.id===selectedTxId?'selected':''} style={r.id===selectedTxId?{background:'var(--green-soft)', boxShadow:'inset 0 0 0 2px var(--green)'}:undefined}><td data-label="date"><span className="font-extrabold">{v.date===todayKey()?'Today':dateLabel(v.date)}</span><span className="block text-xs text-[var(--muted)] font-bold">{v.time}</span></td><td data-label="customer"><span className="block truncate">{v.type==='Top-Up' ? (hasName?displayNamePhone(cust?.value.name||v.customerName, v.phone): v.phone?formatPhone(v.phone):'PalawanPay → MariBank') : hasName?displayNamePhone(cust?.value.name||v.customerName, v.phone): v.phone?formatPhone(v.phone):'No customer'}</span><span className="block text-xs text-[var(--muted)] truncate">{v.notes||v.payment}</span></td><td data-label="type"><span className="tx-type-pill" style={{background:typeBg,color:typeColor}}>{v.type==='Top-Up'?'Top-Up • PalawanPay':v.type==='E-Load'?`E-Load • ${v.network}`:`${v.type} • MariBank`}</span></td><td data-label="amount" style={{textAlign:'right'}}><span className="font-display font-extrabold">{peso(v.amount)}</span></td><td data-label="fee" style={{textAlign:'right'}}>{peso(v.fee||0)}</td><td data-label="profit" style={{textAlign:'right'}}><span className="text-[var(--green)] font-black">{v.type==='Top-Up'?`−${peso(v.fee||0)}`:`+${peso(v.fee||0)}`}</span></td><td data-label="status">{v.utang ? <span className="tx-status-pill" style={{background:v.utangStatus==='paid'?'var(--green-soft)':'#fef3c7', color:v.utangStatus==='paid'?'var(--green)':'#92400e'}}>{v.utangStatus==='paid'?'Utang Paid':`${utangPromiseLabel(v)} • ${peso(utangRemaining(v))}`}</span> : <span className="tx-status-pill" style={{background:'var(--green-soft)', color:'var(--green)'}}>Paid</span>}</td><td data-label="actions"><span className="tx-row-actions"><button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); toggleFavoriteForTx(r);}} aria-label={isFav?'Remove from favorites':'Add to favorites'}><Star size={13} fill={isFav?'currentColor':'none'}/> {isFav?'Favorited':'Favorite'}</button><button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); repeatTx(r);}}>Repeat</button>{!hasName && v.phone && <button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); openAddName(v.phone);}}>+ Add Name</button>}</span></td></tr> })}</tbody></table></div>}
+              {filtered.length===0 ? <div className="card p-10 text-center"><p className="font-display font-bold text-xl">No transactions found</p><p className="text-sm font-semibold text-[var(--muted)] mt-1">Try a different search or filter, or add a new transaction.</p><button onClick={()=>openNew('E-Load')} className="big-btn bg-[var(--green)] text-white px-5 mt-4 mx-auto">+ Add Transaction</button></div> : <div className="tx-table-wrap"><table className="tx-table"><thead><tr><th>Date</th><th>Customer</th><th>Type</th><th style={{textAlign:'right'}}>Amount</th><th style={{textAlign:'right'}}>Fee</th><th style={{textAlign:'right'}}>Profit</th><th>Status</th><th style={{textAlign:'right'}}>Actions</th></tr></thead><tbody>{filtered.map(r=>{ const v=r.value; const cust=customerByPhone.get(digitsOnly(v.phone||'')); const hasName=cust ? isRealName(cust.value.name, v.phone) : isRealName(v.customerName, v.phone); const isFav=favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(v.phone) && f.value.amount===v.amount && f.value.type===v.type); const typeBg=v.type==='E-Load'?'#e0f2fe':v.type==='Cash In'?'#dbeafe':v.type==='Cash Out'?'#ede9fe':'#e8f8ef'; const typeColor=v.type==='E-Load'?'#0369a1':v.type==='Cash In'?'#1d4ed8':v.type==='Cash Out'?'#6d28d9':'#007a3d'; return <tr key={r.id} onClick={()=>{setSelectedTxId(r.id); setDetail(r);}} className={r.id===selectedTxId?'selected':''} style={r.id===selectedTxId?{background:'var(--green-soft)', boxShadow:'inset 0 0 0 2px var(--green)'}:undefined}><td data-label="date"><span className="font-extrabold">{v.date===todayKey()?'Today':dateLabel(v.date)}</span><span className="block text-xs text-[var(--muted)] font-bold">{v.time}</span></td><td data-label="customer"><span className="block truncate">{v.type==='Top-Up' ? (hasName?displayNamePhone(cust?.value.name||v.customerName, v.phone): v.phone?formatPhone(v.phone):'External Provider → Main Wallet') : hasName?displayNamePhone(cust?.value.name||v.customerName, v.phone): v.phone?formatPhone(v.phone):'No customer'}</span><span className="block text-xs text-[var(--muted)] truncate">{v.notes||v.payment}</span></td><td data-label="type"><span className="tx-type-pill" style={{background:typeBg,color:typeColor}}>{v.type==='Top-Up'?'Top-Up • External Provider':v.type==='E-Load'?`E-Load • ${v.network}`:`${v.type} • Main Wallet`}</span></td><td data-label="amount" style={{textAlign:'right'}}><span className="font-display font-extrabold">{peso(v.amount)}</span></td><td data-label="fee" style={{textAlign:'right'}}>{peso(v.fee||0)}</td><td data-label="profit" style={{textAlign:'right'}}><span className="text-[var(--green)] font-black">{txProfit(v)<0?'−'+peso(Math.abs(txProfit(v))):'+'+peso(txProfit(v))}</span></td><td data-label="status">{v.utang ? <span className="tx-status-pill" style={{background:v.utangStatus==='paid'?'var(--green-soft)':'#fef3c7', color:v.utangStatus==='paid'?'var(--green)':'#92400e'}}>{v.utangStatus==='paid'?'Utang Paid':`${utangPromiseLabel(v)} • ${peso(utangRemaining(v))}`}</span> : <span className="tx-status-pill" style={{background:'var(--green-soft)', color:'var(--green)'}}>Paid</span>}</td><td data-label="actions"><span className="tx-row-actions"><button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); toggleFavoriteForTx(r);}} aria-label={isFav?'Remove from favorites':'Add to favorites'}><Star size={13} fill={isFav?'currentColor':'none'}/> {isFav?'Favorited':'Favorite'}</button><button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); repeatTx(r);}}>Repeat</button>{!hasName && v.phone && <button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); openAddName(v.phone);}}>+ Add Name</button>}</span></td></tr> })}</tbody></table></div>}
             </div>
             <div className="card p-4 mt-3 flex flex-wrap justify-between gap-2"><span className="font-bold">Showing {filtered.length} transactions</span><span className="font-black">Daily total (today): <span className="text-[var(--green)]">{peso(todaySales)} sales • {peso(todayProfit)} profit</span></span></div>
           </main>
@@ -1051,9 +1107,9 @@ export default function App(){
         {tab==='wallets' && (
           <main>
             <div className="grid sm:grid-cols-2 gap-3">
-              {walletDefs.map(w=> <article key={w.key} className="card p-4 sm:p-5"><div className="flex justify-between items-start"><div><p className="font-display font-bold text-lg">{w.label}</p><p className="text-xs font-bold text-[var(--muted)]">{w.hint}</p></div><span className="w-10 h-10 rounded-xl grid place-items-center text-white shrink-0" style={{background:w.color}}><Wallet size={20}/></span></div><p className="font-display font-extrabold mt-4" style={{fontSize:'clamp(28px,4vw,36px)'}}>{peso(meta.wallets[w.key])}</p><p className="text-sm font-bold">Today: <span className={todayWalletMoves[w.key]>=0?'text-[var(--green)]':'text-[var(--red)]'}>{todayWalletMoves[w.key]?`${todayWalletMoves[w.key]>0?'+':''}${peso(todayWalletMoves[w.key])}`:'₱0.00'}</span></p>{w.key==='maribank' && maribankLow && <p className="text-xs font-black text-[#b45309] bg-[#fffbeb] rounded-lg px-2 py-1.5 mt-2">⚠ MariBank low - top up soon (threshold {peso(meta.lowThreshold)})</p>}<div className="grid grid-cols-2 gap-2 mt-4"><button onClick={()=>{setShowWalletAction(w.key); setWalletMode('add'); setWalletAmt(500);}} className="min-h-[44px] rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-xs">+ Add Funds</button><button onClick={()=>{setShowWalletAction(w.key); setWalletMode('deduct'); setWalletAmt(500);}} className="min-h-[44px] rounded-xl bg-[var(--surface2)] border border-[var(--line)] font-black text-xs">− Deduct</button></div>{w.key==='maribank' && <button onClick={()=>openNew('Top-Up')} className="big-btn bg-[#00a651] text-white w-full mt-2 text-sm"><RefreshCw size={18}/> Top-Up via PalawanPay</button>}</article>)}
+              {walletDefs.map(w=> <article key={w.key} className="card p-4 sm:p-5"><div className="flex justify-between items-start"><div><p className="font-display font-bold text-lg">{w.label}</p><p className="text-xs font-bold text-[var(--muted)]">{w.hint}</p></div><span className="w-10 h-10 rounded-xl grid place-items-center text-white shrink-0" style={{background:w.color}}><Wallet size={20}/></span></div><p className="font-display font-extrabold mt-4" style={{fontSize:'clamp(28px,4vw,36px)'}}>{peso(meta.wallets[w.key])}</p><p className="text-sm font-bold">Today: <span className={todayWalletMoves[w.key]>=0?'text-[var(--green)]':'text-[var(--red)]'}>{todayWalletMoves[w.key]?`${todayWalletMoves[w.key]>0?'+':''}${peso(todayWalletMoves[w.key])}`:'₱0.00'}</span></p>{w.key==='maribank' && maribankLow && <p className="text-xs font-black text-[#b45309] bg-[#fffbeb] rounded-lg px-2 py-1.5 mt-2">⚠ Main Wallet low - top up soon (threshold {peso(meta.lowThreshold)})</p>}<div className="grid grid-cols-2 gap-2 mt-4"><button onClick={()=>{setShowWalletAction(w.key); setWalletMode('add'); setWalletAmt(500);}} className="min-h-[44px] rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-xs">+ Add Funds</button><button onClick={()=>{setShowWalletAction(w.key); setWalletMode('deduct'); setWalletAmt(500);}} className="min-h-[44px] rounded-xl bg-[var(--surface2)] border border-[var(--line)] font-black text-xs">− Deduct</button></div>{w.key==='maribank' && <button onClick={()=>openNew('Top-Up')} className="big-btn bg-[#00a651] text-white w-full mt-2 text-sm"><RefreshCw size={18}/> Top-Up via External Provider</button>}</article>)}
             </div>
-            <div className="card p-5 mt-3 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between" style={{borderColor:'#00a651', background:'#e8f8ef'}}><div><h2 className="font-display font-bold text-xl text-[#007a3d]">PalawanPay — Top-Up History</h2><p className="text-sm font-semibold text-[var(--muted)]">PalawanPay is NOT a customer wallet. Use it only to move Cash on Hand → MariBank Wallet. Top-ups this week: <b>{peso(weekTopUp)}</b></p></div><button onClick={()=>openNew('Top-Up')} className="big-btn bg-[#00a651] text-white px-5"><RefreshCw size={20}/> Top-Up via PalawanPay</button></div>
+            <div className="card p-5 mt-3 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between" style={{borderColor:'#00a651', background:'#e8f8ef'}}><div><h2 className="font-display font-bold text-xl text-[#007a3d]">External Provider — Top-Up History</h2><p className="text-sm font-semibold text-[var(--muted)]">External Provider is NOT a customer wallet. Use it only to move Cash on Hand → Main Wallet. Top-ups this week: <b>{peso(weekTopUp)}</b></p></div><button onClick={()=>openNew('Top-Up')} className="big-btn bg-[#00a651] text-white px-5"><RefreshCw size={20}/> Top-Up via External Provider</button></div>
           </main>
         )}
 
@@ -1065,7 +1121,7 @@ export default function App(){
               <div className="card p-4"><p className="label">Transactions</p><p className="font-display font-extrabold text-3xl">{reportTxs.filter(t=>salesTypes.includes(t.type)).length}</p></div>
               <div className="card p-4"><p className="label">Gross Sales</p><p className="font-display font-extrabold text-3xl">{peso(reportSales+reportCashIn+reportCashOut)}</p></div>
               <div className="card p-4"><p className="label">Fees / Profit</p><p className="font-display font-extrabold text-3xl text-[var(--green)]">{peso(reportProfit)}</p></div>
-              <div className="card p-4" style={{background:'#e8f8ef'}}><p className="label">PalawanPay Top-Ups</p><p className="font-display font-extrabold text-3xl text-[#007a3d]">{peso(reportTopUp)}</p><p className="text-xs font-bold text-[var(--muted)]">Fees paid {peso(reportTopUpFees)}</p></div>
+              <div className="card p-4" style={{background:'#e8f8ef'}}><p className="label">External Provider Top-Ups</p><p className="font-display font-extrabold text-3xl text-[#007a3d]">{peso(reportTopUp)}</p><p className="text-xs font-bold text-[var(--muted)]">Fees paid {peso(reportTopUpFees)}</p></div>
             </div>
             <div className="report-grid mt-3">
             <section className="card p-4 sm:p-5 mt-3">
@@ -1074,9 +1130,9 @@ export default function App(){
               <p className="text-sm font-black mt-3">Total profit {peso(sum(profitPerDay.map(d=>({} as Tx)),()=>0) || reportProfit)} • Total sales {peso(reportSales+reportCashIn+reportCashOut)} • Count {reportTxs.filter(t=>salesTypes.includes(t.type)).length}</p>
             </section>
             <section className="card p-4 sm:p-5 mt-3">
-              <h2 className="font-display font-bold text-xl">Breakdown — all via MariBank</h2>
-              {[['E-Load',reportSales,'var(--blue)'],['Cash In',reportCashIn,'#2563eb'],['Cash Out',reportCashOut,'var(--purple)']].map(([label,val,color]:any)=>{ const total=Math.max(1,reportSales+reportCashIn+reportCashOut); return <div key={label} className="mt-4"><div className="flex justify-between font-extrabold text-sm"><span>{label} • MariBank</span><span>{peso(val)} • {Math.round(val/total*100)}%</span></div><div className="h-3 rounded-full bg-[var(--surface2)] overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{width:`${val/total*100}%`, background:color}}/></div></div> })}
-              <div className="mt-4"><div className="flex justify-between font-extrabold text-sm"><span>PalawanPay Top-Ups (not sales)</span><span>{peso(reportTopUp)} • fees {peso(reportTopUpFees)}</span></div><div className="h-3 rounded-full bg-[var(--surface2)] overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{width:`${Math.min(100, reportTopUp/Math.max(1,reportSales+reportCashIn+reportCashOut+reportTopUp)*100)}%`, background:'#00a651'}}/></div></div>
+              <h2 className="font-display font-bold text-xl">Breakdown — all via Main Wallet</h2>
+              {[['E-Load',reportSales,'var(--blue)'],['Cash In',reportCashIn,'#2563eb'],['Cash Out',reportCashOut,'var(--purple)']].map(([label,val,color]:any)=>{ const total=Math.max(1,reportSales+reportCashIn+reportCashOut); return <div key={label} className="mt-4"><div className="flex justify-between font-extrabold text-sm"><span>{label} • Main Wallet</span><span>{peso(val)} • {Math.round(val/total*100)}%</span></div><div className="h-3 rounded-full bg-[var(--surface2)] overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{width:`${val/total*100}%`, background:color}}/></div></div> })}
+              <div className="mt-4"><div className="flex justify-between font-extrabold text-sm"><span>External Provider Top-Ups (not sales)</span><span>{peso(reportTopUp)} • fees {peso(reportTopUpFees)}</span></div><div className="h-3 rounded-full bg-[var(--surface2)] overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{width:`${Math.min(100, reportTopUp/Math.max(1,reportSales+reportCashIn+reportCashOut+reportTopUp)*100)}%`, background:'#00a651'}}/></div></div>
               <h3 className="font-display font-bold text-lg mt-6">Best-selling load denominations</h3>
               <div className="mt-2 divide-y divide-[var(--line)]">{denom.length===0 && <p className="text-sm font-bold text-[var(--muted)] py-2">No e-load sales in this period yet.</p>}{denom.map(([amt,count],i)=><div key={amt} className="py-2.5 flex justify-between font-bold"><span><b className="mr-2">#{i+1}</b> {peso(amt)} load</span><span>{count} sale{count>1?'s':''}</span></div>)}</div>
               <h3 className="font-display font-bold text-lg mt-6 flex items-center gap-2"><Users size={19}/> Breakdown by customer</h3>
@@ -1095,17 +1151,17 @@ export default function App(){
           <main className="space-y-3">
             <section className="card p-4 sm:p-5">
               <h2 className="font-display font-bold text-xl flex items-center gap-2"><SettingsIcon size={20}/> Business settings</h2>
-              <p className="text-sm font-semibold text-[var(--muted)] mt-1">Main app: MariBank. PalawanPay is only a top-up source.</p>
+              <p className="text-sm font-semibold text-[var(--muted)] mt-1">Main app: Main Wallet. External Provider is only a top-up source.</p>
               <label className="label block mt-4">Business name</label><input value={meta.businessName} onChange={e=>setMeta({...meta,businessName:e.target.value})} className="field mt-1"/>
               <div className="grid sm:grid-cols-2 gap-3 mt-3">
-                <div><label className="label">E-Load Profit % (MariBank)</label><input type="number" step="0.1" value={meta.eloadPct} onChange={e=>setMeta({...meta,eloadPct:Number(e.target.value)})} className="field mt-1"/></div>
+                <div><label className="label">E-Load Profit % (added to customer total)</label><input type="number" step="0.1" value={meta.eloadPct} onChange={e=>setMeta({...meta,eloadPct:Number(e.target.value)})} className="field mt-1"/></div>
                 <div><label className="label">Cash In - % Fee (Added on Top)</label><input type="number" step="0.1" value={meta.cashInPct} onChange={e=>setMeta({...meta,cashInPct:Number(e.target.value)})} className="field mt-1"/></div>
                 <div><label className="label">Cash Out - % Fee (Added on Top)</label><input type="number" step="0.1" value={meta.cashOutPct} onChange={e=>setMeta({...meta,cashOutPct:Number(e.target.value)})} className="field mt-1"/></div>
-                <div><label className="label">PalawanPay Top-Up Fee (Flat ₱)</label><input type="number" value={meta.palawanFee} onChange={e=>setMeta({...meta,palawanFee:Number(e.target.value)})} className="field mt-1"/></div>
-                <div><label className="label">Low Balance threshold — MariBank (₱)</label><input type="number" value={meta.lowThreshold} onChange={e=>setMeta({...meta,lowThreshold:Number(e.target.value)})} className="field mt-1"/></div>
-                <div className="flex items-end"><p className="text-xs font-bold text-[var(--muted)]">When MariBank is at or below this amount, a subtle amber “MariBank low - top up soon” pill shows. No popup.</p></div>
+                <div><label className="label">External Provider Top-Up Fee (Flat ₱)</label><input type="number" value={meta.palawanFee} onChange={e=>setMeta({...meta,palawanFee:Number(e.target.value)})} className="field mt-1"/></div>
+                <div><label className="label">Low Balance threshold — Main Wallet (₱)</label><input type="number" value={meta.lowThreshold} onChange={e=>setMeta({...meta,lowThreshold:Number(e.target.value)})} className="field mt-1"/></div>
+                <div className="flex items-end"><p className="text-xs font-bold text-[var(--muted)]">When Main Wallet is at or below this amount, a subtle amber “Main Wallet low - top up soon” pill shows. No popup.</p></div>
               </div>
-              <p className="text-sm font-semibold text-[var(--muted)] mt-3">Fee = Amount × % ÷ 100 only. Example: Cash In ₱500 at 2% = ₱10 fee. Customer pays ₱510 total and gets ₱500 FULL.</p>
+              <p className="text-sm font-semibold text-[var(--muted)] mt-3">Fee = Amount × % ÷ 100. E-Load customers pay the load amount plus its profit/fee; Cash In/Out fees are added on top. Example: Cash In ₱500 at 2% = ₱10 fee, so the customer pays ₱510.</p>
               <button disabled={saving} onClick={async()=>{ setSaving(true); try{ await saveMeta(meta); setSaveMsg('Settings saved.'); } catch(e){ setSaveMsg(e instanceof Error?e.message:String(e)); } setSaving(false); }} className="big-btn bg-[var(--green)] text-white px-6 mt-4 w-full sm:w-auto">{saving?'Saving…':'Save Settings'}</button>
               <button onClick={exportAllCSV} className="big-btn border-2 border-[var(--line)] px-5 mt-3 w-full sm:w-auto"><FileDown size={18}/> Export CSV — All Transactions</button>
             </section>
@@ -1125,9 +1181,9 @@ export default function App(){
 
       {showServices && <ServicesModal highlight={servicesHighlight} onHighlight={setServicesHighlight} onClose={()=>setShowServices(false)} onSelect={(t)=>{ setShowServices(false); openNew(t); }} />}
 
-      {showTx && <Sheet onClose={()=>setShowTx(false)} title={editing?'Edit transaction': fType==='Top-Up'?'Top-Up via PalawanPay':'Add transaction'}>
-        <div data-arrow-group="transaction-type" className="flex flex-wrap gap-2">{(['E-Load','Cash In','Cash Out','Top-Up'] as const).map(t=> <button key={t} onClick={()=>{setFType(t); if(t==='Top-Up'){setFAmount(1000); setFFee(meta.palawanFee); setFNotes('Top-Up via PalawanPay');} else if(t==='E-Load'){setFAmount(100); setFFee(autoFee(t,100));} else {setFAmount(100); setFFee(autoFee(t,100));}}} className={`flex-1 min-h-[48px] rounded-xl font-black text-[13px] px-2 ${fType===t? t==='Top-Up'?'bg-[#00a651] text-white':'bg-[var(--ink)] text-white':'bg-[var(--surface2)] border border-[var(--line)]'}`}>{t==='Top-Up'?'Top-Up via PalawanPay':t}</button>)}</div>
-        {fType==='Top-Up' && <div className="rounded-2xl p-3 mt-3 font-bold text-sm" style={{background:'#e8f8ef', color:'#007a3d'}}>Top-Up via PalawanPay — Cash on Hand → MariBank Wallet. PalawanPay is only a top-up source, not a customer wallet.</div>}
+      {showTx && <Sheet onClose={()=>setShowTx(false)} title={editing?'Edit transaction': fType==='Top-Up'?'Top-Up via External Provider':'Add transaction'}>
+        <div data-arrow-group="transaction-type" className="flex flex-wrap gap-2">{(['E-Load','Cash In','Cash Out','Top-Up'] as const).map(t=> <button key={t} onClick={()=>{setFType(t); if(t!=='E-Load') setFDiscount(0); if(t==='Top-Up'){setFAmount(1000); setFFee(meta.palawanFee); setFNotes('Top-Up via External Provider');} else if(t==='E-Load'){setFAmount(100); setFFee(autoFee(t,100));} else {setFAmount(100); setFFee(autoFee(t,100));}}} className={`flex-1 min-h-[48px] rounded-xl font-black text-[13px] px-2 ${fType===t? t==='Top-Up'?'bg-[#00a651] text-white':'bg-[var(--ink)] text-white':'bg-[var(--surface2)] border border-[var(--line)]'}`}>{t==='Top-Up'?'Top-Up via External Provider':t}</button>)}</div>
+        {fType==='Top-Up' && <div className="rounded-2xl p-3 mt-3 font-bold text-sm" style={{background:'#e8f8ef', color:'#007a3d'}}>Top-Up via External Provider — Cash on Hand → Main Wallet. External Provider is only a top-up source, not a customer wallet.</div>}
         <CustomerSuggest query={fCustomerQuery} onQuery={handleCustomerQuery} customers={customers} stats={customerStats} recentPhones={recentCustomerPhones} frequent={frequentCustomers} label={fType==='Top-Up'?'Customer (optional) — name or number':'Customer — type name or number'} required={fType!=='Top-Up'} onPick={(c)=>setCustomerFromRecord(c)} onSaveNew={async(parsed)=>{ const realName=isRealName(parsed.name, parsed.phone)?parsed.name:''; const created:any=await createCustomerRow({name:realName, phone:parsed.phone, notes:'', createdAt:Date.now(), totalTransactions:0, totalAmount:0}); await reloadRecords(); const rec=customers.find(x=>x.id===created.id) || {id:created.id, value:{name:realName, phone:parsed.phone, notes:'', createdAt:Date.now(), totalTransactions:0, totalAmount:0}}; setCustomerFromRecord(rec as CustomerRecord); }} />
         {showNameField && !namePromptSkipped && digitsOnly(fPhone).length===11 && <div className="rounded-2xl border border-[#fdba74] bg-[#fff7ed] p-3 mt-3">
           <p className="font-extrabold text-sm text-[#9a3412]">New number! Add a name so it&apos;s easier next time:</p>
@@ -1142,33 +1198,36 @@ export default function App(){
         {isUtang && fType!=='Top-Up' && <div className="rounded-2xl border border-[#ddd6fe] bg-[#f5f3ff] p-3 mt-3"><p className="label">Promise to pay:</p><div data-arrow-group="promise-date" className="flex flex-wrap gap-2 mt-2"><button type="button" onClick={()=>setFPromiseDate(addDaysKey(todayKey(),1))} className={`chip ${fPromiseDate===addDaysKey(todayKey(),1)?'active':''}`}>Tomorrow</button><button type="button" onClick={()=>setFPromiseDate(addDaysKey(todayKey(),3))} className={`chip ${fPromiseDate===addDaysKey(todayKey(),3)?'active':''}`}>In 3 days</button><button type="button" onClick={()=>setFPromiseDate(addDaysKey(todayKey(),7))} className={`chip ${fPromiseDate===addDaysKey(todayKey(),7)?'active':''}`}>Next Week (7 days)</button><button type="button" onClick={()=>setFPromiseDate('')} className={`chip ${!fPromiseDate?'active':''}`}>No date yet</button></div><label className="label block mt-3">Pick Date</label><input type="date" value={fPromiseDate} onChange={e=>setFPromiseDate(e.target.value)} className="field mt-1" aria-label="Promise to pay date"/><p className="text-xs font-bold text-[var(--muted)] mt-1.5">{fPromiseDate ? `Promised: ${fullDate(fPromiseDate)} — “Sabi bukas daw” / “Next week daw” can go in Notes below.` : 'Default: No date yet. Pick one in 1 tap above.'}</p></div>}
         {duplicateInfo && <div className="rounded-2xl border border-[#fdba74] bg-[#fff7ed] p-3 mt-3"><p className="font-extrabold text-sm text-[#9a3412]">You already saved {peso(duplicateInfo.amount)} {duplicateInfo.type} to {duplicateInfo.name} {duplicateInfo.mins===0?'just now':`${duplicateInfo.mins} min${duplicateInfo.mins>1?'s':''} ago`} — save again?</p><div className="flex gap-2 mt-3"><button onClick={()=>{ setDuplicateInfo(null); saveTransaction(false, true); }} className="min-h-[44px] px-4 rounded-xl bg-[#ea580c] text-white font-black text-sm flex-1">Save Again</button><button onClick={()=>setDuplicateInfo(null)} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] bg-white font-black text-sm">Cancel</button></div></div>}
         {fType==='E-Load' ? <>
-          <label className="label block mt-4">Network</label><div data-arrow-group="network" className="flex flex-wrap gap-2 mt-1.5">{['Globe','Smart','TNT','DITO','TM','Sun'].map(n=><button key={n} onClick={()=>setFNetwork(n)} className={`chip ${fNetwork===n?'active':''}`}>{n}</button>)}</div>
-          <p className="text-xs font-bold text-[var(--muted)] mt-1.5">Via MariBank — load stock is inside your MariBank Wallet.</p>
-          <label className="label block mt-4">Load amount</label><div data-arrow-group="eload-amount" className="flex flex-wrap gap-2 mt-1.5">{[10,20,50,100,200,500,1000].map(a=>{ return <button key={a} onClick={()=>{setFAmount(a); setFCustom(''); setFFee(autoFee('E-Load',a));}} className={`chip ${fAmount===a && !fCustom?'active':''}`}>₱{a}</button> })}<input value={fCustom} onChange={e=>{setFCustom(e.target.value); const v=Number(e.target.value); if(v>0){setFAmount(v); setFFee(autoFee('E-Load',v));}}} placeholder="Custom" inputMode="decimal" className="chip w-[96px] outline-none" aria-label="Custom load amount"/></div>
-          <div className="grid grid-cols-2 gap-3 mt-3"><div><label className="label">Customer pays (cash)</label><input value={peso(fAmount)} readOnly className="field mt-1 bg-[var(--surface2)]"/></div><div><label className="label">Profit</label><input type="number" value={fFee} onChange={e=>setFFee(Number(e.target.value))} className="field mt-1"/></div></div>
-          <div className="rounded-2xl bg-[var(--green-soft)] p-3 mt-3 font-bold text-sm">{isUtang?'Utang — wallets will not move until marked paid.':'MariBank −'+peso(fAmount)+' • Cash on Hand +'+peso(fAmount)+' • Profit '+peso(fFee)}</div>
+          <label className="label block mt-4">Network</label><div data-arrow-group="network" className="flex flex-wrap gap-2 mt-1.5">{['Globe','Smart','TNT','DITO'].map(n=><button key={n} onClick={()=>setFNetwork(n)} className={`chip ${fNetwork===n?'active':''}`}>{n}</button>)}</div>
+          <div className="flex flex-wrap gap-2 mt-4" role="group" aria-label="Load product type"><button type="button" onClick={()=>setFEloadKind('regular')} className={`chip ${fEloadKind==='regular'?'active':''}`}>Regular Load</button><button type="button" onClick={()=>setFEloadKind('promo')} className={`chip ${fEloadKind==='promo'?'active':''}`}>Promo / Bundle</button></div>
+          <p className="text-xs font-bold text-[var(--muted)] mt-1.5">{fEloadKind==='regular'?'Flexible prepaid credit.':'Direct package applied to the customer’s number. Enter the exact offer shown in your load channel.'} Via Main Wallet.</p>
+          {fEloadKind==='promo' && <div className="grid grid-cols-1 gap-3 mt-3 sm:grid-cols-2"><div className="sm:col-span-2"><label className="label">Choose a suggested {fNetwork} promo</label><select value={promoOffers.find(o=>o.network===fNetwork && o.name===fPromoName && o.amount===fAmount)?.id||''} onChange={e=>{const offer=promoOffers.find(o=>o.id===e.target.value); if(offer){setFPromoName(offer.name);setFPromoDetails(offer.details);setFPromoValidity(offer.validity);setFAmount(offer.amount);setFCustom('');setFFee(autoFee('E-Load',offer.amount));}}} className="field mt-1" aria-label="Suggested promo list"><option value="">Choose a promo or enter your own below</option>{promoOffers.filter(o=>o.network===fNetwork).map(o=><option key={o.id} value={o.id}>{o.name} — ₱{o.amount} / {o.validity}</option>)}</select><p className="text-xs font-bold text-[var(--muted)] mt-1">Examples from provider listings. Confirm availability and inclusions in your retailer menu before selling; offers can change.</p></div><div className="sm:col-span-2"><label className="label">Promo / package name</label><input value={fPromoName} onChange={e=>setFPromoName(e.target.value)} placeholder="Choose above or type a custom offer" className="field mt-1" aria-label="Promo or package name"/></div><div><label className="label">Inclusions (optional)</label><input value={fPromoDetails} onChange={e=>setFPromoDetails(e.target.value)} placeholder="e.g. data, calls, texts" className="field mt-1" aria-label="Promo inclusions"/></div><div><label className="label">Validity (optional)</label><input value={fPromoValidity} onChange={e=>setFPromoValidity(e.target.value)} placeholder="e.g. 7 days, no expiry" className="field mt-1" aria-label="Promo validity"/></div></div>}
+          <label className="label block mt-4">{fEloadKind==='promo'?'Promo price':'Load amount'}</label><div data-arrow-group="eload-amount" className="flex flex-wrap gap-2 mt-1.5">{[10,20,50,100,200,500,1000].map(a=>{ return <button key={a} onClick={()=>{setFAmount(a); setFCustom(''); setFFee(autoFee('E-Load',a));}} className={`chip ${fAmount===a && !fCustom?'active':''}`}>₱{a}</button> })}<input value={fCustom} onChange={e=>{setFCustom(e.target.value); const v=Number(e.target.value); if(v>0){setFAmount(v); setFFee(autoFee('E-Load',v));}}} placeholder="Custom" inputMode="decimal" className="chip w-[96px] outline-none" aria-label="Custom load amount"/></div>
+          <label className="label block mt-3">Provider discount (₱, optional)</label><input type="number" min="0" max={fAmount} step="0.01" value={fDiscount} onChange={e=>setFDiscount(Number(e.target.value)||0)} className="field mt-1" inputMode="decimal" aria-label="Provider discount amount"/><p className="text-xs font-bold text-[var(--muted)] mt-1">Enter ₱5 for a ₱100 load bought for ₱95. Your profit includes the discount plus the customer fee.</p>
+          <div className="grid grid-cols-2 gap-3 mt-3"><div><label className="label">Customer pays (load + fee)</label><input value={peso(fAmount+fFee)} readOnly className="field mt-1 bg-[var(--surface2)]"/></div><div><label className="label">Profit</label><input type="number" value={fFee} onChange={e=>setFFee(Number(e.target.value))} className="field mt-1"/></div></div>
+          <div className="rounded-2xl bg-[var(--green-soft)] p-3 mt-3 font-bold text-sm">{isUtang?'Utang — wallets will not move until marked paid.':'Main Wallet −'+peso(fAmount-fDiscount)+' • Cash on Hand +'+peso(fAmount+fFee)+' • Profit '+peso(fFee+fDiscount)}</div>
         </> : fType==='Top-Up' ? <>
-          <label className="label block mt-4">Top-up amount → MariBank</label><input type="number" value={fAmount} onChange={e=>{const v=Number(e.target.value); setFAmount(v); setFFee(autoFee('Top-Up',v));}} className="field mt-1" inputMode="decimal"/>
+          <label className="label block mt-4">Top-up amount → Main Wallet</label><input type="number" value={fAmount} onChange={e=>{const v=Number(e.target.value); setFAmount(v); setFFee(autoFee('Top-Up',v));}} className="field mt-1" inputMode="decimal"/>
           <div data-arrow-group="topup-amount" className="flex flex-wrap gap-2 mt-2">{amountShortcuts.map(s=><button key={s.amt} type="button" onClick={()=>{setFAmount(s.amt); setFFee(autoFee('Top-Up',s.amt));}} className="chip">₱{s.amt}</button>)}<button type="button" onClick={()=>{setFAmount(1000); setFFee(autoFee('Top-Up',1000));}} className="chip">₱1000</button></div>
-          <label className="label block mt-3">PalawanPay fee (editable)</label><input type="number" value={fFee} onChange={e=>setFFee(Number(e.target.value))} className="field mt-1"/>
-          <div className="rounded-2xl p-3 mt-3 font-bold text-sm" style={{background:'#e8f8ef'}}>Cash on Hand −{peso(fAmount+fFee)} (amount + PalawanPay fee) • MariBank Wallet +{peso(fAmount)}</div>
+          <label className="label block mt-3">External Provider fee (editable)</label><input type="number" value={fFee} onChange={e=>setFFee(Number(e.target.value))} className="field mt-1"/>
+          <div className="rounded-2xl p-3 mt-3 font-bold text-sm" style={{background:'#e8f8ef'}}>Cash on Hand −{peso(fAmount+fFee)} (amount + External Provider fee) • Main Wallet +{peso(fAmount)}</div>
         </> : <>
-          <label className="label block mt-4">Provider</label><div className="flex gap-2 mt-1.5"><button className="chip active">MariBank</button><span className="text-xs font-bold text-[var(--muted)] self-center">Only MariBank is used for Cash In / Cash Out.</span></div>
+          <label className="label block mt-4">Provider</label><div className="flex gap-2 mt-1.5"><button className="chip active">Main Wallet</button><span className="text-xs font-bold text-[var(--muted)] self-center">Only Main Wallet is used for Cash In / Cash Out.</span></div>
           <label className="label block mt-4">Amount</label><input type="number" value={fAmount} onChange={e=>{const v=Number(e.target.value); setFAmount(v); setFFee(autoFee(fType,v));}} className="field mt-1" inputMode="decimal"/>
           <div data-arrow-group="cash-amount" className="flex flex-wrap gap-2 mt-2">{amountShortcuts.map(s=><button key={s.amt} type="button" onClick={()=>{setFAmount(s.amt); setFFee(autoFee(fType,s.amt));}} className="chip">₱{s.amt}</button>)}<button type="button" onClick={()=>{setFAmount(1000); setFFee(autoFee(fType,1000));}} className="chip">₱1000</button></div>
           <label className="label block mt-3">Service fee (editable)</label><input type="number" value={fFee} onChange={e=>setFFee(Number(e.target.value))} className="field mt-1"/>
           <div className="rounded-2xl bg-[var(--green-soft)] p-3 mt-3 font-bold text-sm space-y-1">
             <p className="text-xs font-black tracking-wide uppercase text-[var(--muted)]">Fee: {feeParts(fType,fAmount).pct}% of {peso(fAmount)} = {peso(fFee)}</p>
             {fType==='Cash In' ? <>
-              <p>What customer wants: <b>{peso(fAmount)}</b> in their MariBank.</p>
+              <p>What customer wants: <b>{peso(fAmount)}</b> in their Main Wallet.</p>
               <p>What customer pays total: <b>{peso(fAmount+fFee)} cash</b> ({peso(fAmount)} + {peso(fFee)} fee)</p>
-              <p>You send {peso(fAmount)} <span className="text-[var(--green)] bg-white px-1.5 py-0.5 rounded">FULL</span> via MariBank • You keep {peso(fFee)} fee</p>
-              <p className="text-xs text-[var(--muted)]">Balance: Cash +{peso(fAmount+fFee)} • MariBank −{peso(fAmount)}</p>
+              <p>You send {peso(fAmount)} <span className="text-[var(--green)] bg-white px-1.5 py-0.5 rounded">FULL</span> via Main Wallet • You keep {peso(fFee)} fee</p>
+              <p className="text-xs text-[var(--muted)]">Balance: Cash +{peso(fAmount+fFee)} • Main Wallet −{peso(fAmount)}</p>
             </> : <>
               <p>What customer wants: <b>{peso(fAmount)} cash</b>.</p>
-              <p>What customer pays total: <b>{peso(fAmount+fFee)} via MariBank</b> ({peso(fAmount)} + {peso(fFee)} fee)</p>
+              <p>What customer pays total: <b>{peso(fAmount+fFee)} via Main Wallet</b> ({peso(fAmount)} + {peso(fFee)} fee)</p>
               <p>You give {peso(fAmount)} <span className="text-[var(--green)] bg-white px-1.5 py-0.5 rounded">FULL</span> cash • You keep {peso(fFee)} fee</p>
-              <p className="text-xs text-[var(--muted)]">Balance: MariBank +{peso(fAmount+fFee)} • Cash −{peso(fAmount)}</p>
+              <p className="text-xs text-[var(--muted)]">Balance: Main Wallet +{peso(fAmount+fFee)} • Cash −{peso(fAmount)}</p>
             </>}
             {isUtang && <p className="text-[#6d28d9]">Utang — wallets will not move until marked paid.</p>}
           </div>
@@ -1176,15 +1235,15 @@ export default function App(){
         <label className="label block mt-4">Notes</label><input value={fNotes} onChange={e=>setFNotes(e.target.value)} placeholder="Optional note…" className="field mt-1"/>
         <div className="grid grid-cols-2 gap-3 mt-3"><div><label className="label">Date</label><input type="date" value={fDate} onChange={e=>setFDate(e.target.value)} className="field mt-1"/></div><div><label className="label">Time</label><input value={fTime} onChange={e=>setFTime(e.target.value)} className="field mt-1"/></div></div>
 
-        <div className="sheet-save-bar grid grid-cols-2 gap-2 mt-5"><button disabled={saving} onClick={()=>saveTransaction(false)} className="big-btn bg-[var(--green)] text-white" style={fType==='Top-Up'?{background:'#00a651'}:undefined}>{saving?'Saving…':editing?'Save Changes': fType==='Top-Up'?'Save Top-Up via PalawanPay':'Save Transaction'}</button><button disabled={saving} onClick={()=>saveTransaction(true)} className="big-btn border-2 border-[var(--line)]">Save &amp; Add Another</button></div>
+        <div className="sheet-save-bar grid grid-cols-2 gap-2 mt-5"><button disabled={saving} onClick={()=>saveTransaction(false)} className="big-btn bg-[var(--green)] text-white" style={fType==='Top-Up'?{background:'#00a651'}:undefined}>{saving?'Saving…':editing?'Save Changes': fType==='Top-Up'?'Save Top-Up via External Provider':'Save Transaction'}</button><button disabled={saving} onClick={()=>saveTransaction(true)} className="big-btn border-2 border-[var(--line)]">Save &amp; Add Another</button></div>
         <button onClick={()=>setShowTx(false)} className="big-btn border border-[var(--line)] w-full mt-2">Cancel</button>
-        <p className="text-xs font-bold text-[var(--muted)] text-center mt-2">MariBank Wallet and Cash on Hand update automatically. New name + number saves as a customer automatically.</p>
+        <p className="text-xs font-bold text-[var(--muted)] text-center mt-2">Main Wallet and Cash on Hand update automatically. New name + number saves as a customer automatically.</p>
       </Sheet>}
 
       {detail && <Sheet onClose={()=>setDetail(null)} title="Transaction detail">
-        <div className="rounded-2xl bg-[var(--surface2)] p-4"><p className="font-display font-extrabold text-3xl">{peso(detail.value.amount)}</p><p className="font-bold text-[var(--muted)]">{detail.value.type==='Top-Up'?'Top-Up via PalawanPay':detail.value.type} • {detail.value.type==='Top-Up'?'PalawanPay → MariBank':`${detail.value.network} • via MariBank`} • {dateLabel(detail.value.date)} at {detail.value.time}</p><p className="font-black text-[var(--green)] mt-1">{detail.value.type==='Top-Up' ? `PalawanPay fee: ${peso(detail.value.fee||0)}` : `Fee / profit: ${peso(detail.value.fee||0)}`}</p>{detail.value.utang && <><p className="font-black text-[13px] mt-1"><span className={`px-2 py-1 rounded-full ${detail.value.utangStatus==='paid'?'bg-[var(--green-soft)] text-[var(--green)]': utangPromiseStatus(detail.value)==='overdue'?'bg-[#fef2f2] text-[var(--red)]': utangPromiseStatus(detail.value)==='due-today'?'bg-[#fffbeb] text-[#92400e]':'bg-[#fef3c7] text-[#92400e]'}`}>Utang — {utangPromiseLabel(detail.value)}</span></p><p className="text-sm font-bold mt-2">Promise to Pay: {utangPromiseDateLabel(detail.value)}{detail.value.promiseDate ? ` • ${fullDate(detail.value.promiseDate)}` : ''}</p>{detail.value.utangStatus!=='paid' && <p className="text-sm font-bold">Total {peso(detail.value.amount)} • Paid {peso(detail.value.paidAmount||0)} • Remaining {peso(utangRemaining(detail.value))}</p>}</>}{detail.value.history && detail.value.history.length>0 && <div className="mt-3 rounded-xl bg-white p-3 border border-[var(--line)]"><p className="text-xs font-black uppercase tracking-wide text-[var(--muted)]">Edit history</p>{detail.value.history.map((h,i)=><p key={i} className="text-sm font-bold mt-1">Edited: {peso(h.oldAmount)} → {peso(h.newAmount)}, {h.date} {h.time}</p>)}</div>}</div>
+        <div className="rounded-2xl bg-[var(--surface2)] p-4"><p className="font-display font-extrabold text-3xl">{peso(detail.value.amount)}</p><p className="font-bold text-[var(--muted)]">{detail.value.type==='Top-Up'?'Top-Up via External Provider':detail.value.type} • {detail.value.type==='Top-Up'?'External Provider → Main Wallet':`${detail.value.network} • via Main Wallet`} • {dateLabel(detail.value.date)} at {detail.value.time}</p><p className="font-black text-[var(--green)] mt-1">{detail.value.type==='Top-Up' ? `External Provider fee: ${peso(detail.value.fee||0)}` : detail.value.type==='E-Load' ? `Customer fee ${peso(detail.value.fee||0)} + provider discount ${peso(eLoadDiscount(detail.value))} = ${peso(txProfit(detail.value))} total profit` : `Fee / profit: ${peso(detail.value.fee||0)}`}</p>{detail.value.utang && <><p className="font-black text-[13px] mt-1"><span className={`px-2 py-1 rounded-full ${detail.value.utangStatus==='paid'?'bg-[var(--green-soft)] text-[var(--green)]': utangPromiseStatus(detail.value)==='overdue'?'bg-[#fef2f2] text-[var(--red)]': utangPromiseStatus(detail.value)==='due-today'?'bg-[#fffbeb] text-[#92400e]':'bg-[#fef3c7] text-[#92400e]'}`}>Utang — {utangPromiseLabel(detail.value)}</span></p><p className="text-sm font-bold mt-2">Promise to Pay: {utangPromiseDateLabel(detail.value)}{detail.value.promiseDate ? ` • ${fullDate(detail.value.promiseDate)}` : ''}</p>{detail.value.utangStatus!=='paid' && <p className="text-sm font-bold">Total {peso(detail.value.amount)} • Paid {peso(detail.value.paidAmount||0)} • Remaining {peso(utangRemaining(detail.value))}</p>}</>}{detail.value.history && detail.value.history.length>0 && <div className="mt-3 rounded-xl bg-white p-3 border border-[var(--line)]"><p className="text-xs font-black uppercase tracking-wide text-[var(--muted)]">Edit history</p>{detail.value.history.map((h,i)=><p key={i} className="text-sm font-bold mt-1">Edited: {peso(h.oldAmount)} → {peso(h.newAmount)}, {h.date} {h.time}</p>)}</div>}</div>
         {(() => { const cust = customerByPhone.get(digitsOnly(detail.value.phone||'')); const showDeleted = !cust && isRealName(detail.value.customerName, detail.value.phone) && !!detail.value.phone; const hasName = cust ? isRealName(cust.value.name, detail.value.phone) : isRealName(detail.value.customerName, detail.value.phone); return <div className="rounded-2xl border border-[var(--line)] p-3 mt-3 flex items-center gap-3"><span className="w-11 h-11 rounded-full bg-[#0e2a47] text-white grid place-items-center font-black shrink-0">{showDeleted?initials('Deleted Customer'):displayInitials(cust?.value.name || detail.value.customerName, detail.value.phone)}</span><div className="flex-1 min-w-0"><p className="font-extrabold truncate">{showDeleted?'Deleted Customer': displayNameOnly(cust?.value.name || detail.value.customerName, detail.value.phone) || 'No customer'}</p><p className="text-xs font-bold text-[var(--muted)]">{hasName && detail.value.phone?formatPhone(detail.value.phone):''}{cust?.value.notes?`${hasName?' • ':''}${cust.value.notes}`:''}</p></div>{!hasName && !showDeleted && detail.value.phone && <button onClick={()=>openAddName(detail.value.phone)} className="min-h-[40px] px-3 rounded-full bg-[#fff7ed] border border-[#fdba74] text-[#ea580c] font-black text-xs shrink-0">+ Add Name</button>}{cust && <button onClick={()=>{ setDetail(null); setCustomerDetail(cust); }} className="min-h-[44px] px-3 rounded-xl bg-[var(--ink)] text-white font-black text-xs shrink-0">View Customer</button>}</div> })()}
-        <dl className="mt-4 space-y-2 text-sm font-bold"><Row k="Provider" v={detail.value.type==='Top-Up'?'PalawanPay (top-up source)':'MariBank (main app)'}/><Row k="Payment" v={detail.value.payment}/><Row k="Phone" v={detail.value.phone?formatPhone(detail.value.phone):'—'}/><Row k="Notes" v={detail.value.notes||'—'}/>{detail.value.utang && <><Row k="Promise to Pay" v={detail.value.promiseDate ? fullDate(detail.value.promiseDate) : 'No date yet'}/><Row k="Utang Status" v={`${utangPromiseLabel(detail.value)} • Paid ${peso(detail.value.paidAmount||0)} • Remaining ${peso(utangRemaining(detail.value))}`}/></>}<Row k="Customer pays" v={detail.value.type==='E-Load'?peso(detail.value.selling||detail.value.amount): detail.value.type==='Top-Up'?peso(detail.value.amount+detail.value.fee): detail.value.type==='Cash In'?`${peso(detail.value.amount+detail.value.fee)} cash (${peso(detail.value.amount)} + ${peso(detail.value.fee||0)} fee) — you send ${peso(detail.value.amount)} FULL via MariBank`: detail.value.type==='Cash Out'?`${peso(detail.value.amount+detail.value.fee)} via MariBank (${peso(detail.value.amount)} + ${peso(detail.value.fee||0)} fee) — you give ${peso(detail.value.amount)} FULL cash`:'—'}/><Row k="What you give in full" v={detail.value.type==='Cash In'||detail.value.type==='Cash Out'?`${peso(detail.value.amount)} FULL`:'—'}/><Row k="Fee you keep" v={detail.value.type==='Cash In'||detail.value.type==='Cash Out'?peso(detail.value.fee||0):'—'}/></dl>
+        <dl className="mt-4 space-y-2 text-sm font-bold"><Row k="Provider" v={detail.value.type==='Top-Up'?'External Provider (top-up source)':'Main Wallet (main app)'}/><Row k="Payment" v={detail.value.payment}/><Row k="Phone" v={detail.value.phone?formatPhone(detail.value.phone):'—'}/><Row k="Notes" v={detail.value.notes||'—'}/>{detail.value.utang && <><Row k="Promise to Pay" v={detail.value.promiseDate ? fullDate(detail.value.promiseDate) : 'No date yet'}/><Row k="Utang Status" v={`${utangPromiseLabel(detail.value)} • Paid ${peso(detail.value.paidAmount||0)} • Remaining ${peso(utangRemaining(detail.value))}`}/></>}<Row k="Customer pays" v={detail.value.type==='E-Load'?`${peso(detail.value.selling||detail.value.amount)} + ${peso(detail.value.fee||0)} fee = ${peso((detail.value.selling||detail.value.amount)+(detail.value.fee||0))}`: detail.value.type==='Top-Up'? peso(detail.value.amount+detail.value.fee): detail.value.type==='Cash In'?`${peso(detail.value.amount+detail.value.fee)} cash (${peso(detail.value.amount)} + ${peso(detail.value.fee||0)} fee) — you send ${peso(detail.value.amount)} FULL via Main Wallet`: detail.value.type==='Cash Out'?`${peso(detail.value.amount+detail.value.fee)} via Main Wallet (${peso(detail.value.amount)} + ${peso(detail.value.fee||0)} fee) — you give ${peso(detail.value.amount)} FULL cash`:'—'}/><Row k="What you give in full" v={detail.value.type==='Cash In'||detail.value.type==='Cash Out'?`${peso(detail.value.amount)} FULL`:'—'}/>{detail.value.type==='E-Load' && <><Row k="Provider discount" v={peso(eLoadDiscount(detail.value))}/><Row k="Actual wallet cost" v={peso(detail.value.amount-eLoadDiscount(detail.value))}/><Row k="Total profit" v={peso(txProfit(detail.value))}/></>}<Row k="Fee / profit" v={detail.value.type==='Cash In'||detail.value.type==='Cash Out'?peso(detail.value.fee||0):'—'}/></dl>
         <div className="flex gap-2 mt-4 flex-wrap"><button onClick={()=>toggleFavoriteForTx(detail)} className="min-h-[44px] px-3 rounded-xl border border-[var(--line)] font-black text-sm flex items-center gap-1.5"><Star size={16} fill={favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'currentColor':'none'}/> {favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'Favorited':'Add to Favorites'}</button><button onClick={()=>repeatTx(detail)} className="min-h-[44px] px-3 rounded-xl border border-[var(--line)] font-black text-sm">Repeat</button>{detail.value.utang && detail.value.utangStatus!=='paid' && <button onClick={()=>markUtangPaid(detail)} className="min-h-[44px] px-3 rounded-xl bg-[var(--green)] text-white font-black text-sm">Mark Paid</button>}</div>
         {detail.value.utang && detail.value.utangStatus!=='paid' && <div className="rounded-2xl border border-[var(--line)] p-3 mt-4"><p className="font-extrabold text-sm">Partial Payment — “tomorrow partial”</p><p className="text-xs font-bold text-[var(--muted)] mt-0.5">Remaining {peso(utangRemaining(detail.value))} • Promise date stays unless you Edit it.</p>{!showPartial ? <button onClick={()=>{setPartialAmount(utangRemaining(detail.value)); setShowPartial(true);}} className="min-h-[44px] px-4 rounded-xl bg-[#7c3aed] text-white font-black text-sm mt-3">Partial Payment</button> : <div onKeyDown={(e)=>{ if(e.key==='Enter' && !((e.target as HTMLElement).tagName==='BUTTON')){ e.preventDefault(); savePartialPayment(detail); } }}><label className="label block mt-3">Amount paid now</label><input type="number" value={partialAmount} onChange={e=>setPartialAmount(Number(e.target.value))} className="field mt-1" inputMode="decimal" aria-label="Amount paid now"/><p className="text-sm font-bold mt-2">Remaining after this payment: {peso(Math.max(0, round2(utangRemaining(detail.value)-(partialAmount||0))))}</p><div className="flex gap-2 mt-3 flex-wrap"><button disabled={saving} onClick={()=>savePartialPayment(detail)} className="min-h-[44px] px-4 rounded-xl bg-[var(--green)] text-white font-black text-sm flex-1">{saving?'Saving…':'Save Partial Payment'}</button><button onClick={()=>markUtangPaid(detail)} disabled={saving} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Mark Paid Fully</button><button onClick={()=>setShowPartial(false)} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Cancel</button></div></div>}</div>}
         <div className="grid grid-cols-2 gap-2 mt-3"><button onClick={()=>{const r=detail; setDetail(null); openEdit(r);}} className="big-btn bg-[var(--ink)] text-white"><Pencil size={18}/> Edit</button><button onClick={()=>setConfirmDelete(detail)} className="big-btn border-2 border-red-200 text-[var(--red)]"><Trash2 size={18}/> Delete</button></div>
@@ -1217,16 +1276,16 @@ export default function App(){
       {showWalletAction && <Sheet onClose={()=>setShowWalletAction(null)} title={`${walletMode==='add'?'Add funds':'Deduct funds'} — ${walletDefs.find(w=>w.key===showWalletAction)?.label}`}>
         <p className="font-bold text-sm text-[var(--muted)]">Current balance: {peso(meta.wallets[showWalletAction])}</p>
         <label className="label block mt-3">Amount</label><input type="number" value={walletAmt} onChange={e=>setWalletAmt(Number(e.target.value))} className="field mt-1"/>
-        <p className="text-xs font-bold text-[var(--muted)] mt-2">This is a balance correction after counting — it does not create a PalawanPay top-up.</p>
+        <p className="text-xs font-bold text-[var(--muted)] mt-2">This is a balance correction after counting — it does not create a External Provider top-up.</p>
         <button disabled={saving} onClick={doWalletAction} className="big-btn bg-[var(--green)] text-white w-full mt-5">{saving?'Saving…':walletMode==='add'?`Add ${peso(walletAmt)}`:`Deduct ${peso(walletAmt)}`}</button>
         <button onClick={()=>setShowWalletAction(null)} className="big-btn border border-[var(--line)] w-full mt-2">Cancel</button>
       </Sheet>}
 
       {showEOD && <Sheet onClose={()=>setShowEOD(false)} title="End of Day — Close Day">
-        <p className="font-bold text-[var(--muted)]">{fullDate(todayKey())} • All via MariBank</p>
-        <div className="grid grid-cols-2 gap-3 mt-3"><Stat label="Date" v={dateLabel(todayKey())}/><Stat label="Starting Float" v={peso(startingFloat)}/><Stat label="Total E-Load" v={peso(sum(eloadToday,t=>t.amount))}/><Stat label="Total Cash In" v={peso(sum(cashInToday,t=>t.amount))}/><Stat label="Total Cash Out" v={peso(sum(cashOutToday,t=>t.amount))}/><Stat label="Total Top-Up" v={peso(sum(topUpToday,t=>t.amount))}/><Stat label="Total Profit / Fees" v={peso(todayProfit)}/><Stat label="Expected Cash on Hand" v={peso(expectedCash)}/><Stat label="Expected MariBank" v={peso(meta.wallets.maribank)}/><Stat label="Transactions" v={String(todayTxs.filter(t=>salesTypes.includes(t.type)).length)}/></div>
-        {maribankLow && <p className="text-xs font-black text-[#92400e] bg-[#fffbeb] border border-[#fbbf24] px-2.5 py-2 rounded-xl mt-3">MariBank low - top up soon (threshold {peso(meta.lowThreshold)})</p>}
-        <div className="rounded-2xl bg-[var(--surface2)] p-3 mt-3 text-sm font-bold space-y-1"><p>E-Load: {eloadToday.length} • {peso(sum(eloadToday,t=>t.amount))}</p><p>Cash In: {cashInToday.length} • {peso(sum(cashInToday,t=>t.amount))} • fees {peso(sum(cashInToday,t=>t.fee))}</p><p>Cash Out: {cashOutToday.length} • {peso(sum(cashOutToday,t=>t.amount))} • fees {peso(sum(cashOutToday,t=>t.fee))}</p><p>PalawanPay Top-Ups: {topUpToday.length} • {peso(sum(topUpToday,t=>t.amount))} • fees {peso(sum(topUpToday,t=>t.fee))}</p></div>
+        <p className="font-bold text-[var(--muted)]">{fullDate(todayKey())} • All via Main Wallet</p>
+        <div className="grid grid-cols-2 gap-3 mt-3"><Stat label="Date" v={dateLabel(todayKey())}/><Stat label="Starting Float" v={peso(startingFloat)}/><Stat label="Total E-Load" v={peso(sum(eloadToday,t=>t.amount))}/><Stat label="Total Cash In" v={peso(sum(cashInToday,t=>t.amount))}/><Stat label="Total Cash Out" v={peso(sum(cashOutToday,t=>t.amount))}/><Stat label="Total Top-Up" v={peso(sum(topUpToday,t=>t.amount))}/><Stat label="Total Profit / Fees" v={peso(todayProfit)}/><Stat label="Expected Cash on Hand" v={peso(expectedCash)}/><Stat label="Expected Main Wallet" v={peso(meta.wallets.maribank)}/><Stat label="Transactions" v={String(todayTxs.filter(t=>salesTypes.includes(t.type)).length)}/></div>
+        {maribankLow && <p className="text-xs font-black text-[#92400e] bg-[#fffbeb] border border-[#fbbf24] px-2.5 py-2 rounded-xl mt-3">Main Wallet low - top up soon (threshold {peso(meta.lowThreshold)})</p>}
+        <div className="rounded-2xl bg-[var(--surface2)] p-3 mt-3 text-sm font-bold space-y-1"><p>E-Load: {eloadToday.length} • {peso(sum(eloadToday,t=>t.amount))}</p><p>Cash In: {cashInToday.length} • {peso(sum(cashInToday,t=>t.amount))} • fees {peso(sum(cashInToday,t=>t.fee))}</p><p>Cash Out: {cashOutToday.length} • {peso(sum(cashOutToday,t=>t.amount))} • fees {peso(sum(cashOutToday,t=>t.fee))}</p><p>External Provider Top-Ups: {topUpToday.length} • {peso(sum(topUpToday,t=>t.amount))} • fees {peso(sum(topUpToday,t=>t.fee))}</p></div>
         <label className="label block mt-4">Cash Count — Actual Cash Counted</label><input type="number" value={actualCash} onChange={e=>{ const v=Number(e.target.value); setActualCash(v); if(!tomorrowTouched) setTomorrowFloat(v); }} className="field mt-1" inputMode="decimal"/>
         <div className="rounded-2xl p-3 mt-3 font-bold text-sm" style={{background:'#f7faf7'}}><p>Expected: {peso(expectedCash)} • Counted: {peso(actualCash)}</p><p style={{color:diffColor}}>Difference: {diffLabel}</p></div>
         <label className="label block mt-4">Float Tracker — Tomorrow&apos;s Starting Float</label><input type="number" value={tomorrowFloat} onChange={e=>{ setTomorrowFloat(Number(e.target.value)); setTomorrowTouched(true); }} className="field mt-1" inputMode="decimal"/>
@@ -1248,7 +1307,7 @@ export default function App(){
         <p className="text-sm font-bold text-[var(--muted)]">Cash-register mode — work without the mouse. Shortcuts pause while you type in a field. Press <Kbd>?</Kbd> to close.</p>
         <div className="grid sm:grid-cols-2 gap-3 mt-4">
           <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Navigation</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>D</Kbd> Dashboard</li><li><Kbd>T</Kbd> Transactions</li><li><Kbd>U</Kbd> Customers (Users)</li><li><Kbd>G</Kbd> Utang</li><li><Kbd>W</Kbd> Wallets</li><li><Kbd>R</Kbd> Report</li><li><Kbd>S</Kbd> Settings</li><li><Kbd>/</Kbd> Focus search</li><li><Kbd>Esc</Kbd> Close / back to Dashboard</li><li><Kbd>?</Kbd> / <Kbd>H</Kbd> This help</li></ul></div>
-          <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Quick Actions</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>1</Kbd> E-Load Sale</li><li><Kbd>2</Kbd> Cash In</li><li><Kbd>3</Kbd> Cash Out</li><li><Kbd>4</Kbd> Top-Up via PalawanPay</li><li><Kbd>N</Kbd> New (E-Load / New Customer)</li><li><Kbd>C</Kbd> Cash Count / End Day (Dashboard only)</li><li><Kbd>X</Kbd> Close Day (Dashboard only)</li></ul></div>
+          <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Quick Actions</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>1</Kbd> E-Load Sale</li><li><Kbd>2</Kbd> Cash In</li><li><Kbd>3</Kbd> Cash Out</li><li><Kbd>4</Kbd> Top-Up via External Provider</li><li><Kbd>N</Kbd> New (E-Load / New Customer)</li><li><Kbd>C</Kbd> Cash Count / End Day (Dashboard only)</li><li><Kbd>X</Kbd> Close Day (Dashboard only)</li></ul></div>
           <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Forms</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>Tab</Kbd> Customer → Amount → Fee → Notes → Save</li><li><Kbd>Enter</Kbd> Save</li><li><Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd> Save &amp; Add Another (same customer)</li><li><Kbd>Esc</Kbd> Cancel</li><li><Kbd>↑</Kbd><Kbd>↓</Kbd> Move in customer suggestions</li><li><Kbd>Enter</Kbd> Pick highlighted customer</li><li><Kbd>A</Kbd> ₱20 · <Kbd>S</Kbd> ₱50 · <Kbd>D</Kbd> ₱100 · <Kbd>F</Kbd> ₱200 · <Kbd>G</Kbd> ₱500 (form open, not typing a name)</li></ul></div>
           <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Lists</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>↑</Kbd><Kbd>↓</Kbd> or <Kbd>J</Kbd><Kbd>K</Kbd> Move selection</li><li><Kbd>Enter</Kbd> Open selected</li><li><Kbd>E</Kbd> Edit selected</li><li><Kbd>Del</Kbd> / <Kbd>Backspace</Kbd> Delete (with confirm)</li><li><Kbd>F</Kbd> Focus filters, then <Kbd>←</Kbd><Kbd>→</Kbd> to move, <Kbd>Enter</Kbd> to apply</li><li>On Dashboard recent list: <Kbd>↑</Kbd><Kbd>↓</Kbd> + <Kbd>Enter</Kbd> repeats that transaction</li><li>Favorites: tap a chip to pre-fill the sale form</li></ul></div>
         </div>
@@ -1296,8 +1355,8 @@ function TxRow({r,customers,onClick,onAddName,selected,selectedRef,onRepeat,onTo
   const cust=customers.get(digitsOnly(v.phone||''));
   const deleted=!cust && isRealName(v.customerName, v.phone) && !!v.phone;
   const hasName = cust ? isRealName(cust.value.name, v.phone) : isRealName(v.customerName, v.phone);
-  const label = v.type==='Top-Up' ? 'Top-Up via PalawanPay' : v.type==='E-Load' ? `E-Load • ${v.network}` : `${v.type} • MariBank`;
-  const customerLine = v.type==='Top-Up' ? (hasName ? displayNamePhone(cust?.value.name || v.customerName, v.phone) : v.phone?formatPhone(v.phone):'PalawanPay → MariBank') : deleted ? `Deleted Customer • ${formatPhone(v.phone)}` : hasName ? displayNamePhone(cust?.value.name || v.customerName, v.phone) : v.phone ? formatPhone(v.phone) : 'No customer';
+  const label = v.type==='Top-Up' ? 'Top-Up via External Provider' : v.type==='E-Load' ? `E-Load • ${v.network}` : `${v.type} • Main Wallet`;
+  const customerLine = v.type==='Top-Up' ? (hasName ? displayNamePhone(cust?.value.name || v.customerName, v.phone) : v.phone?formatPhone(v.phone):'External Provider → Main Wallet') : deleted ? `Deleted Customer • ${formatPhone(v.phone)}` : hasName ? displayNamePhone(cust?.value.name || v.customerName, v.phone) : v.phone ? formatPhone(v.phone) : 'No customer';
   return <div ref={selectedRef as any} onClick={onClick} className={`w-full flex items-center gap-2 sm:gap-3 px-4 py-3.5 text-left min-h-[64px] cursor-pointer ${selected?'bg-[var(--green-soft)] ring-2 ring-inset ring-[var(--green)]':'hover:bg-[var(--surface2)]'}`} role="button" tabIndex={0} onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); onClick(); } }}>
     <span className="w-11 h-11 rounded-xl grid place-items-center shrink-0" style={{background:bg,color}}>{icon}</span>
     <span className="flex-1 min-w-0"><span className="block font-extrabold truncate">{label}{v.utang ? <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full ${v.utangStatus==='paid'?'bg-[var(--green-soft)] text-[var(--green)]':'bg-[#fef3c7] text-[#92400e]'}`}>{v.utangStatus==='paid'?'Utang Paid':'Utang Unpaid'}</span> : null}</span><span className="block text-xs font-bold text-[var(--muted)] truncate">{customerLine}</span><span className="block text-xs font-bold text-[var(--muted)] truncate">{v.notes||v.payment} • {v.time}</span></span>
@@ -1355,7 +1414,7 @@ function ServicesModal({highlight,onHighlight,onClose,onSelect}:{highlight:numbe
     {type:'E-Load', label:'E-Load Sale', icon:Smartphone, className:'bg-[var(--green)] text-white'},
     {type:'Cash In', label:'Cash In', icon:ArrowDownToLine, className:'bg-[#2563eb] text-white'},
     {type:'Cash Out', label:'Cash Out', icon:ArrowUpFromLine, className:'bg-[var(--purple)] text-white'},
-    {type:'Top-Up', label:'Top-Up via PalawanPay', icon:RefreshCw, className:'bg-white text-[#007a3d] border-2 border-[#00a651]', style:{background:'#e8f8ef'}},
+    {type:'Top-Up', label:'Top-Up via External Provider', icon:RefreshCw, className:'bg-white text-[#007a3d] border-2 border-[#00a651]', style:{background:'#e8f8ef'}},
   ];
   useEffect(()=>{
     openerRef.current=document.activeElement as HTMLElement|null;

@@ -37,7 +37,9 @@
   }
 }
 *{box-sizing:border-box}
-html{scroll-behavior:smooth}
+html{scroll-behavior:smooth;scrollbar-width:none;-ms-overflow-style:none}
+*,*::before,*::after{scrollbar-width:none;-ms-overflow-style:none}
+html::-webkit-scrollbar,body::-webkit-scrollbar,*::-webkit-scrollbar{display:none;width:0;height:0}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:'Nunito',system-ui,-apple-system,BlinkMacSystemFont,sans-serif;font-size:16px;line-height:1.5}
 .font-display{font-family:'Baloo 2','Nunito',system-ui,sans-serif}
 button,input,select,textarea{font:inherit}
@@ -51,6 +53,8 @@ input,select,textarea{color:var(--ink)}
 .chip.active{background:var(--ink);color:#fff;border-color:var(--ink)}
 .field{width:100%;border:1.5px solid var(--line);background:var(--surface2);border-radius:14px;padding:13px 14px;outline:none;font-weight:700;font-size:16px;min-height:48px}
 .field:focus{border-color:var(--green);background:var(--surface);box-shadow:0 0 0 4px rgba(14,159,95,.13)}
+/* The .field shorthand otherwise overrides Tailwind's pl-10 utility, letting the search icon overlap text. */
+input.field.pl-10{padding-left:2.75rem}
 .label{font-size:12px;letter-spacing:.08em;text-transform:uppercase;font-weight:900;color:var(--muted)}
 .big-btn{min-height:56px;border-radius:16px;font-weight:900;display:flex;align-items:center;justify-content:center;gap:8px}
 .kbd{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 5px;border-radius:6px;border:1px solid var(--line);border-bottom-width:2px;background:var(--surface2);color:var(--ink);font-size:11px;font-weight:900;line-height:1;vertical-align:middle}
@@ -105,7 +109,16 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 /* ---------- MOBILE: < 768px ---------- */
 @media (max-width:767px){
   body{font-size:16px}
-  .app-main{max-width:100%;padding-inline:12px;padding-bottom:118px}
+  .app-main{max-width:100%;padding-inline:12px;padding-bottom:calc(118px + env(safe-area-inset-bottom))}
+  .mobile-header-row{gap:8px}
+  .mobile-header-brand{width:100%;}
+  .mobile-header-wallet{position:relative;isolation:isolate;overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:12px;row-gap:0;width:100%!important;padding:10px 12px;border:1px solid var(--line);border-radius:16px;background:var(--surface);text-align:left!important}
+  .mobile-header-wallet > :not(svg){position:relative;z-index:1}
+  .mobile-header-wallet > .label{grid-column:1;grid-row:1}
+  .mobile-header-wallet > p:nth-of-type(2){grid-column:2;grid-row:1/3;align-self:center;white-space:nowrap}
+  .mobile-header-wallet > p:nth-of-type(3){grid-column:1;grid-row:2}
+  .mobile-header-wallet > div{grid-column:1/-1;grid-row:3;justify-content:flex-start!important;margin-top:8px}
+  .top-nav{display:none!important}
   .label{font-size:12px}
   p,span,button,input,textarea{font-size:inherit}
   .field{min-height:56px;padding:14px 14px;font-size:16px;border-radius:14px}
@@ -169,6 +182,24 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
   .tx-table{ min-width:640px}
   .mobile-bottom-nav{display:none}
   .top-nav{display:flex}
+  /* Tablet kiosk interaction: prioritize fingers over mouse/keyboard-sized controls. */
+  button,.sidebar-nav-btn,.chip,.tx-mini-btn{min-height:56px}
+  .top-nav button{min-height:56px;padding-inline:18px;font-size:15px}
+  .field{min-height:60px;padding:16px;font-size:18px}
+  .mobile-header-wallet button{min-height:48px;padding-inline:14px;font-size:14px}
+  .tx-table tbody tr{min-height:64px}
+  .tx-table td{padding-block:16px}
+  .services-grid .big-btn{min-height:112px}
+  .sheet-save-bar .big-btn{min-height:60px}
+  /* No hover-only feedback: tablet controls respond clearly on touch. */
+  button{-webkit-tap-highlight-color:rgba(14,159,95,.16);touch-action:manipulation}
+}
+
+/* Coarse-pointer hardware (including a touch tablet in a wider window) gets kiosk-sized hit targets too. */
+@media (pointer:coarse){
+  button,.sidebar-nav-btn,.chip,.tx-mini-btn{min-height:48px}
+  .field{min-height:56px}
+  button{-webkit-tap-highlight-color:rgba(14,159,95,.16);touch-action:manipulation}
 }
 
 /* ---------- DESKTOP: >= 1024px ---------- */
@@ -180,8 +211,14 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
   .mobile-bottom-nav{display:none!important}
   .top-nav{display:none!important}
   .fab-desktop{bottom:24px!important;right:28px!important}
-  /* Dashboard: 3 columns */
-  .dashboard-grid{display:grid;grid-template-columns:0.92fr 1.25fr 0.92fr;gap:16px;align-items:start}
+  /* Dashboard defaults to a roomy two-column layout; expand on wide displays. */
+  .dashboard-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+  .dash-col-right{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+  .dash-col-right > div:first-child{grid-row:span 2}
+  .dash-col-right > *{min-width:0}
+  .dash-col-right .card{min-width:0}
+  .dash-col-right > section:last-child{grid-column:1/-1}
+  .dash-col-middle [class~="lg:grid-cols-4"]{grid-template-columns:repeat(2,minmax(0,1fr))}
   .dash-summary-grid{grid-template-columns:1fr 1fr!important}
   .quick-actions-grid{grid-template-columns:1fr 1fr}
   .favorites-scroll{flex-wrap:wrap}
@@ -210,6 +247,27 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
   .tx-table td{padding:14px 16px}
   .tx-table thead th{padding:14px 16px}
 }
-@media (min-width:1440px){
-  .app-main{max-width:1280px}
+@media (min-width:768px){
+  .eload-topup-art{right:156px!important;top:2px!important;width:144px!important;height:144px!important;opacity:.72!important}
+}
+@media (min-width:768px) and (max-width:1023px){
+  .mobile-header-wallet{position:relative;isolation:isolate;overflow:hidden;padding:8px 12px;border:1px solid var(--line);border-radius:16px;background:var(--surface)}
+  .mobile-header-wallet > :not(svg){position:relative;z-index:1}
+  .mobile-wallet-art{opacity:.3!important}
+}
+@media (min-width:1024px){
+  .mobile-wallet-art{display:none}
+}
+@media (min-width:1200px) and (max-width:1539px){
+  .dash-col-right{grid-template-columns:1.2fr 1fr 1fr}
+  .dash-col-right > div:first-child{grid-row:auto}
+  .dash-col-right > section:last-child{grid-column:auto}
+}
+@media (min-width:1540px){
+  .app-main{max-width:1500px}
+  .dashboard-grid{grid-template-columns:minmax(280px,0.95fr) minmax(420px,1.35fr) minmax(280px,0.95fr)}
+  .dash-col-right{display:flex;grid-column:auto}
+  .dash-col-right > div:first-child{grid-row:auto}
+  .dash-col-right > section:last-child{grid-column:auto}
+  .dash-col-middle [class~="lg:grid-cols-4"]{grid-template-columns:repeat(4,minmax(0,1fr))}
 }
