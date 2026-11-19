@@ -800,7 +800,7 @@ function Dashboard(){
       const parsed=JSON.parse(await file.text());
       if(!Array.isArray(parsed) || !parsed.length) throw new Error('Import file must contain a non-empty array of transactions.');
       const rows=parsed.map(item=>{
-        if(!item || typeof item.id!=='string' || !item.id.startsWith('mari-oct-2026-') || !item.value || item.value.type!=='E-Load' || !['Globe','Smart','DITO'].includes(item.value.network) || !/^2026-10-\\d{2}$/.test(item.value.date) || !(Number(item.value.amount)>0)) throw new Error('This file contains a row that is not a valid October 2026 E-Load sale. Nothing was imported.');
+        if(!item || typeof item.id!=='string' || !item.id.startsWith('mari-oct-2026-') || !item.value || item.value.type!=='E-Load' || !['Globe','Smart','DITO'].includes(item.value.network) || !/^2026-10-\d{2}$/.test(item.value.date) || !(Number(item.value.amount)>0)) throw new Error('This file contains a row that is not a valid October 2026 E-Load sale. Nothing was imported.');
         return item;
       });
       let imported=0, skipped=0;
