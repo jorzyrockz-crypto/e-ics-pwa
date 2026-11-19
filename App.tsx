@@ -121,7 +121,27 @@ function writeStoredRecords(collection:string, records:any[]){
   catch { throw new Error('Could not save records in this browser. Check available storage and try again.'); }
 }
 let activeUser: FirebaseUser | null = null;
+let localPreviewMode = false;
+function previewRecords(action:string,args:any){
+  const collectionName=args?.collection;
+  if(!collectionName) throw new Error('A record collection is required.');
+  const key=`eics.preview.${collectionName}`;
+  let rows:any[]=[];
+  try{ rows=JSON.parse(localStorage.getItem(key)||'[]'); if(!Array.isArray(rows)) rows=[]; }catch{}
+  if(action==='records.list') return {records:rows.slice(0,args.limit||rows.length)};
+  if(action==='records.create'){
+    if(args.id && rows.some(row=>row.id===args.id)) return {...rows.find(row=>row.id===args.id),skipped:true};
+    const row={id:args.id||uid(),value:args.value}; rows.unshift(row); localStorage.setItem(key,JSON.stringify(rows)); return {...row,skipped:false};
+  }
+  if(action==='records.replace'){
+    const idx=rows.findIndex(row=>row.id===args.id); if(idx<0) throw new Error('Record not found.');
+    rows[idx]={id:args.id,value:args.value}; localStorage.setItem(key,JSON.stringify(rows)); return rows[idx];
+  }
+  if(action==='records.delete'){ rows=rows.filter(row=>row.id!==args.id); localStorage.setItem(key,JSON.stringify(rows)); return {id:args.id}; }
+  throw new Error(`Unsupported action: ${action}`);
+}
 async function api(action:string, args:any){
+  if(localPreviewMode) return previewRecords(action,args);
   if (!activeUser) throw new Error('Sign in with Google to access your synced records.');
   return firestoreRecords(action, args, activeUser);
 }
@@ -1021,6 +1041,8 @@ function Dashboard(){
     return ()=> window.removeEventListener('keydown', onKeyDown);
   }, [showTx, detail, customerDetail, showCustomerForm, showWalletAction, showEOD, addNameTarget, confirmDelete, confirmDeleteCustomer, confirmClear, showHelp, shortcutsOn, tab, filtered, sortedCustomers, selectedTxId, selectedCustomerId, fType, fAmount, last7, selectedDay, meta, showServices, dashboardRecent, recentIndex, expectedCash, startingFloat]);
 
+  const reminderPreview = useMemo(()=>utangReminder ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(utangReminderSvg(utangReminder.value,meta.businessName))}` : '',[utangReminder,meta.businessName]);
+
   if(loading) return <main className="min-h-screen grid place-items-center bg-[var(--bg)] px-5 py-10" role="status" aria-live="polite" aria-label={`Loading E-LOAD Tracker, ${loadingProgress}%`}>
     <section className="w-full max-w-sm rounded-[28px] border border-[var(--line)] bg-[var(--surface)] p-7 sm:p-8 text-center shadow-[0_18px_50px_rgba(23,37,28,.09)]">
       <div className="relative mx-auto h-[76px] w-[76px]"><img src={`${import.meta.env.BASE_URL}icons/eload-tracker-192.png?v=3`} alt="" aria-hidden="true" className="h-full w-full rounded-[25px] object-cover shadow-[0_10px_24px_rgba(14,42,71,.2)]"/><span className="absolute -right-1 -top-1 h-4 w-4 rounded-full border-[3px] border-[var(--surface)] bg-[var(--green)] animate-pulse"/></div>
@@ -1037,8 +1059,6 @@ function Dashboard(){
   const diff = round2(actualCash - expectedCash);
   const diffLabel = diff===0 ? 'Exact' : diff<0 ? `Short ${peso(Math.abs(diff))}` : `Over ${peso(diff)}`;
   const diffColor = diff===0 ? 'var(--green)' : diff<0 ? 'var(--red)' : '#2563eb';
-  const reminderPreview = useMemo(()=>utangReminder ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(utangReminderSvg(utangReminder.value,meta.businessName))}` : '',[utangReminder,meta.businessName]);
-
   return (
     <div data-safe-area-inset-root style={{boxSizing:'border-box', paddingTop:'var(--safe-area-inset-top)'}} className="min-h-screen bg-[var(--bg)] text-[var(--ink)] overflow-x-clip">
       {saveMsg && <div className="toast-wrap fixed left-0 right-0 z-[70] pointer-events-none px-3 flex justify-center" style={{top:'calc(var(--safe-area-inset-top) + 12px)'}}><div data-toast role="status" aria-live="polite" onKeyDown={(e)=>{ if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); setSaveMsg(''); } }} className="pointer-events-auto flex w-full max-w-[560px] items-center gap-2.5 rounded-full bg-white px-3 py-2.5 shadow-[0_10px_30px_rgba(0,0,0,0.16)] border border-[var(--line)]"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full" style={{background: toastKind==='error' ? '#fef2f2' : '#e6f7ee'}}>{toastKind==='error' ? <AlertTriangle size={18} className="text-[var(--red)]"/> : <CheckCircle2 size={18} className="text-[var(--green)]"/>}</span><p className="min-w-0 flex-1 text-[13px] sm:text-sm font-bold leading-snug break-words">{saveMsg}</p>{toastActionLabel && <button type="button" onClick={()=>{ const fn=toastActionRef.current; setSaveMsg(''); if(fn) fn(); }} className="shrink-0 min-h-[32px] px-3 rounded-full bg-[var(--ink)] text-white text-xs font-black flex items-center gap-1"><Undo2 size={14}/> {toastActionLabel}</button>}<button type="button" onClick={()=>setSaveMsg('')} aria-label="Dismiss notification" className="grid h-7 w-7 shrink-0 place-items-center rounded-full hover:bg-[var(--surface2)]"><X size={16}/></button></div></div>}
@@ -1611,9 +1631,12 @@ export default function App(){
   const [authReady, setAuthReady] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState('');
-  useEffect(() => observeAuth(auth, u => { activeUser = u; setUser(u); setAuthReady(true); }), []);
+  const [previewMode, setPreviewMode] = useState(false);
+  useEffect(() => observeAuth(auth, u => { if(!localPreviewMode){ activeUser = u; setUser(u); } setAuthReady(true); }), []);
   const handleSignIn = async () => { setSigningIn(true); setAuthError(''); try { await signInWithGoogle(); } catch (e) { setAuthError(e instanceof Error ? e.message : 'Google sign-in failed. Please try again.'); } finally { setSigningIn(false); } };
+  const enterLocalPreview = () => { localPreviewMode=true; activeUser=null; setPreviewMode(true); setUser({uid:'local-preview',displayName:'Local Preview',email:null} as FirebaseUser); };
+  const handleSignOut = async () => { if(previewMode){ localPreviewMode=false; setPreviewMode(false); setUser(null); return; } await logOut(); };
   if (!authReady) return <div className="min-h-screen grid place-items-center bg-[#f5f8f6] text-[#163b2a]"><LoaderCircle className="animate-spin" size={30}/><span className="sr-only">Checking sign-in…</span></div>;
-  if (!user) return <div className="min-h-screen bg-[#f5f8f6] text-[#163b2a] flex items-center justify-center p-5"><section className="w-full max-w-md rounded-[28px] bg-white shadow-xl border border-[#e1ebe5] p-7 sm:p-9 text-center"><div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-[#e9f7ef] text-[#16834c]"><Smartphone size={28}/></div><p className="text-xs font-black uppercase tracking-[.18em] text-[#16834c]">E-Load Tracker</p><h1 className="mt-2 font-display text-3xl font-extrabold">Your store, in sync.</h1><p className="mt-3 text-sm leading-6 text-slate-600">Sign in with Google to securely access your dashboard and sync your store records across devices.</p><button type="button" onClick={handleSignIn} disabled={signingIn} className="mt-7 flex min-h-12 w-full items-center justify-center gap-3 rounded-xl bg-[#163b2a] px-5 font-bold text-white disabled:opacity-60">{signingIn?<LoaderCircle className="animate-spin" size={20}/>:<span className="grid h-6 w-6 place-items-center rounded-full bg-white text-sm font-black text-[#4285F4]">G</span>}{signingIn?'Connecting…':'Continue with Google'}</button>{authError&&<p role="alert" className="mt-4 text-sm font-semibold text-red-600">{authError}</p>}<p className="mt-6 text-xs text-slate-500">Your data is stored privately in your Google-account workspace.</p></section></div>;
-  return <><div className="account-session-bar"><span className="account-session-name">{user.displayName || user.email}</span><button onClick={()=>logOut()} aria-label="Sign out" title="Sign out" className="account-session-signout"><LogOut size={17}/><span>Sign out</span></button></div><Dashboard/></>;
+  if (!user) return <div className="min-h-screen bg-[#f5f8f6] text-[#163b2a] flex items-center justify-center p-5"><section className="w-full max-w-md rounded-[28px] bg-white shadow-xl border border-[#e1ebe5] p-7 sm:p-9 text-center"><div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-[#e9f7ef] text-[#16834c]"><Smartphone size={28}/></div><p className="text-xs font-black uppercase tracking-[.18em] text-[#16834c]">E-Load Tracker</p><h1 className="mt-2 font-display text-3xl font-extrabold">Your store, in sync.</h1><p className="mt-3 text-sm leading-6 text-slate-600">Sign in with Google to securely access your dashboard and sync your store records across devices.</p><button type="button" onClick={handleSignIn} disabled={signingIn} className="mt-7 flex min-h-12 w-full items-center justify-center gap-3 rounded-xl bg-[#163b2a] px-5 font-bold text-white disabled:opacity-60">{signingIn?<LoaderCircle className="animate-spin" size={20}/>:<span className="grid h-6 w-6 place-items-center rounded-full bg-white text-sm font-black text-[#4285F4]">G</span>}{signingIn?'Connecting…':'Continue with Google'}</button>{authError&&<p role="alert" className="mt-4 text-sm font-semibold text-red-600">{authError}</p>}{import.meta.env.DEV && <><div className="my-5 flex items-center gap-3 text-xs font-bold text-slate-400"><span className="h-px flex-1 bg-slate-200"/>PREVIEW ONLY<span className="h-px flex-1 bg-slate-200"/></div><button type="button" onClick={enterLocalPreview} className="flex min-h-12 w-full items-center justify-center rounded-xl border-2 border-[#16834c] px-5 font-extrabold text-[#16834c] hover:bg-[#effaf3]">Preview without signing in</button><p className="mt-2 text-xs font-semibold text-slate-500">Preview data stays in this browser and is not synced to your Google account.</p></>}<p className="mt-6 text-xs text-slate-500">Your data is stored privately in your Google-account workspace.</p></section></div>;
+  return <><div className="account-session-bar">{previewMode&&<span className="mr-auto rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-900">Preview mode · local data only</span>}<span className="account-session-name">{user.displayName || user.email}</span><button onClick={handleSignOut} aria-label={previewMode?'Exit preview':'Sign out'} title={previewMode?'Exit preview':'Sign out'} className="account-session-signout"><LogOut size={17}/><span>{previewMode?'Exit preview':'Sign out'}</span></button></div><Dashboard/></>;
 }
