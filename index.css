@@ -270,11 +270,14 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 }
 @media (min-width:1540px){
   .app-main{max-width:1500px}
-  .dashboard-grid{grid-template-columns:minmax(280px,0.95fr) minmax(420px,1.35fr) minmax(280px,0.95fr)}
-  .dash-col-right{display:flex;grid-column:auto}
+  .dashboard-grid{width:100%;min-width:0;grid-template-columns:minmax(0,.95fr) minmax(0,1.35fr) minmax(0,.95fr)}
+  .dash-col-right{display:flex;grid-column:auto;min-width:0;width:100%}
   .dash-col-right > div:first-child{grid-row:auto}
   .dash-col-right > section:last-child{grid-column:auto}
+  .dash-col-right > *{min-width:0;max-width:100%}
   .dash-col-middle [class~="lg:grid-cols-4"]{grid-template-columns:repeat(4,minmax(0,1fr))}
+  [data-recent-list] .dashboard-tx-row{flex-wrap:wrap;gap:8px;padding-inline:10px}
+  [data-recent-list] .dashboard-tx-row > span:nth-of-type(2){flex:1 1 calc(100% - 56px);min-width:0}
 }
 
 /* Landscape tablet kiosk: use the full canvas and keep touch navigation visible. */
