@@ -303,3 +303,11 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
   .top-suki-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}
   .mobile-header-wallet{max-width:340px}
 }
+
+/* Signed-in account controls stay in document flow instead of covering dashboard content. */
+.account-session-bar{position:relative;z-index:45;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-height:48px;padding:6px 16px;background:var(--bg);color:var(--ink)}
+.account-session-name{max-width:min(60vw,260px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:800}
+.account-session-signout{display:flex;align-items:center;justify-content:center;gap:6px;min-height:40px;padding:0 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--muted);font-size:13px;font-weight:800}
+.account-session-signout:hover{background:var(--surface2)}
+@media (min-width:1024px){.account-session-bar{padding-inline:28px}.account-session-signout{min-height:44px}}
+@media (pointer:coarse){.account-session-signout{min-height:48px;padding-inline:16px}}
