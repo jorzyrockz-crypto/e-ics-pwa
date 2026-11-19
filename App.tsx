@@ -4,6 +4,8 @@ import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Set
 type TxType = 'E-Load' | 'Cash In' | 'Cash Out' | 'Top-Up';
 type Tx = { kind?:string; type:TxType; network:string; eloadKind?:'regular'|'promo'; promoName?:string; promoDetails?:string; promoValidity?:string; provider:string; amount:number; fee:number; selling:number; discount?:number; phone:string; customerName?:string; payment:string; notes:string; date:string; time:string; createdAt:number; sample?:boolean; utang?:boolean; utangStatus?:'unpaid'|'paid'; promiseDate?:string; paidAmount?:number; history?:{oldAmount:number;newAmount:number;time:string;date:string}[] };
 type Wallets = { cash:number; maribank:number };
+type WalletAdjustment = { wallet:keyof Wallets; mode:'add'|'deduct'; amount:number; category:string; note:string; date:string; time:string; createdAt:number };
+type WalletAdjustmentRecord = { id:string; value:WalletAdjustment };
 type Meta = { kind:string; businessName:string; eloadPct:number; cashInPct:number; cashOutPct:number; palawanFee:number; wallets:Wallets; lastClosed:string; lowThreshold:number; startingFloat?:number; startingFloatDate?:string };
 type TxRecord = { id:string; value:Tx };
 type Customer = { name:string; phone:string; notes:string; createdAt:number; totalTransactions:number; totalAmount:number; sample?:boolean };
@@ -285,6 +287,9 @@ export default function App(){
   const [fDate,setFDate]=useState(todayKey());
   const [fTime,setFTime]=useState('10:30 AM');
   const [walletAmt,setWalletAmt]=useState(500);
+  const [walletActionCategory,setWalletActionCategory]=useState('Shopee / Online shopping');
+  const [walletActionNote,setWalletActionNote]=useState('');
+  const [walletAdjustments,setWalletAdjustments]=useState<WalletAdjustmentRecord[]>([]);
   const [walletMode,setWalletMode]=useState<'add'|'deduct'>('add');
 
   const metaRef=useRef(meta); metaRef.current=meta;
@@ -310,6 +315,7 @@ export default function App(){
     setCustomers(clist);
     try{ const dr:any = await api("records.list", {collection:'daily_reports', limit:100}); const dlist:DailyReportRecord[] = (dr.records||[]).map((r:any)=>({id:r.id, value:r.value})).filter((x:any)=>x.value && x.value.date); dlist.sort((a,b)=>b.value.date.localeCompare(a.value.date)); setDailyReports(dlist); }catch{}
     try{ const fv:any = await api("records.list", {collection:'favorites', limit:100}); const flist:FavoriteRecord[] = (fv.records||[]).map((r:any)=>({id:r.id, value:r.value})).filter((x:any)=>x.value && x.value.phone); flist.sort((a,b)=>b.value.createdAt-a.value.createdAt); setFavorites(flist); }catch{}
+    try{ const wa:any = await api("records.list", {collection:'wallet_adjustments', limit:200}); const wlist:WalletAdjustmentRecord[] = (wa.records||[]).map((r:any)=>({id:r.id,value:r.value})).filter((x:any)=>x.value && x.value.wallet && x.value.mode); wlist.sort((a,b)=>b.value.createdAt-a.value.createdAt); setWalletAdjustments(wlist); }catch{}
     return list;
   }
   async function createRow(row:Tx){
@@ -414,7 +420,7 @@ export default function App(){
   const frequentCustomers = useMemo(()=>{ return [...customers].sort((a,b)=> (customerStats.get(digitsOnly(b.value.phone))?.count||0)-(customerStats.get(digitsOnly(a.value.phone))?.count||0)).slice(0,5); },[customers,customerStats]);
   const last7 = useMemo(()=>{ const out=[]; for(let i=6;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); const k=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; const arr=txs.filter(t=>t.date===k); out.push({key:k, label:d.toLocaleDateString('en-PH',{weekday:'short'}), sales: sum(arr.filter(t=>salesTypes.includes(t.type)),t=>t.amount), profit: sum(arr,t=>txProfit(t)), count:arr.filter(t=>salesTypes.includes(t.type)).length }); } return out; },[txs]);
   const maxSales = Math.max(1,...last7.map(d=>d.sales));
-  const todayCashMove = useMemo(()=>{ let cash=0; todayTxs.forEach(t=>{ if(t.utang && t.utangStatus==='unpaid') return; const d=applyTransaction({cash:0, maribank:0}, t, 1); cash+=d.cash; }); return round2(cash); },[todayTxs]);
+  const todayCashMove = useMemo(()=>{ let cash=0; todayTxs.forEach(t=>{ if(t.utang && t.utangStatus==='unpaid') return; const d=applyTransaction({cash:0, maribank:0}, t, 1); cash+=d.cash; }); walletAdjustments.forEach(a=>{if(a.value.wallet==='cash'&&a.value.date===todayKey()) cash+=a.value.mode==='add'?a.value.amount:-a.value.amount;}); return round2(cash); },[todayTxs,walletAdjustments]);
   const startingFloat = useMemo(()=>{
     if(meta.startingFloatDate===todayKey() && typeof meta.startingFloat==='number') return meta.startingFloat;
     const prev = dailyReports.filter(r=>r.value.date < todayKey()).sort((a,b)=>b.value.date.localeCompare(a.value.date))[0];
@@ -458,7 +464,7 @@ export default function App(){
   const reportTopUpFees = sum(reportTxs.filter(t=>t.type==='Top-Up'),t=>t.fee||0);
   const reportProfit = sum(reportTxs,t=>txProfit(t));
   const denom = useMemo(()=>{ const m=new Map<number,number>(); reportTxs.filter(t=>t.type==='E-Load').forEach(t=>m.set(t.amount,(m.get(t.amount)||0)+1)); return [...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5); },[reportTxs]);
-  const todayWalletMoves = useMemo(()=>{ const m:Record<string,number>={cash:0, maribank:0}; todayTxs.forEach(t=>{ if(t.utang && t.utangStatus==='unpaid') return; const d=applyTransaction({cash:0, maribank:0}, t, 1); m.cash=round2(m.cash+d.cash); m.maribank=round2(m.maribank+d.maribank); }); return m; },[todayTxs]);
+  const todayWalletMoves = useMemo(()=>{ const m:Record<string,number>={cash:0, maribank:0}; todayTxs.forEach(t=>{ if(t.utang && t.utangStatus==='unpaid') return; const d=applyTransaction({cash:0, maribank:0}, t, 1); m.cash=round2(m.cash+d.cash); m.maribank=round2(m.maribank+d.maribank); }); walletAdjustments.forEach(a=>{if(a.value.date===todayKey()) m[a.value.wallet]=round2(m[a.value.wallet]+(a.value.mode==='add'?a.value.amount:-a.value.amount));}); return m; },[todayTxs,walletAdjustments]);
   const profitPerDay = useMemo(()=>{ const map=new Map<string,{date:string; sales:number; profit:number; count:number}>(); reportTxs.forEach(t=>{ const cur=map.get(t.date)||{date:t.date,sales:0,profit:0,count:0}; if(salesTypes.includes(t.type)){ cur.sales+=t.amount; cur.count+=1; } cur.profit+=txProfit(t); map.set(t.date,cur); }); return [...map.values()].sort((a,b)=>b.date.localeCompare(a.date)); },[reportTxs]);
 
   const topSuki = useMemo(()=>{
@@ -709,10 +715,27 @@ export default function App(){
     } catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
     setSaving(false);
   }
+  function openWalletAction(wallet:keyof Wallets, mode:'add'|'deduct'){
+    setShowWalletAction(wallet); setWalletMode(mode); setWalletAmt(500);
+    setWalletActionCategory(mode==='deduct'?'Shopee / Online shopping':'Balance correction');
+    setWalletActionNote('');
+  }
   async function doWalletAction(){
-    if(!showWalletAction || !walletAmt || walletAmt<=0) return;
+    if(!showWalletAction || !walletAmt || walletAmt<=0){ showErrorToast('Enter an amount greater than zero.'); return; }
+    if(walletMode==='deduct' && walletAmt>metaRef.current.wallets[showWalletAction]){ showErrorToast('Deduction exceeds the current wallet balance.'); return; }
+    if(walletMode==='deduct' && !walletActionCategory.trim() && !walletActionNote.trim()){ showErrorToast('Choose a reason or enter a note for this deduction.'); return; }
     setSaving(true);
-    try{ const next={...metaRef.current, wallets:{...metaRef.current.wallets, [showWalletAction]: round2(metaRef.current.wallets[showWalletAction] + (walletMode==='add'?walletAmt:-walletAmt))}}; await saveMeta(next); setShowWalletAction(null); setSaveMsg('Wallet balance updated.'); } catch(e){ setSaveMsg(e instanceof Error?e.message:String(e)); }
+    let adjustmentId:string|undefined;
+    try{
+      const adjustment:WalletAdjustment={wallet:showWalletAction,mode:walletMode,amount:round2(walletAmt),category:walletMode==='deduct'?walletActionCategory.trim():'Balance correction',note:walletActionNote.trim(),date:todayKey(),time:new Date().toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit'}),createdAt:Date.now()};
+      const created:any=await api('records.create',{collection:'wallet_adjustments',value:adjustment,idempotency_key:`wallet-${adjustment.createdAt}-${uid()}`});
+      adjustmentId=created.id;
+      const next={...metaRef.current,wallets:{...metaRef.current.wallets,[showWalletAction]:round2(metaRef.current.wallets[showWalletAction]+(walletMode==='add'?walletAmt:-walletAmt))}};
+      try{ await saveMeta(next); }catch(e){ if(adjustmentId) await api('records.delete',{collection:'wallet_adjustments',id:adjustmentId}); throw e; }
+      setWalletAdjustments(prev=>[{id:adjustmentId||uid(),value:adjustment},...prev]);
+      const label=walletMode==='deduct'?`Deducted ${peso(walletAmt)} — ${adjustment.category}${adjustment.note?`: ${adjustment.note}`:''}.`:`Added ${peso(walletAmt)} to ${walletDefs.find(w=>w.key===showWalletAction)?.label}.`;
+      setShowWalletAction(null); setSaveMsg(label);
+    }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
     setSaving(false);
   }
   async function clearSample(){
@@ -741,7 +764,8 @@ export default function App(){
   function exportAllCSV(){
     const rows:string[][] = [['Date','Type','Network','Load Kind','Promo Name','Promo Inclusions','Promo Validity','Customer','Number','Amount','Fee','Profit','Notes','Status','Promise to Pay','Paid Amount','Remaining'].map(String) as any];
     records.forEach(r=>{ const v=r.value; rows.push([v.date, v.type, v.network||'', v.eloadKind||'', v.promoName||'', v.promoDetails||'', v.promoValidity||'', v.customerName||'', v.phone, String(v.amount), String(v.fee||0), String(txProfit(v)), v.notes||'', v.utang ? (v.utangStatus==='paid'?'Paid (Utang)':utangPromiseLabel(v)) : 'Paid', v.promiseDate||'', String(v.paidAmount||0), String(v.utang?utangRemaining(v):0)]); });
-    downloadCSV('eload-transactions.csv', rows as any);
+    walletAdjustments.forEach(a=>{const v=a.value; rows.push([v.date,v.mode==='deduct'?'Wallet Deduction':'Wallet Addition',v.wallet,'','','','','','',String(v.mode==='deduct'?-v.amount:v.amount),'','',`${v.category}${v.note?` — ${v.note}`:''}`,'Recorded','','','']);});
+    downloadCSV('eload-records.csv', rows as any);
     showToast('CSV exported.');
   }
   function exportDailyCSV(){
@@ -1006,7 +1030,7 @@ export default function App(){
 
             <section className="card p-4 sm:p-5 mt-3">
               <div className="flex justify-between items-start gap-2"><div><h2 className="font-display font-bold text-xl flex items-center gap-2"><Crown size={20} className="text-[var(--amber)]"/> Top Suki this week</h2><p className="text-sm text-[var(--muted)] font-semibold">Your most frequent customers — tap to transact again fast.</p></div><button onClick={()=>setTab('customers')} className="text-sm font-black text-[var(--green)] shrink-0">All customers →</button></div>
-              {topSuki.length===0 ? <p className="text-sm font-bold text-[var(--muted)] mt-3">No customer transactions this week yet. Save a sale with a name or number and your suki will appear here.</p> : <div className="grid sm:grid-cols-3 gap-3 mt-3">{topSuki.map((s,i)=>{ const rec=customerByPhone.get(s.phone); return <div key={s.phone} className="rounded-2xl bg-[var(--surface2)] p-3"><div className="flex items-center gap-2"><span className="w-11 h-11 rounded-full bg-[#0e2a47] text-white grid place-items-center font-black shrink-0">{displayInitials(s.name, s.phone)}</span><div className="min-w-0"><p className="font-extrabold truncate">#{i+1} {displayNameOnly(s.name, s.phone)}</p><p className="text-xs font-bold text-[var(--muted)]">{isRealName(s.name, s.phone) ? `${formatPhone(s.phone)} • ` : ''}{s.count} transactions • {peso(s.amount)}</p></div></div><div className="grid grid-cols-3 gap-1.5 mt-3"><button onClick={()=>openNew('E-Load', rec||null)} className="min-h-[40px] rounded-lg bg-[var(--green)] text-white text-[11px] font-black">E-Load</button><button onClick={()=>openNew('Cash In', rec||null)} className="min-h-[40px] rounded-lg bg-[#2563eb] text-white text-[11px] font-black">Cash In</button><button onClick={()=>openNew('Cash Out', rec||null)} className="min-h-[40px] rounded-lg bg-[var(--purple)] text-white text-[11px] font-black">Cash Out</button></div></div> })}</div>}
+              {topSuki.length===0 ? <p className="text-sm font-bold text-[var(--muted)] mt-3">No customer transactions this week yet. Save a sale with a name or number and your suki will appear here.</p> : <div className="top-suki-grid mt-3">{topSuki.map((s,i)=>{ const rec=customerByPhone.get(s.phone); return <div key={s.phone} className="top-suki-card rounded-2xl bg-[var(--surface2)] p-3"><div className="flex items-center gap-2"><span className="w-11 h-11 rounded-full bg-[#0e2a47] text-white grid place-items-center font-black shrink-0">{displayInitials(s.name, s.phone)}</span><div className="min-w-0"><p className="font-extrabold truncate">#{i+1} {displayNameOnly(s.name, s.phone)}</p><p className="text-xs font-bold text-[var(--muted)]">{isRealName(s.name, s.phone) ? `${formatPhone(s.phone)} • ` : ''}{s.count} transactions • {peso(s.amount)}</p></div></div><div className="top-suki-actions grid grid-cols-3 gap-1.5 mt-3"><button onClick={()=>openNew('E-Load', rec||null)} className="min-h-[40px] rounded-lg bg-[var(--green)] text-white text-[11px] font-black">E-Load</button><button onClick={()=>openNew('Cash In', rec||null)} className="min-h-[40px] rounded-lg bg-[#2563eb] text-white text-[11px] font-black">Cash In</button><button onClick={()=>openNew('Cash Out', rec||null)} className="min-h-[40px] rounded-lg bg-[var(--purple)] text-white text-[11px] font-black">Cash Out</button></div></div> })}</div>}
             </section>
 
             <section className="card p-4 sm:p-5 mt-3">
@@ -1107,8 +1131,9 @@ export default function App(){
         {tab==='wallets' && (
           <main>
             <div className="grid sm:grid-cols-2 gap-3">
-              {walletDefs.map(w=> <article key={w.key} className="card p-4 sm:p-5"><div className="flex justify-between items-start"><div><p className="font-display font-bold text-lg">{w.label}</p><p className="text-xs font-bold text-[var(--muted)]">{w.hint}</p></div><span className="w-10 h-10 rounded-xl grid place-items-center text-white shrink-0" style={{background:w.color}}><Wallet size={20}/></span></div><p className="font-display font-extrabold mt-4" style={{fontSize:'clamp(28px,4vw,36px)'}}>{peso(meta.wallets[w.key])}</p><p className="text-sm font-bold">Today: <span className={todayWalletMoves[w.key]>=0?'text-[var(--green)]':'text-[var(--red)]'}>{todayWalletMoves[w.key]?`${todayWalletMoves[w.key]>0?'+':''}${peso(todayWalletMoves[w.key])}`:'₱0.00'}</span></p>{w.key==='maribank' && maribankLow && <p className="text-xs font-black text-[#b45309] bg-[#fffbeb] rounded-lg px-2 py-1.5 mt-2">⚠ Main Wallet low - top up soon (threshold {peso(meta.lowThreshold)})</p>}<div className="grid grid-cols-2 gap-2 mt-4"><button onClick={()=>{setShowWalletAction(w.key); setWalletMode('add'); setWalletAmt(500);}} className="min-h-[44px] rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-xs">+ Add Funds</button><button onClick={()=>{setShowWalletAction(w.key); setWalletMode('deduct'); setWalletAmt(500);}} className="min-h-[44px] rounded-xl bg-[var(--surface2)] border border-[var(--line)] font-black text-xs">− Deduct</button></div>{w.key==='maribank' && <button onClick={()=>openNew('Top-Up')} className="big-btn bg-[#00a651] text-white w-full mt-2 text-sm"><RefreshCw size={18}/> Top-Up via External Provider</button>}</article>)}
+              {walletDefs.map(w=> <article key={w.key} className="card p-4 sm:p-5"><div className="flex justify-between items-start"><div><p className="font-display font-bold text-lg">{w.label}</p><p className="text-xs font-bold text-[var(--muted)]">{w.hint}</p></div><span className="w-10 h-10 rounded-xl grid place-items-center text-white shrink-0" style={{background:w.color}}><Wallet size={20}/></span></div><p className="font-display font-extrabold mt-4" style={{fontSize:'clamp(28px,4vw,36px)'}}>{peso(meta.wallets[w.key])}</p><p className="text-sm font-bold">Today: <span className={todayWalletMoves[w.key]>=0?'text-[var(--green)]':'text-[var(--red)]'}>{todayWalletMoves[w.key]?`${todayWalletMoves[w.key]>0?'+':''}${peso(todayWalletMoves[w.key])}`:'₱0.00'}</span></p>{w.key==='maribank' && maribankLow && <p className="text-xs font-black text-[#b45309] bg-[#fffbeb] rounded-lg px-2 py-1.5 mt-2">⚠ Main Wallet low - top up soon (threshold {peso(meta.lowThreshold)})</p>}<div className="grid grid-cols-2 gap-2 mt-4"><button onClick={()=>openWalletAction(w.key,'add')} className="min-h-[44px] rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-xs">+ Add Funds</button><button onClick={()=>openWalletAction(w.key,'deduct')} className="min-h-[44px] rounded-xl bg-[var(--surface2)] border border-[var(--line)] font-black text-xs">− Deduct</button></div>{w.key==='maribank' && <button onClick={()=>openNew('Top-Up')} className="big-btn bg-[#00a651] text-white w-full mt-2 text-sm"><RefreshCw size={18}/> Top-Up via External Provider</button>}</article>)}
             </div>
+            <section className="card p-4 sm:p-5 mt-3"><div className="flex items-center justify-between gap-2"><div><h2 className="font-display font-bold text-xl">Wallet Activity</h2><p className="text-sm font-semibold text-[var(--muted)]">Manual additions, deductions, and shop spending; these are not sales or profit.</p></div><span className="rounded-full bg-[var(--surface2)] px-3 py-1 text-xs font-black">{walletAdjustments.length} entries</span></div><div className="mt-3 divide-y divide-[var(--line)]">{walletAdjustments.slice(0,12).map(a=>{const v=a.value;const sign=v.mode==='add'?'+':'−';return <div key={a.id} className="flex items-center gap-3 py-3"><span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${v.mode==='add'?'bg-[var(--green-soft)] text-[var(--green)]':'bg-[#fff7ed] text-[#c2410c]'}`}><Wallet size={18}/></span><div className="min-w-0 flex-1"><p className="truncate font-extrabold">{v.mode==='deduct'?v.category:'Funds added'}{v.note?` · ${v.note}`:''}</p><p className="text-xs font-bold text-[var(--muted)]">{walletDefs.find(w=>w.key===v.wallet)?.label} · {dateLabel(v.date)} · {v.time}</p></div><span className={`shrink-0 font-display font-extrabold ${v.mode==='add'?'text-[var(--green)]':'text-[#c2410c]'}`}>{sign}{peso(v.amount)}</span></div>})}{walletAdjustments.length===0&&<p className="py-4 text-sm font-semibold text-[var(--muted)]">No manual wallet activity yet. Use Deduct to log Shopee orders or store purchases.</p>}</div></section>
             <div className="card p-5 mt-3 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between" style={{borderColor:'#00a651', background:'#e8f8ef'}}><div><h2 className="font-display font-bold text-xl text-[#007a3d]">External Provider — Top-Up History</h2><p className="text-sm font-semibold text-[var(--muted)]">External Provider is NOT a customer wallet. Use it only to move Cash on Hand → Main Wallet. Top-ups this week: <b>{peso(weekTopUp)}</b></p></div><button onClick={()=>openNew('Top-Up')} className="big-btn bg-[#00a651] text-white px-5"><RefreshCw size={20}/> Top-Up via External Provider</button></div>
           </main>
         )}
@@ -1275,8 +1300,8 @@ export default function App(){
 
       {showWalletAction && <Sheet onClose={()=>setShowWalletAction(null)} title={`${walletMode==='add'?'Add funds':'Deduct funds'} — ${walletDefs.find(w=>w.key===showWalletAction)?.label}`}>
         <p className="font-bold text-sm text-[var(--muted)]">Current balance: {peso(meta.wallets[showWalletAction])}</p>
-        <label className="label block mt-3">Amount</label><input type="number" value={walletAmt} onChange={e=>setWalletAmt(Number(e.target.value))} className="field mt-1"/>
-        <p className="text-xs font-bold text-[var(--muted)] mt-2">This is a balance correction after counting — it does not create a External Provider top-up.</p>
+        <label className="label block mt-3">Amount</label><input type="number" min="0.01" step="0.01" value={walletAmt} onChange={e=>setWalletAmt(Number(e.target.value))} className="field mt-1" inputMode="decimal"/>
+        {walletMode==='deduct' ? <><label className="label block mt-3">Reason / category</label><select value={walletActionCategory} onChange={e=>setWalletActionCategory(e.target.value)} className="field mt-1"><option>Shopee / Online shopping</option><option>Store purchase</option><option>Personal use</option><option>Other</option></select><label className="label block mt-3">Details (optional)</label><input value={walletActionNote} onChange={e=>setWalletActionNote(e.target.value)} placeholder="e.g. Shopee order, supplies from a nearby store" className="field mt-1"/><p className="text-xs font-bold text-[var(--muted)] mt-2">This records a wallet expense, not a sale or profit. The deduction will appear in Wallet Activity.</p></> : <><label className="label block mt-3">Details (optional)</label><input value={walletActionNote} onChange={e=>setWalletActionNote(e.target.value)} placeholder="Reason for balance correction" className="field mt-1"/><p className="text-xs font-bold text-[var(--muted)] mt-2">This records a balance correction; it is separate from sales and External Provider top-ups.</p></>}
         <button disabled={saving} onClick={doWalletAction} className="big-btn bg-[var(--green)] text-white w-full mt-5">{saving?'Saving…':walletMode==='add'?`Add ${peso(walletAmt)}`:`Deduct ${peso(walletAmt)}`}</button>
         <button onClick={()=>setShowWalletAction(null)} className="big-btn border border-[var(--line)] w-full mt-2">Cancel</button>
       </Sheet>}
