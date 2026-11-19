@@ -1,17 +1,32 @@
 /// <reference types="vite-plugin-pwa/react" />
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { Check, X } from 'lucide-react';
 
-const whatsNew = [
-  'Touch-friendly tablet controls for faster counter service.',
-  'Regular Load and Promo / Bundle tracking, with suggested Globe, Smart, TNT, and DITO offers.',
-  'Improved app update prompts and sharing details.',
-];
+type ReleaseNotes = { version?: string; notes?: string[] };
 
 export default function UpdateNotice() {
   const { needRefresh: [needRefresh], updateServiceWorker } = useRegisterSW();
   const [dismissed, setDismissed] = useState(false);
+  const [notes, setNotes] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!needRefresh) return;
+    let cancelled = false;
+    const url = `${import.meta.env.BASE_URL}whats-new.json?build=${Date.now()}`;
+    fetch(url, { cache: 'no-store' })
+      .then(response => {
+        if (!response.ok) throw new Error('Release notes unavailable');
+        return response.json() as Promise<ReleaseNotes>;
+      })
+      .then(data => {
+        if (!cancelled) setNotes(Array.isArray(data.notes) && data.notes.length ? data.notes : ['General improvements and fixes.']);
+      })
+      .catch(() => {
+        if (!cancelled) setNotes(['General improvements and fixes.']);
+      });
+    return () => { cancelled = true; };
+  }, [needRefresh]);
 
   if (!needRefresh || dismissed) return null;
 
@@ -40,9 +55,9 @@ export default function UpdateNotice() {
               <X size={21} />
             </button>
           </div>
-          <ul className="mt-5 space-y-3">
-            {whatsNew.map(note => (
-              <li key={note} className="flex items-start gap-3 text-sm font-bold leading-relaxed">
+          <ul className="mt-5 space-y-3" aria-live="polite">
+            {(notes.length ? notes : ['Loading release notes…']).map((note, index) => (
+              <li key={`${index}-${note}`} className="flex items-start gap-3 text-sm font-bold leading-relaxed">
                 <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[var(--green-soft)] text-[var(--green)]" aria-hidden="true"><Check size={15} strokeWidth={3} /></span>
                 <span>{note}</span>
               </li>
