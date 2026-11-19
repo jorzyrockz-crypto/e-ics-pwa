@@ -4,8 +4,10 @@ import { VitePWA } from 'vite-plugin-pwa';
 import { resolve } from 'node:path';
 
 const projectDir=process.cwd();
+const deploymentBase=process.env.GITHUB_ACTIONS ? '/e-ics-pwa/' : '/';
 
 export default defineConfig({
+  base: deploymentBase,
   root: 'app',
   publicDir: '../public',
   build: { outDir: '../dist', emptyOutDir: true },
@@ -16,7 +18,7 @@ export default defineConfig({
       devOptions: { enabled: true, type: 'module', resolveTempFolder: ()=>resolve(projectDir,'dev-dist') },
       includeAssets: ['icons/eload-tracker-192.png', 'icons/eload-tracker-512.png'],
       manifest: {
-        id: '/',
+        id: deploymentBase,
         lang: 'en-PH',
         name: 'E-LOAD Tracker — Loads, Cash & Tracking',
         short_name: 'E-LOAD Tracker',
@@ -26,11 +28,11 @@ export default defineConfig({
         background_color: '#f1f5f0',
         display: 'standalone',
         orientation: 'portrait-primary',
-        start_url: '/',
-        scope: '/',
+        start_url: deploymentBase,
+        scope: deploymentBase,
         icons: [
-          { src: '/icons/eload-tracker-192.png?v=2', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: '/icons/eload-tracker-512.png?v=2', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+          { src: `${deploymentBase}icons/eload-tracker-192.png?v=2`, sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: `${deploymentBase}icons/eload-tracker-512.png?v=2`, sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
         ],
       },
     }),

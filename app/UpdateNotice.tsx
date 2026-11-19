@@ -11,7 +11,7 @@ export default function UpdateNotice() {
   return (
     <div className="fixed inset-x-0 bottom-0 z-[100] flex justify-center px-3 pb-[calc(var(--safe-area-inset-bottom)+12px)]" role="status" aria-live="polite">
       <section className="w-full max-w-lg overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[0_12px_36px_rgba(0,0,0,.2)]">
-        <img src="/eload-tracker-share.png" alt="E-LOAD Tracker — Loads, Cash, Tracking" className="block max-h-40 w-full object-cover" />
+        <img src={`${import.meta.env.BASE_URL}eload-tracker-share.png`} alt="E-LOAD Tracker — Loads, Cash, Tracking" className="block max-h-40 w-full object-cover" />
         <div className="flex items-center gap-3 p-4">
           <div className="min-w-0 flex-1">
             <p className="font-extrabold">App update available</p>
