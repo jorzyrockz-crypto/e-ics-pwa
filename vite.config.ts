@@ -4,7 +4,8 @@ import { VitePWA } from 'vite-plugin-pwa';
 import { resolve } from 'node:path';
 
 const projectDir=process.cwd();
-const deploymentBase=process.env.GITHUB_ACTIONS ? '/e-ics-pwa/' : '/';
+const repositoryName=process.env.GITHUB_REPOSITORY?.split('/')[1] || 'eload-tracker';
+const deploymentBase=process.env.GITHUB_ACTIONS ? `/${repositoryName}/` : '/';
 
 export default defineConfig({
   base: deploymentBase,
