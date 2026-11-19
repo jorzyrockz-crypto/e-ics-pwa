@@ -17,7 +17,14 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       devOptions: { enabled: true, type: 'module', resolveTempFolder: ()=>resolve(projectDir,'dev-dist') },
-      includeAssets: ['icons/eload-tracker-192.png', 'icons/eload-tracker-512.png'],
+      includeAssets: [
+        'favicon.ico',
+        'icons/favicon.svg',
+        'icons/favicon-16.png',
+        'icons/favicon-32.png',
+        'icons/eload-tracker-touch-180.png',
+        'icons/eload-tracker-monochrome.svg',
+      ],
       manifest: {
         id: deploymentBase,
         lang: 'en-PH',
@@ -32,8 +39,10 @@ export default defineConfig({
         start_url: deploymentBase,
         scope: deploymentBase,
         icons: [
-          { src: `${deploymentBase}icons/eload-tracker-192.png?v=2`, sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: `${deploymentBase}icons/eload-tracker-512.png?v=2`, sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+          { src: `${deploymentBase}icons/eload-tracker-192.png?v=3`, sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: `${deploymentBase}icons/eload-tracker-512.png?v=3`, sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: `${deploymentBase}icons/eload-tracker-maskable-512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: `${deploymentBase}icons/eload-tracker-monochrome.svg`, sizes: '512x512', type: 'image/svg+xml', purpose: 'monochrome' },
         ],
       },
     }),
