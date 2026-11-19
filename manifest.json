@@ -8,7 +8,7 @@
   "start_url": "/eload-tracker/",
   "scope": "/eload-tracker/",
   "display": "standalone",
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "background_color": "#f1f5f0",
   "theme_color": "#0f172a",
   "icons": [
