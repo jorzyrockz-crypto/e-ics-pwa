@@ -20,6 +20,14 @@ export const signInWithGoogle = () => signInWithPopup(auth, new GoogleAuthProvid
 export const logOut = () => signOut(auth);
 export type { User };
 
+function stripUndefined(value: any): any {
+  if (Array.isArray(value)) return value.map(item => item === undefined ? null : stripUndefined(item));
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).map(([key, item]) => [key, stripUndefined(item)]));
+  }
+  return value;
+}
+
 // Every record is isolated under its authenticated user's Firestore namespace.
 export async function firestoreRecords(action: string, args: any, user: User) {
   const { collection: name, id, value } = args || {};
@@ -32,7 +40,7 @@ export async function firestoreRecords(action: string, args: any, user: User) {
       try {
         const legacy = JSON.parse(localStorage.getItem(`eics.records.${name}`) || '[]');
         if (Array.isArray(legacy) && legacy.length) {
-          await Promise.all(legacy.filter(row => row?.id).map(row => setDoc(doc(recordsRef, String(row.id)), { value: row.value })));
+          await Promise.all(legacy.filter(row => row?.id).map(row => setDoc(doc(recordsRef, String(row.id)), { value: stripUndefined(row.value) })));
           snapshot = await getDocs(recordsRef);
         }
       } catch (error) {
@@ -49,13 +57,15 @@ export async function firestoreRecords(action: string, args: any, user: User) {
       const existing = await getDoc(row);
       if (existing.exists()) return { id: row.id, value: existing.data().value, skipped: true };
     }
-    await setDoc(row, { value });
-    return { id: row.id, value, skipped: false };
+    const cleanValue = stripUndefined(value);
+    await setDoc(row, { value: cleanValue });
+    return { id: row.id, value: cleanValue, skipped: false };
   }
   if (action === 'records.replace') {
     const row = doc(recordsRef, id);
-    await setDoc(row, { value });
-    return { id, value };
+    const cleanValue = stripUndefined(value);
+    await setDoc(row, { value: cleanValue });
+    return { id, value: cleanValue };
   }
   if (action === 'records.delete') {
     await deleteDoc(doc(recordsRef, id));

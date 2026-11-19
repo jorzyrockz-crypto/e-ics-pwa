@@ -19,6 +19,7 @@ type DailyReportRecord = { id:string; value:DailyReport };
 
 const peso = (n:number)=> '₱' + (isNaN(n)?0:n).toLocaleString('en-PH',{minimumFractionDigits: n%1?2:0, maximumFractionDigits:2});
 const todayKey = ()=>{ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+const currentTimeLabel = ()=>new Date().toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit'});
 const tomorrowKey = ()=>{ const d=new Date(); d.setDate(d.getDate()+1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const dateLabel = (key:string)=>{ const [y,m,d]=key.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString('en-PH',{weekday:'short', month:'short', day:'numeric'}); };
 const fullDate = (key:string)=>{ const [y,m,d]=key.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString('en-PH',{weekday:'long', month:'long', day:'numeric', year:'numeric'}); };
@@ -311,7 +312,7 @@ function Dashboard(){
   const [fPayment,setFPayment]=useState('Cash');
   const [fNotes,setFNotes]=useState('');
   const [fDate,setFDate]=useState(todayKey());
-  const [fTime,setFTime]=useState('10:30 AM');
+  const [fTime,setFTime]=useState(currentTimeLabel());
   const [walletAmt,setWalletAmt]=useState(500);
   const [walletActionCategory,setWalletActionCategory]=useState('Shopee / Online shopping');
   const [walletActionNote,setWalletActionNote]=useState('');
@@ -572,13 +573,13 @@ function Dashboard(){
     setEditing(null); setFType(type); setFNetwork(preset?.network || 'Globe'); setFEloadKind('regular'); setFPromoName(''); setFPromoDetails(''); setFPromoValidity(''); setFProvider(type==='Top-Up'?'External Provider':'Main Wallet'); setFAmount(preset?.amount ?? (type==='Top-Up'?1000:100)); setFDiscount(0); setFCustom(''); setFFee(type==='E-Load'?Math.round((preset?.amount ?? 100)*meta.eloadPct/100*100)/100: type==='Top-Up'?meta.palawanFee:autoFee(type,preset?.amount ?? 100));
     setShowNameField(false); setNamePromptSkipped(false); setNameMsg(''); setDuplicateInfo(null); setIsUtang(false); setFPromiseDate('');
     if(cust){ setCustomerFromRecord(cust); } else { setFPhone(''); setFCustomerName(''); setFCustomerQuery(''); }
-    setFNotes(type==='Top-Up'?'Top-Up via External Provider':''); setFDate(todayKey()); setFTime('10:30 AM'); setFPayment('Cash'); setShowTx(true); setSaveMsg('');
+    setFNotes(type==='Top-Up'?'Top-Up via External Provider':''); setFDate(todayKey()); setFTime(currentTimeLabel()); setFPayment('Cash'); setShowTx(true); setSaveMsg('');
   }
   function repeatTx(r:TxRecord){
     const cust = customerByPhone.get(digitsOnly(r.value.phone||''));
     setEditing(null); setFType(r.value.type); setFNetwork(r.value.network||'Globe'); setFEloadKind(r.value.eloadKind||'regular'); setFPromoName(r.value.promoName||''); setFPromoDetails(r.value.promoDetails||''); setFPromoValidity(r.value.promoValidity||''); setFProvider(r.value.provider||'Main Wallet'); setFAmount(r.value.amount); setFDiscount(eLoadDiscount(r.value)); setFCustom(''); setFFee(r.value.fee);
     if(cust) setCustomerFromRecord(cust); else { setFPhone(r.value.phone||''); setFCustomerName(r.value.customerName||''); setFCustomerQuery(displayNamePhone(r.value.customerName, r.value.phone)); }
-    setIsUtang(false); setFPromiseDate(''); setDuplicateInfo(null); setFNotes(r.value.notes||''); setFDate(todayKey()); setFTime(r.value.time||'10:30 AM'); setFPayment(r.value.payment||'Cash'); setShowNameField(false); setShowTx(true);
+    setIsUtang(false); setFPromiseDate(''); setDuplicateInfo(null); setFNotes(r.value.notes||''); setFDate(todayKey()); setFTime(currentTimeLabel()); setFPayment(r.value.payment||'Cash'); setShowNameField(false); setShowTx(true);
   }
   function openEdit(r:TxRecord){
     setEditing(r); const v=r.value; setFType(v.type); setFNetwork(v.network||'Globe'); setFEloadKind(v.eloadKind||'regular'); setFPromoName(v.promoName||''); setFPromoDetails(v.promoDetails||''); setFPromoValidity(v.promoValidity||''); setFProvider(v.provider||'Main Wallet'); setFAmount(v.amount); setFDiscount(eLoadDiscount(v)); setFFee(v.fee);
@@ -587,7 +588,7 @@ function Dashboard(){
     const name = isRealName(rawName, v.phone) ? rawName : '';
     setFCustomerName(name); setFPhone(v.phone||''); setFCustomerQuery(displayNamePhone(name, v.phone||''));
     setShowNameField(!name && !!v.phone); setNamePromptSkipped(false); setNameMsg(''); setDuplicateInfo(null); setIsUtang(!!v.utang); setFPromiseDate(v.promiseDate||''); setShowPartial(false);
-    setFNotes(v.notes||''); setFDate(v.date); setFTime(v.time||'10:30 AM'); setFPayment(v.payment||'Cash'); setShowTx(true);
+    setFNotes(v.notes||''); setFDate(v.date); setFTime(v.time||currentTimeLabel()); setFPayment(v.payment||'Cash'); setShowTx(true);
   }
   function openCustomerForm(c?:CustomerRecord|null){
     setEditingCustomer(c||null); setCName(c?c.value.name:''); setCPhone(c?c.value.phone:''); setCNotes(c?c.value.notes:''); setCustomerMsg(''); setShowCustomerForm(true);
