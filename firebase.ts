@@ -222,15 +222,16 @@ export async function firestoreRecords(action: string, args: any, user: User): P
     records.sort((a, b) => Number(b.value?.createdAt || 0) - Number(a.value?.createdAt || 0));
     return { records: records.slice(0, args.limit || records.length) };
   }
-  if (action === 'records.save_transaction') {
-    if (name !== 'transactions' || !id) throw new Error('A transaction ID is required for a payment save.');
+  if (action === 'records.save_transaction' || action === 'records.delete_transaction') {
+    const deleting = action === 'records.delete_transaction';
+    if (name !== 'transactions' || !id) throw new Error('A transaction ID is required for a financial save.');
     const companion = args.meta;
-    if (companion && !companion.id) throw new Error('Load the wallet balances before confirming this payment.');
-    // Keep the existing offline proposal/overlay behavior. Online, the payment
-    // (or tip) and its wallet change must succeed together: a rejected balance
-    // revision must never leave a paid row behind or duplicate it on retry.
+    if (companion && !companion.id) throw new Error('Load the wallet balances before changing this transaction.');
+    // Keep the existing offline proposal/overlay behavior. Online, a sale,
+    // release, collection, tip, deletion, or Undo and its wallet change succeed
+    // together: a rejected balance revision cannot leave a half-written ledger.
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      const record = await firestoreRecords(args.create ? 'records.create' : 'records.replace', {
+      const record = await firestoreRecords(deleting ? 'records.delete' : args.create ? 'records.create' : 'records.replace', {
         collection: name, id, value, expectedUpdatedAt: args.expectedUpdatedAt,
       }, user);
       const meta = !record.skipped && companion ? await firestoreRecords('records.replace', {
@@ -246,23 +247,24 @@ export async function firestoreRecords(action: string, args: any, user: User): P
       const currentMeta = metaRow ? await transaction.get(metaRow) : null;
       const version = Number(current.data()?.updatedAt || 0);
       const metaVersion = Number(currentMeta?.data()?.updatedAt || 0);
-      if (args.create && current.exists()) {
-        // The entry keeps its ID across confirmation retries. A committed
-        // create is returned as-is, without counting its payment a second time.
+      if ((!deleting && args.create && current.exists()) || (deleting && !current.exists())) {
+        // Stable IDs make create/Undo retries idempotent. An already-completed
+        // deletion must likewise never refund its service/receipts twice.
         return {
-          record: { id: row.id, value: current.data().value, updatedAt: version, skipped: true },
+          record: { id: row.id, value: current.data()?.value, updatedAt: version, skipped: true },
           meta: currentMeta?.exists() ? { id: metaRow!.id, value: currentMeta.data().value, updatedAt: metaVersion } : undefined,
         };
       }
-      if (!args.create && !recordVersionMatches(Number(args.expectedUpdatedAt || 0), current.exists(), version)) {
+      if ((deleting || !args.create) && !recordVersionMatches(Number(args.expectedUpdatedAt || 0), current.exists(), version)) {
         throw new Error('This record changed or was removed on another device. Reload records and review the latest version before saving.');
       }
       if (companion && !recordVersionMatches(Number(companion.expectedUpdatedAt || 0), Boolean(currentMeta?.exists()), metaVersion)) {
-        throw new Error('Wallet balances changed on another device. No payment or tip changes were saved. Review the latest balances and try again.');
+        throw new Error('Wallet balances changed on another device. No transaction or wallet changes were saved. Review the latest balances and try again.');
       }
       const updatedAt = Math.max(Date.now(), version + 1);
       const cleanValue = stripUndefined(value);
-      transaction.set(row, { value: cleanValue, updatedAt });
+      if (deleting) transaction.delete(row);
+      else transaction.set(row, { value: cleanValue, updatedAt });
       let meta;
       if (metaRow) {
         meta = { id: metaRow.id, value: stripUndefined(companion.value), updatedAt: Math.max(Date.now(), metaVersion + 1) };
