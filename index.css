@@ -283,6 +283,9 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
   .dash-col-middle > *,
   .dash-col-right > div:first-child > *,
   .dash-col-right > section{display:inline-block;vertical-align:top;width:100%;min-width:0;margin:0 0 16px!important;break-inside:avoid}
+  /* Keep the four key figures compact as a 2×2 tile group rather than letting
+     the masonry item styling turn each statistic into a full-width block. */
+  .dash-col-left > .dash-summary-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px;margin:0 0 16px!important}
 }
 
 @media (min-width:1540px){
