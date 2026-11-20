@@ -1130,6 +1130,31 @@ describe('sent / released Utang and independently confirmed receipts', () => {
     expect(balances()).toEqual({ cash: 11015, maribank: 4000 });
   });
 
+  it('uses the adopted manual-deduction baseline for later edits, delete, and Undo without removing the manual record', async () => {
+    cloud.rows['owner-a'].transactions = [debt()]; cloud.rows['owner-a'].meta = [meta('Test Store', 10000, 4000)];
+    const adjustment: LiveRecord = { id: 'manual-release', updatedAt: 1, value: { wallet: 'maribank', mode: 'deduct', amount: 1000, category: 'Other', note: 'Cash In already sent', date: '2026-11-17', time: '8:00 AM', createdAt: 1 } };
+    cloud.rows['owner-a'].wallet_adjustments = [clone(adjustment)];
+    const view = await mount(), release = review(view.container);
+    fireEvent.click(within(release).getByRole('radio', { name: /already deducted manually/ }));
+    expect(release.textContent).toContain('Existing manual adjustment records stay unchanged');
+    await confirmRelease(view.container, 'already-recorded');
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    fireEvent.click(within(within(view.container).getByRole('dialog', { name: 'Transaction detail' })).getByRole('button', { name: 'Edit' }));
+    const form = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    fireEvent.change(field(form, 'Amount'), { target: { value: '1200' } });
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Changes' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 3800 });
+    const detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Delete' }));
+    expect(detail.textContent).toContain('Deleting refunds its outgoing amount; do not also reverse that manual deduction.');
+    await act(async () => { fireEvent.click(within(detail).getByRole('button', { name: 'Yes, delete' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
+    await act(async () => { fireEvent.click(within(view.container.querySelector<HTMLElement>('[data-toast]')!).getByRole('button', { name: 'Undo' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 3800 });
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ amount: 1200, utangReleased: true, utangReleaseMode: 'already-recorded' });
+    expect(cloud.rows['owner-a'].wallet_adjustments).toEqual([adjustment]);
+  });
+
   it('deducts only the unbooked remainder when reviewing an older partially paid Utang', async () => {
     cloud.rows['owner-a'].transactions = [debt({ paidAmount: 400 })]; cloud.rows['owner-a'].meta = [meta('Test Store', 10406, 4600)];
     const view = await mount(), release = review(view.container);
@@ -1195,6 +1220,42 @@ describe('sent / released Utang and independently confirmed receipts', () => {
     expect([...endDay.querySelectorAll('p')].find(node => node.textContent === 'Expected Cash on Hand')?.nextElementSibling?.textContent).toBe('₱11,015');
     expect(field(endDay, 'Cash Count — Actual Cash Counted').value).toBe('11015');
     expect(endDay.textContent).toContain('Expected: ₱11,015 • Counted: ₱11,015');
+  });
+
+  it('does not infer an opening float from sale-dated history or older Utang receipts, including in the saved report', async () => {
+    cloud.rows['owner-a'].transactions = [debt({ date: '2026-11-17', utangReleased: true })];
+    cloud.rows['owner-a'].meta = [meta('Test Store', 10000, 4000)];
+    const view = await mount();
+    expect(view.container.textContent).toContain('Starting float today: Not recorded');
+    fireEvent.click(within(transactionDetail(view.container)).getByRole('button', { name: 'Mark Paid' }));
+    await confirmPayment(view.container);
+    fireEvent.click(within(within(view.container).getByRole('dialog', { name: 'Extra / Tip' })).getByRole('button', { name: 'No tip — finish' }));
+    fireEvent.click(within(view.container).getAllByRole('button', { name: /^End Day$/ })[0]);
+    const endDay = within(view.container).getByRole('dialog', { name: 'End of Day — Close Day' });
+    expect([...endDay.querySelectorAll('p')].find(node => node.textContent === 'Starting Float')?.nextElementSibling?.textContent).toBe('Not recorded');
+    expect(endDay.textContent).toContain('Opening float was not recorded for today; it is not estimated from sale-dated records.');
+    expect(field(endDay, 'Cash Count — Actual Cash Counted').value).toBe('11015');
+    await act(async () => { fireEvent.click(within(endDay).getByRole('button', { name: 'Close Day & Save Report' })); });
+    expect(cloud.rows['owner-a'].daily_reports![0].value).toMatchObject({ date: '2026-11-18', cash: 11015, actualCash: 11015, difference: 0, tomorrowFloat: 11015 });
+    expect(cloud.rows['owner-a'].daily_reports![0].value.startingFloat).toBeUndefined();
+    expect(balances()).toEqual({ cash: 11015, maribank: 4000 });
+    nav(view.container, 'Dashboard');
+    expect(view.container.textContent).toContain('Starting float today: Not recorded');
+    nav(view.container, 'Report');
+    expect(view.container.textContent).toContain('Float not recorded • Counted ₱11,015');
+  });
+
+  it.each([
+    ['2026-11-17', 0, '₱0'],
+    ['2026-11-17', 9000, '₱9,000'],
+    ['2026-11-16', 9000, 'Not recorded'],
+  ])('uses only an immediately previous close as an opening float (%s, %s)', async (date, tomorrowFloat, expected) => {
+    cloud.rows['owner-a'].daily_reports = [{ id: 'previous-close', value: { date, tomorrowFloat }, updatedAt: 1 }];
+    const settings = meta(); settings.value.startingFloat = 8000; settings.value.startingFloatDate = '2026-11-16';
+    cloud.rows['owner-a'].meta = [settings];
+    const view = await mount();
+    expect(view.container.textContent).toContain(`Starting float today: ${expected}`);
+    expect(cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list')).toHaveLength(0);
   });
 
   it('confirms only the outstanding receipt when a released partial Utang is edited to upfront payment', async () => {
