@@ -3,6 +3,8 @@ import { applyTransaction, canRecordTip, customerPayments, customerTotal, defaul
 import { firestoreRecords, auth, observeAuth, signInWithGoogle, logOut, subscribePendingWrites, subscribeToUserRecords, syncUserRecords, clearSyncError, type User as FirebaseUser } from './firebase';
 import { mergeDraftFields, recordCollectionLimits, type LiveRecord, type RecordCollection } from './liveRecords';
 import CustomerAvatar from './app/CustomerAvatar';
+import PromoNameSuggest from './app/PromoNameSuggest';
+import { collectSavedPromos } from './app/savedPromos';
 import { LogOut, LoaderCircle, Share2, Copy } from 'lucide-react';
 import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown } from 'lucide-react';
 
@@ -600,6 +602,7 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
     };
   },[user.uid,previewMode,loading]);
   const txs = useMemo(()=>records.map(r=>r.value),[records]);
+  const savedPromos = useMemo(()=>collectSavedPromos(records),[records]);
   const todayTxs = txs.filter(t=>t.date===todayKey());
   const dayTxs = txs.filter(t=>t.date===selectedDay);
   const sum = (arr:Tx[], fn:(t:Tx)=>number)=> arr.reduce((s,t)=>s+fn(t),0);
@@ -792,6 +795,10 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
     if(type==='Cash Out') return round2(amt*meta.cashOutPct/100);
     if(type==='Top-Up') return meta.palawanFee;
     return 0;
+  }
+  function applyPromo(offer:Pick<PromoOffer,'name'|'amount'|'details'|'validity'>){
+    setFPromoName(offer.name); setFPromoDetails(offer.details); setFPromoValidity(offer.validity);
+    setFAmount(offer.amount); setFCustom(''); setFFee(autoFee('E-Load',offer.amount));
   }
   function feeParts(type:TxType, amt:number){
     if(type==='Cash In') return {pct: meta.cashInPct, pctAmt: round2(amt*meta.cashInPct/100)};
@@ -1653,7 +1660,19 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
           <label className="label block mt-4">Network</label><div data-arrow-group="network" className="flex flex-wrap gap-2 mt-1.5">{['Globe','Smart','TNT','DITO'].map(n=><button key={n} onClick={()=>setFNetwork(n)} className={`chip ${fNetwork===n?'active':''}`}>{n}</button>)}</div>
           <div className="flex flex-wrap gap-2 mt-4" role="group" aria-label="Load product type"><button type="button" onClick={()=>setFEloadKind('regular')} className={`chip ${fEloadKind==='regular'?'active':''}`}>Regular Load</button><button type="button" onClick={()=>setFEloadKind('promo')} className={`chip ${fEloadKind==='promo'?'active':''}`}>Promo / Bundle</button></div>
           <p className="text-xs font-bold text-[var(--muted)] mt-1.5">{fEloadKind==='regular'?'Flexible prepaid credit.':'Direct package applied to the customer’s number. Enter the exact offer shown in your load channel.'} Via Main Wallet.</p>
-          {fEloadKind==='promo' && <div className="grid grid-cols-1 gap-3 mt-3 sm:grid-cols-2"><div className="sm:col-span-2"><label className="label">Choose a suggested {fNetwork} promo</label><select value={promoOffers.find(o=>o.network===fNetwork && o.name===fPromoName && o.amount===fAmount)?.id||''} onChange={e=>{const offer=promoOffers.find(o=>o.id===e.target.value); if(offer){setFPromoName(offer.name);setFPromoDetails(offer.details);setFPromoValidity(offer.validity);setFAmount(offer.amount);setFCustom('');setFFee(autoFee('E-Load',offer.amount));}}} className="field mt-1" aria-label="Suggested promo list"><option value="">Choose a promo or enter your own below</option>{promoOffers.filter(o=>o.network===fNetwork).map(o=><option key={o.id} value={o.id}>{o.name} — ₱{o.amount} / {o.validity}</option>)}</select><p className="text-xs font-bold text-[var(--muted)] mt-1">Examples from provider listings. Confirm availability and inclusions in your retailer menu before selling; offers can change.</p></div><div className="sm:col-span-2"><label className="label">Promo / package name</label><input value={fPromoName} onChange={e=>setFPromoName(e.target.value)} placeholder="Choose above or type a custom offer" className="field mt-1" aria-label="Promo or package name"/></div><div><label className="label">Inclusions (optional)</label><input value={fPromoDetails} onChange={e=>setFPromoDetails(e.target.value)} placeholder="e.g. data, calls, texts" className="field mt-1" aria-label="Promo inclusions"/></div><div><label className="label">Validity (optional)</label><input value={fPromoValidity} onChange={e=>setFPromoValidity(e.target.value)} placeholder="e.g. 7 days, no expiry" className="field mt-1" aria-label="Promo validity"/></div></div>}
+          {fEloadKind==='promo' && <div className="grid grid-cols-1 gap-3 mt-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="label">Choose a suggested {fNetwork} promo</label>
+              <select value={promoOffers.find(o=>o.network===fNetwork && o.name===fPromoName && o.amount===fAmount)?.id||''} onChange={e=>{const offer=promoOffers.find(o=>o.id===e.target.value); if(offer) applyPromo(offer);}} className="field mt-1" aria-label="Suggested promo list">
+                <option value="">Choose a promo or enter your own below</option>
+                {promoOffers.filter(o=>o.network===fNetwork).map(o=><option key={o.id} value={o.id}>{o.name} — ₱{o.amount} / {o.validity}</option>)}
+              </select>
+              <p className="text-xs font-bold text-[var(--muted)] mt-1">Examples from provider listings. Confirm availability and inclusions in your retailer menu before selling; offers can change.</p>
+            </div>
+            <div className="sm:col-span-2"><PromoNameSuggest key={fNetwork} network={fNetwork} value={fPromoName} promos={savedPromos} onChange={setFPromoName} onSelect={applyPromo}/></div>
+            <div><label className="label">Inclusions (optional)</label><input value={fPromoDetails} onChange={e=>setFPromoDetails(e.target.value)} placeholder="e.g. data, calls, texts" className="field mt-1" aria-label="Promo inclusions"/></div>
+            <div><label className="label">Validity (optional)</label><input value={fPromoValidity} onChange={e=>setFPromoValidity(e.target.value)} placeholder="e.g. 7 days, no expiry" className="field mt-1" aria-label="Promo validity"/></div>
+          </div>}
           <label className="label block mt-4">{fEloadKind==='promo'?'Promo price':'Load amount'}</label><div data-arrow-group="eload-amount" className="flex flex-wrap gap-2 mt-1.5">{[10,20,50,100,200,500,1000].map(a=>{ return <button key={a} onClick={()=>{setFAmount(a); setFCustom(''); setFFee(autoFee('E-Load',a));}} className={`chip ${fAmount===a && !fCustom?'active':''}`}>₱{a}</button> })}<input value={fCustom} onChange={e=>{setFCustom(e.target.value); const v=Number(e.target.value); if(v>0){setFAmount(v); setFFee(autoFee('E-Load',v));}}} placeholder="Custom" inputMode="decimal" className="chip w-[96px] outline-none" aria-label="Custom load amount"/></div>
           <label className="label block mt-3">Provider discount (₱, optional)</label><input type="number" min="0" max={fAmount} step="0.01" value={fDiscount} onChange={e=>setFDiscount(Number(e.target.value)||0)} className="field mt-1" inputMode="decimal" aria-label="Provider discount amount"/><p className="text-xs font-bold text-[var(--muted)] mt-1">Enter ₱5 for a ₱100 load bought for ₱95. Your profit includes the discount, the regular customer fee, and any extra / tip.</p>
           <label htmlFor="customer-fee" className="label block mt-3">Customer fee (editable)</label><input id="customer-fee" type="number" min="0" step="0.01" value={fFee} onChange={e=>setFFee(Number(e.target.value))} className="field mt-1" inputMode="decimal"/>

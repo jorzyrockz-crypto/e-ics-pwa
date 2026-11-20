@@ -138,6 +138,201 @@ afterEach(() => {
   localStorage.clear();
 });
 
+describe('promo name suggestions from saved sales', () => {
+  function savedSale(id = 'saved-promo', changes: Record<string, unknown> = {}): LiveRecord {
+    const row = transaction(129);
+    return { ...row, id, value: { ...row.value, eloadKind: 'promo', promoName: 'Go Family', promoDetails: '12GB + calls', promoValidity: '7 days', date: '2026-11-17', createdAt: Date.now() - 86400000, ...changes } };
+  }
+  function openPromo(container: HTMLElement) {
+    const form = openSale(container);
+    fireEvent.click(within(form).getByRole('button', { name: 'Promo / Bundle' }));
+    return form;
+  }
+  function promoInput(form: HTMLElement) {
+    return within(form).getByRole('combobox', { name: 'Promo or package name' }) as HTMLInputElement;
+  }
+  function focusPromo(form: HTMLElement, value = '') {
+    const input = promoInput(form);
+    act(() => { input.focus(); });
+    if (value) fireEvent.change(input, { target: { value } });
+    return input;
+  }
+
+  it('fills the latest saved product, recalculates the current fee, and waits for owner confirmation before writing', async () => {
+    const settings = meta(); settings.value.eloadPct = 5;
+    cloud.rows['owner-a'].meta = [settings];
+    cloud.rows['owner-a'].transactions = [
+      savedSale('older', { promoName: ' go   family ', amount: 99, promoDetails: 'Old contents', createdAt: Date.now() - 172800000 }),
+      savedSale('latest', { phone: '09185555555', customerName: 'Other customer', fee: 90, discount: 19, tip: 99, notes: 'Private old notes', utang: true, utangStatus: 'unpaid' }),
+    ];
+    const view = await mount(), form = openPromo(view.container); fillCustomer(form);
+    fireEvent.change(field(form, 'Notes'), { target: { value: 'My new sale' } });
+    fireEvent.change(within(form).getByLabelText('Custom load amount'), { target: { value: '777' } });
+    fireEvent.change(within(form).getByLabelText('Provider discount amount'), { target: { value: '4' } });
+    fireEvent.change(within(form).getByLabelText('Customer fee (editable)'), { target: { value: '42' } });
+    const calls = cloud.firestoreRecords.mock.calls.length;
+    const input = focusPromo(form, 'gO');
+    const list = within(form).getByRole('listbox', { name: 'Saved Globe promos' });
+    expect(within(list).getAllByRole('option')).toHaveLength(1);
+    fireEvent.click(within(list).getByRole('option', { name: /Go Family/ }));
+    expect(input.value).toBe('Go Family');
+    expect((within(form).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('12GB + calls');
+    expect((within(form).getByLabelText('Promo validity') as HTMLInputElement).value).toBe('7 days');
+    expect((within(form).getByLabelText('Custom load amount') as HTMLInputElement).value).toBe('');
+    expect((within(form).getByLabelText('Customer fee (editable)') as HTMLInputElement).value).toBe('6.45');
+    expect((within(form).getByLabelText('Provider discount amount') as HTMLInputElement).value).toBe('4');
+    expect(field(form, 'Notes').value).toBe('My new sale');
+    expect(form.querySelector<HTMLInputElement>('[data-customer-input]')!.value).toBe('Ada Test 09171234567');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱135.45');
+    expect((within(form).getByRole('radio', { name: /^Upfront payment/ }) as HTMLInputElement).checked).toBe(true);
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Transaction' })); });
+    expect(within(view.container).getByRole('dialog', { name: 'Confirm payment received' })).not.toBeNull();
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(2);
+    expect(cloud.rows['owner-a'].meta![0].value.wallets).toEqual({ cash: 10000, maribank: 5000 });
+    await confirmPayment(view.container);
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({
+      network: 'Globe', eloadKind: 'promo', promoName: 'Go Family', promoDetails: '12GB + calls', promoValidity: '7 days',
+      amount: 129, fee: 6.45, discount: 4, tip: 0, phone: '09171234567', customerName: 'Ada Test', notes: 'My new sale', utang: false,
+    });
+    expect(cloud.rows['owner-a'].meta![0].value.wallets).toEqual({ cash: 10135.45, maribank: 4875 });
+  });
+
+  it('consumes autocomplete arrows, Enter, held Enter, and the first Escape before global sheet shortcuts', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    const view = await mount(), form = openPromo(view.container); fillCustomer(form);
+    const input = focusPromo(form, 'Go'), calls = cloud.firestoreRecords.mock.calls.length;
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(input.value).toBe('Go Family');
+    expect(within(view.container).getByRole('dialog', { name: 'Add transaction' })).toBe(form);
+    expect(within(view.container).queryByRole('dialog', { name: 'Confirm payment received' })).toBeNull();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(within(form).queryByRole('listbox')).toBeNull();
+    expect(within(view.container).getByRole('dialog', { name: 'Add transaction' })).toBe(form);
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(within(view.container).queryByRole('dialog')).toBeNull();
+  });
+
+  it('scopes suggestions to the selected network and keeps the provider examples available', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale(), savedSale('smart', { network: 'Smart', promoDetails: 'Smart-only data' })];
+    const view = await mount(), form = openPromo(view.container);
+    let input = focusPromo(form, 'Go');
+    expect(within(form).getAllByRole('listbox')).toHaveLength(1);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.click(within(form).getByRole('button', { name: 'Smart' }));
+    input = focusPromo(form);
+    expect(input.value).toBe('Go');
+    expect(input.getAttribute('aria-activedescendant')).toBeNull();
+    const list = within(form).getByRole('listbox', { name: 'Saved Smart promos' });
+    expect(list.textContent).toContain('Smart-only data'); expect(list.textContent).not.toContain('12GB + calls');
+    fireEvent.click(within(list).getByRole('option'));
+    expect((within(form).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Smart-only data');
+    fireEvent.click(within(form).getByRole('button', { name: 'DITO' }));
+    focusPromo(form);
+    expect(within(form).queryByRole('listbox')).toBeNull();
+    fireEvent.change(within(form).getByLabelText('Suggested promo list'), { target: { value: 'dito-socials20' } });
+    expect(promoInput(form).value).toBe('Level-Up Socials 20');
+    expect((within(form).getByLabelText('Customer fee (editable)') as HTMLInputElement).value).toBe('0.6');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱20.60');
+  });
+
+  it('updates suggestions live without overwriting manual draft fields or writing anything', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    const view = await mount(), form = openPromo(view.container);
+    fireEvent.change(within(form).getByLabelText('Promo inclusions'), { target: { value: 'My draft inclusions' } });
+    fireEvent.change(within(form).getByLabelText('Promo validity'), { target: { value: 'My draft validity' } });
+    fireEvent.change(within(form).getByLabelText('Custom load amount'), { target: { value: '88' } });
+    fireEvent.change(within(form).getByLabelText('Customer fee (editable)'), { target: { value: '8' } });
+    const input = focusPromo(form, 'go'), calls = cloud.firestoreRecords.mock.calls.length;
+    await act(async () => { emit('transactions', [savedSale('saved-promo', { amount: 159, promoDetails: 'Updated data', promoValidity: '30 days' })]); });
+    expect(input.value).toBe('go');
+    expect((within(form).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('My draft inclusions');
+    expect((within(form).getByLabelText('Promo validity') as HTMLInputElement).value).toBe('My draft validity');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱96');
+    const list = within(form).getByRole('listbox'); expect(list.textContent).toContain('₱159');
+    fireEvent.click(within(list).getByRole('option'));
+    expect((within(form).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Updated data');
+    expect((within(form).getByLabelText('Promo validity') as HTMLInputElement).value).toBe('30 days');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱163.77');
+    await act(async () => { emit('transactions', []); });
+    expect(input.value).toBe('Go Family');
+    expect(within(form).queryByRole('listbox')).toBeNull();
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+  });
+
+  it('allows a new custom promo to be saved and suggested on the next sale', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    const view = await mount(), form = openPromo(view.container); fillCustomer(form);
+    focusPromo(form, 'Go Island 59');
+    expect(within(form).queryByRole('listbox')?.textContent).toBe('');
+    expect(form.textContent).toContain('No saved Globe promos match');
+    fireEvent.change(within(form).getByLabelText('Promo inclusions'), { target: { value: 'Island data' } });
+    fireEvent.change(within(form).getByLabelText('Promo validity'), { target: { value: '3 days' } });
+    fireEvent.change(within(form).getByLabelText('Custom load amount'), { target: { value: '59' } });
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Transaction' })); });
+    await confirmPayment(view.container);
+    fireEvent.click(within(within(view.container).getByRole('dialog', { name: 'Extra / Tip' })).getByRole('button', { name: 'No tip — finish' }));
+    const next = openPromo(view.container); focusPromo(next, 'island');
+    const list = within(next).getByRole('listbox');
+    expect(within(list).getAllByRole('option')).toHaveLength(1);
+    expect(list.textContent).toContain('Go Island 59'); expect(list.textContent).toContain('₱59');
+    fireEvent.click(within(list).getByRole('option'));
+    expect((within(next).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Island data');
+    expect((within(next).getByLabelText('Promo validity') as HTMLInputElement).value).toBe('3 days');
+  });
+
+  it('does not overwrite prefilled edit/repeat fields until a suggestion is explicitly chosen', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale('original', { date: '2026-11-18', fee: 42, promoDetails: 'Original contents' })];
+    const view = await mount(), detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Edit' }));
+    const edit = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    const input = focusPromo(edit);
+    await act(async () => { emit('transactions', [savedSale('original', { date: '2026-11-18', amount: 149, fee: 7, promoDetails: 'Remote contents' })]); });
+    expect(input.value).toBe('Go Family');
+    expect((within(edit).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Original contents');
+    expect((within(edit).getByLabelText('Customer fee (editable)') as HTMLInputElement).value).toBe('42');
+    fireEvent.click(within(edit).getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(within(transactionDetail(view.container)).getByRole('button', { name: 'Repeat' }));
+    const repeat = within(view.container).getByRole('dialog', { name: 'Add transaction' });
+    focusPromo(repeat);
+    expect((within(repeat).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Remote contents');
+    expect((within(repeat).getByLabelText('Customer fee (editable)') as HTMLInputElement).value).toBe('7');
+    expect(within(repeat).getByLabelText('Customer total').textContent).toBe('₱156');
+  });
+
+  it('uses the already-loaded offline records with no lookup request or selection writes', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    const view = await mount(), form = openPromo(view.container);
+    const calls = cloud.firestoreRecords.mock.calls.length;
+    focusPromo(form, 'family');
+    fireEvent.click(within(within(form).getByRole('listbox')).getByRole('option'));
+    expect(promoInput(form).value).toBe('Go Family');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱132.87');
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+    expect(cloud.syncUserRecords).not.toHaveBeenCalled();
+  });
+
+  it('clears promo history and open drafts when switching accounts', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    cloud.rows['owner-b'].transactions = [savedSale('other', { promoName: 'Other Owner Bundle', promoDetails: 'Other owner data' })];
+    const view = await mount(), oldSubscription = cloud.subscriptions[0];
+    focusPromo(openPromo(view.container), 'go');
+    await act(async () => { for (const observer of cloud.authObservers) observer({ uid: 'owner-b', displayName: 'Owner B' } as User); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(within(view.container).queryByRole('dialog')).toBeNull();
+    await act(async () => { oldSubscription.callbacks.onRecords('transactions', [savedSale()]); });
+    const form = openPromo(view.container), input = focusPromo(form);
+    expect(input.value).toBe('');
+    const list = within(form).getByRole('listbox');
+    expect(list.textContent).toContain('Other Owner Bundle'); expect(list.textContent).not.toContain('Go Family');
+  });
+});
+
 describe('clay customer avatars across the dashboard', () => {
   const portrait = (root: ParentNode) => {
     const image = root.querySelector<HTMLImageElement>('.customer-avatar img');
