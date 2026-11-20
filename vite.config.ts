@@ -37,7 +37,7 @@ export default defineConfig({
         short_name: 'E-LOAD Tracker',
         description: 'Track prepaid load, cash transactions, wallet balances, fees, and profit for your sari-sari store, even offline.',
         categories: ['business', 'finance', 'productivity'],
-        theme_color: '#0f172a',
+        theme_color: '#f1f5f0',
         background_color: '#f1f5f0',
         display: 'standalone',
         orientation: 'any',

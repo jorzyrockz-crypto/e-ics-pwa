@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveRecord, LiveRecordCallbacks, RecordCollection } from './liveRecords';
 import type { User } from './firebase';
+import { appearanceStorageKey } from './app/appearance';
 
 // Keep the UI tests local: these streams represent another device, never a real
 // Google account or the production database. The SDK adapter is tested separately.
@@ -144,6 +145,56 @@ beforeEach(() => {
 afterEach(() => {
   cleanup(); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks();
   localStorage.clear();
+});
+
+describe('appearance without financial side effects', () => {
+  it('changes the local theme immediately without saving business settings or losing a live settings draft', async () => {
+    const view = await mount(); nav(view.container, 'Settings');
+    const before = clone(cloud.rows);
+    fireEvent.change(field(view.container, 'Business name'), { target: { value: 'Unsaved store name' } });
+    const appearance = within(view.container).getByRole('region', { name: 'Appearance' });
+    expect(within(view.container).queryByRole('button', { name: 'Add transaction — shortcut 1' })).toBeNull();
+    fireEvent.click(within(appearance).getByRole('radio', { name: 'Dark' }));
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(localStorage.getItem(appearanceStorageKey)).toBe('dark');
+    expect(field(view.container, 'Business name').value).toBe('Unsaved store name');
+    await act(async () => { const changed = meta('Cloud name', 10100, 5100); changed.updatedAt = 50; emit('meta', [changed]); });
+    expect(field(view.container, 'Business name').value).toBe('Unsaved store name');
+    expect((within(appearance).getByRole('radio', { name: 'Dark' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(appearance).getByRole('radio', { name: 'Light' }));
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(cloud.rows['owner-a'].transactions).toEqual(before['owner-a'].transactions);
+    expect(cloud.rows['owner-a'].meta![0].value).toMatchObject({ businessName: 'Cloud name', wallets: { cash: 10100, maribank: 5100 } });
+    expect(cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list')).toHaveLength(0);
+  });
+
+  it('keeps an unsaved transaction intact when another tab changes appearance', async () => {
+    const view = await mount(), form = openSale(view.container); fillCustomer(form);
+    fireEvent.change(field(form, 'Notes'), { target: { value: 'Keep this unfinished sale' } });
+    fireEvent.change(within(form).getByLabelText('Custom load amount'), { target: { value: '250' } });
+    const before = clone(cloud.rows);
+    await act(async () => { window.dispatchEvent(new StorageEvent('storage', { key: appearanceStorageKey, newValue: 'dark' })); });
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(within(view.container).getByRole('dialog', { name: 'Add transaction' })).toBe(form);
+    expect(field(form, 'Notes').value).toBe('Keep this unfinished sale');
+    expect((within(form).getByLabelText('Custom load amount') as HTMLInputElement).value).toBe('250');
+    expect(form.querySelector<HTMLInputElement>('[data-customer-input]')!.value).toBe('Ada Test 09171234567');
+    expect(cloud.rows).toEqual(before);
+    expect(cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list')).toHaveLength(0);
+  });
+
+  it('keeps the browser theme while changing accounts without copying store records or settings', async () => {
+    localStorage.setItem(appearanceStorageKey, 'dark');
+    const view = await mount(); expect(document.documentElement.dataset.theme).toBe('dark');
+    const before = clone(cloud.rows);
+    await act(async () => { for (const observer of cloud.authObservers) observer({ uid: 'owner-b', displayName: 'Owner B' } as User); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    nav(view.container, 'Settings');
+    expect((within(within(view.container).getByRole('region', { name: 'Appearance' })).getByRole('radio', { name: 'Dark' }) as HTMLInputElement).checked).toBe(true);
+    expect(field(view.container, 'Business name').value).toBe('Other Store');
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(cloud.rows).toEqual(before);
+  });
 });
 
 describe('promo name suggestions from saved sales', () => {

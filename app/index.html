@@ -3,7 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#f1f5f0" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Apply the device preference before styles/React paint. Keep this small,
+         local-only bootstrap in sync with app/appearance.ts (covered by tests). -->
+    <script id="appearance-bootstrap">
+      (() => {
+        let preference = 'system', systemDark = false;
+        try { preference = localStorage.getItem('eics.appearance') || 'system'; } catch {}
+        try { systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches; } catch {}
+        const theme = preference === 'dark' || (preference !== 'light' && systemDark) ? 'dark' : 'light';
+        const color = theme === 'dark' ? '#101714' : '#f1f5f0';
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        document.documentElement.style.backgroundColor = color;
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', color);
+      })();
+    </script>
     <meta name="description" content="E-LOAD Tracker helps sari-sari stores track prepaid load, cash transactions, wallet balances, fees, and profit — even offline." />
     <meta name="application-name" content="E-LOAD Tracker" />
     <meta name="apple-mobile-web-app-title" content="E-LOAD Tracker" />
