@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
+import { coalesceOfflineMutation, overlayOfflineMutations, recordVersionMatches, type OfflineMutation } from './offlineSync';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, type User } from 'firebase/auth';
-import { initializeFirestore, getFirestore, collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, setDoc, deleteDoc, persistentLocalCache, persistentMultipleTabManager, waitForPendingWrites, type Firestore } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, setDoc, deleteDoc, persistentLocalCache, persistentMultipleTabManager, waitForPendingWrites, runTransaction, type Firestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDSzRMrsCvxA6faVN7TUsL9-tfCNTJJTzk',
@@ -77,12 +78,76 @@ function stripUndefined(value: any): any {
   return value;
 }
 
+function userMutationsRef(user:User){ return collection(db,'users',user.uid,'offline_mutations'); }
+async function queueOfflineMutation(user:User,collectionName:string,recordId:string,action:'replace'|'delete',value?:unknown,expectedVersion?:number){
+  const opsRef=userMutationsRef(user);
+  let cachedOperation:OfflineMutation|undefined;
+  let cachedOperationRef:any;
+  try{
+    const operationSnapshot=await getDocsFromCache(opsRef);
+    const matching=operationSnapshot.docs.filter(row=>{const data=row.data();return data.collection===collectionName&&data.recordId===recordId;});
+    const conflict=matching.find(row=>row.data().kind==='conflict');
+    if(conflict) throw new Error('This record has an unresolved sync conflict. Resolve it online before editing again.');
+    const match=matching.find(row=>row.data().kind==='mutation');
+    if(match){cachedOperation=match.data() as OfflineMutation;cachedOperationRef=match.ref;}
+  }catch{}
+  if(cachedOperation?.kind==='conflict') throw new Error('This record has an unresolved sync conflict. Resolve it online before editing again.');
+  let baseVersion=expectedVersion;
+  if(cachedOperation) baseVersion=cachedOperation.expectedUpdatedAt;
+  if(baseVersion===undefined){
+    try{const cached=await getDocFromCache(doc(db,'users',user.uid,'data',collectionName,'records',recordId));if(!cached.exists())throw new Error('missing');baseVersion=Number(cached.data()?.updatedAt||0);}
+    catch{throw new Error('Cannot safely edit this record offline because its current version is not cached. Reconnect and reload it first.');}
+  }
+  const operationRef=cachedOperationRef||doc(opsRef);
+  const operation=coalesceOfflineMutation(cachedOperation,{id:operationRef.id,kind:'mutation',collection:collectionName,recordId,action,value:action==='replace'?stripUndefined(value):undefined,expectedUpdatedAt:baseVersion,createdAt:Date.now()});
+  const write=setDoc(operationRef,stripUndefined(operation));
+  watchWrite(write);
+  return operation;
+}
+
+async function processQueuedMutations(user:User){
+  if(typeof navigator!=='undefined'&&!navigator.onLine) return;
+  let snapshot;
+  try{snapshot=await getDocs(userMutationsRef(user));}catch{return;}
+  for(const operationDoc of snapshot.docs){
+    const operationRef=operationDoc.ref;
+    const data=operationDoc.data() as OfflineMutation;
+    if(data.kind!=='mutation'||!data.collection||!data.recordId) continue;
+    const targetRef=doc(db,'users',user.uid,'data',data.collection,'records',data.recordId);
+    try{
+      await runTransaction(db,async transaction=>{
+        const op=await transaction.get(operationRef);
+        if(!op.exists()||op.data().kind!=='mutation') return;
+        const target=await transaction.get(targetRef);
+        const current=target.data();
+        const actualUpdatedAt=Number(current?.updatedAt||0);
+        if(recordVersionMatches(Number(op.data().expectedUpdatedAt||0),target.exists(),actualUpdatedAt)){
+          if(op.data().action==='delete') transaction.delete(targetRef);
+          else transaction.set(targetRef,{value:stripUndefined(op.data().value),updatedAt:Math.max(Date.now(),actualUpdatedAt+1)});
+          transaction.delete(operationRef);
+        }else{
+          transaction.update(operationRef,{kind:'conflict',remoteValue:target.exists()?current?.value:null,remoteUpdatedAt:actualUpdatedAt,conflictAt:Date.now()});
+        }
+      });
+    }catch(error){console.warn('Deferred offline edit is waiting for connection or needs attention.',error);}
+  }
+}
+
 // Every record is isolated under its authenticated user's Firestore namespace.
 export async function firestoreRecords(action: string, args: any, user: User) {
   const { collection: name, id, value } = args || {};
-  if (!name) throw new Error('A record collection is required.');
-  const recordsRef = collection(db, 'users', user.uid, 'data', name, 'records');
+  if (!name && action!=='sync.conflicts.resolve') throw new Error('A record collection is required.');
+  const recordsRef = collection(db, 'users', user.uid, 'data', name||'meta', 'records');
   if (action === 'records.list') {
+    if(name==='sync_conflicts'){
+      if(typeof navigator==='undefined'||navigator.onLine) await processQueuedMutations(user);
+      let operations;
+      try{operations=typeof navigator!=='undefined'&&!navigator.onLine?await getDocsFromCache(userMutationsRef(user)):await getDocs(userMutationsRef(user));}
+      catch{operations=await getDocsFromCache(userMutationsRef(user));}
+      const conflicts=operations.docs.filter(row=>row.data().kind==='conflict').map(row=>({id:row.id,value:row.data(),updatedAt:Number(row.data().conflictAt||0)}));
+      return {records:conflicts.slice(0,args.limit||conflicts.length)};
+    }
+    if(typeof navigator==='undefined'||navigator.onLine) void processQueuedMutations(user);
     let snapshot;
     try {
       snapshot = typeof navigator !== 'undefined' && !navigator.onLine
@@ -110,7 +175,10 @@ export async function firestoreRecords(action: string, args: any, user: User) {
         console.warn(`Could not import local ${name} records`, error);
       }
     }
-    const records = snapshot.docs.map(row => ({ id: row.id, value: row.data().value, updatedAt: Number(row.data().updatedAt || 0) }));
+    let records = snapshot.docs.map(row => ({ id: row.id, value: row.data().value, updatedAt: Number(row.data().updatedAt || 0) }));
+    let operations:any[]=[];
+    try{const operationSnapshot=typeof navigator!=='undefined'&&!navigator.onLine?await getDocsFromCache(userMutationsRef(user)):await getDocs(userMutationsRef(user)); operations=operationSnapshot.docs.map(row=>({id:row.id,...row.data()} as OfflineMutation));}catch{}
+    records=overlayOfflineMutations(records,operations,name);
     records.sort((a, b) => Number(b.value?.createdAt || 0) - Number(a.value?.createdAt || 0));
     return { records: records.slice(0, args.limit || records.length) };
   }
@@ -138,15 +206,20 @@ export async function firestoreRecords(action: string, args: any, user: User) {
   }
   if (action === 'records.replace') {
     const row = doc(recordsRef, id);
+    if(typeof navigator!=='undefined'&&!navigator.onLine){
+      const operation=await queueOfflineMutation(user,name,String(id),'replace',value,args.expectedUpdatedAt);
+      return {id,value:stripUndefined(value),updatedAt:operation.expectedUpdatedAt,queued:true};
+    }
+    let currentVersion=0;
     if (args.expectedUpdatedAt !== undefined && typeof navigator !== 'undefined' && navigator.onLine) {
       const latest=await getDoc(row);
-      const latestUpdatedAt=Number(latest.data()?.updatedAt || 0);
-      if (!latest.exists() || latestUpdatedAt!==Number(args.expectedUpdatedAt)) {
+      currentVersion=Number(latest.data()?.updatedAt || 0);
+      if (!latest.exists() || currentVersion!==Number(args.expectedUpdatedAt)) {
         throw new Error('This record changed or was removed on another device. Reload records and review the latest version before saving.');
       }
     }
     const cleanValue = stripUndefined(value);
-    const updatedAt=Date.now();
+    const updatedAt=Math.max(Date.now(),currentVersion+1);
     const write = setDoc(row, { value: cleanValue, updatedAt });
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       watchWrite(write);
@@ -156,6 +229,11 @@ export async function firestoreRecords(action: string, args: any, user: User) {
     return { id, value: cleanValue, updatedAt };
   }
   if (action === 'records.delete') {
+    if(typeof navigator!=='undefined'&&!navigator.onLine){
+      const operation=await queueOfflineMutation(user,name,String(id),'delete',undefined,args.expectedUpdatedAt);
+      return {id,queued:true,updatedAt:operation.expectedUpdatedAt};
+    }
+    if(args.expectedUpdatedAt!==undefined){const latest=await getDoc(doc(recordsRef,id));if(!recordVersionMatches(Number(args.expectedUpdatedAt),latest.exists(),Number(latest.data()?.updatedAt||0)))throw new Error('This record changed or was removed on another device. Reload records and review the latest version before deleting.');}
     const remove = deleteDoc(doc(recordsRef, id));
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       watchWrite(remove);
@@ -163,6 +241,32 @@ export async function firestoreRecords(action: string, args: any, user: User) {
     }
     await finishWriteOrQueue(remove);
     return { id };
+  }
+  if(action==='sync.conflicts.resolve'){
+    if(typeof navigator!=='undefined'&&!navigator.onLine) throw new Error('Reconnect to resolve this conflict safely.');
+    const conflictRef=doc(userMutationsRef(user),String(args.id));
+    let changedAgain=false;
+    await runTransaction(db,async transaction=>{
+      const conflict=await transaction.get(conflictRef);
+      if(!conflict.exists()||conflict.data().kind!=='conflict') return;
+      const item=conflict.data();
+      const targetRef=doc(db,'users',user.uid,'data',item.collection,'records',item.recordId);
+      const target=await transaction.get(targetRef);
+      const latest=target.data();
+      const latestVersion=Number(latest?.updatedAt||0);
+      if(latestVersion!==Number(item.remoteUpdatedAt||0)||target.exists()!==(item.remoteValue!==null)){
+        transaction.update(conflictRef,{remoteValue:target.exists()?latest?.value:null,remoteUpdatedAt:latestVersion,conflictAt:Date.now()});
+        changedAgain=true;
+        return;
+      }
+      if(args.choice==='keep_local'){
+        if(item.action==='delete') transaction.delete(targetRef);
+        else transaction.set(targetRef,{value:stripUndefined(item.value),updatedAt:Math.max(Date.now(),latestVersion+1)});
+      }
+      transaction.delete(conflictRef);
+    });
+    if(changedAgain) throw new Error('The cloud record changed again. Review the refreshed conflict and choose again.');
+    return {id:args.id,resolved:true};
   }
   throw new Error(`Unsupported action: ${action}`);
 }
