@@ -16,6 +16,9 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'prompt',
+      // Control a first-time visitor after installation too. Updates still wait
+      // for Update now; claiming a client does not itself reload the page.
+      workbox: { clientsClaim: true },
       devOptions: { enabled: true, type: 'module', resolveTempFolder: ()=>resolve(projectDir,'dev-dist') },
       includeAssets: [
         'favicon.ico',
