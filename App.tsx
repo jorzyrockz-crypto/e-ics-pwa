@@ -438,11 +438,11 @@ function Dashboard(){
       const m:any = await api("records.list", {collection:'meta', limit:10});
       if(!m.records?.length){
         const cleanMeta={...defaultMeta, wallets:{...defaultWallets}};
-        try{ const r:any=await api("records.create", {collection:'meta', value:cleanMeta, idempotency_key:`meta-seed-${uid()}`}); setMetaId(r.id); } catch{}
+        if(typeof navigator==='undefined' || navigator.onLine){ try{ const r:any=await api("records.create", {collection:'meta', value:cleanMeta, idempotency_key:`meta-seed-${uid()}`}); setMetaId(r.id); } catch{} }
         setMeta(cleanMeta);
       }
       const c:any = await api("records.list", {collection:'customers', limit:100});
-      if(!c.records?.length){
+      if(!c.records?.length && (typeof navigator==='undefined' || navigator.onLine)){
         for(const s of seedCustomers){
           try{ await api("records.create", {collection:'customers', value:s, idempotency_key:`cust-seed-${s.phone}-${uid()}`}); } catch{}
         }

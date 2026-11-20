@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, type User } from 'firebase/auth';
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, setDoc, deleteDoc, persistentLocalCache, persistentMultipleTabManager, type Firestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDSzRMrsCvxA6faVN7TUsL9-tfCNTJJTzk',
@@ -14,11 +14,34 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// Persist Firestore's document cache and queued writes in IndexedDB so previously
+// opened accounts can keep working offline and sync changes when connectivity returns.
+let persistentFirestore = true;
+let firestoreDb: Firestore;
+try {
+  firestoreDb = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  });
+} catch (error) {
+  persistentFirestore = false;
+  console.warn('Persistent Firestore cache is unavailable; using the in-memory cache.', error);
+  firestoreDb = getFirestore(app);
+}
+export const db = firestoreDb;
+export const hasPersistentOfflineCache = () => persistentFirestore;
 export const observeAuth = onAuthStateChanged;
 export const signInWithGoogle = () => signInWithPopup(auth, new GoogleAuthProvider());
 export const logOut = () => signOut(auth);
 export type { User };
+
+async function finishWriteOrQueue(write: Promise<void>, timeoutMs = 2500) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // Firestore applies writes to its local cache immediately, but its write promise
+  // normally resolves only after the server acknowledges the mutation.
+  const timeout = new Promise<void>(resolve => { timer = setTimeout(resolve, timeoutMs); });
+  try { await Promise.race([write, timeout]); }
+  finally { if (timer) clearTimeout(timer); }
+}
 
 function stripUndefined(value: any): any {
   if (Array.isArray(value)) return value.map(item => item === undefined ? null : stripUndefined(item));
@@ -34,9 +57,23 @@ export async function firestoreRecords(action: string, args: any, user: User) {
   if (!name) throw new Error('A record collection is required.');
   const recordsRef = collection(db, 'users', user.uid, 'data', name, 'records');
   if (action === 'records.list') {
-    let snapshot = await getDocs(recordsRef);
+    let snapshot;
+    try {
+      snapshot = typeof navigator !== 'undefined' && !navigator.onLine
+        ? await getDocsFromCache(recordsRef)
+        : await getDocs(recordsRef);
+    } catch (serverError) {
+      try { snapshot = await getDocsFromCache(recordsRef); }
+      catch (cacheError) {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          console.warn(`No cached ${name} records are available offline.`, cacheError);
+          throw new Error(`No offline copy of ${name} is available yet. Connect to the internet once to cache your account data.`);
+        }
+        throw serverError;
+      }
+    }
     // One-time import of this browser's legacy records when a signed-in account has no cloud copy.
-    if (snapshot.empty && typeof localStorage !== 'undefined') {
+    if (typeof navigator !== 'undefined' && navigator.onLine && snapshot.empty && typeof localStorage !== 'undefined') {
       try {
         const legacy = JSON.parse(localStorage.getItem(`eics.records.${name}`) || '[]');
         if (Array.isArray(legacy) && legacy.length) {
@@ -54,21 +91,42 @@ export async function firestoreRecords(action: string, args: any, user: User) {
   if (action === 'records.create') {
     const row = id ? doc(recordsRef, String(id)) : doc(recordsRef);
     if (id) {
-      const existing = await getDoc(row);
-      if (existing.exists()) return { id: row.id, value: existing.data().value, skipped: true };
+      try {
+        const existing = typeof navigator !== 'undefined' && !navigator.onLine
+          ? await getDocFromCache(row)
+          : await getDoc(row);
+        if (existing.exists()) return { id: row.id, value: existing.data().value, skipped: true };
+      } catch (error) {
+        if (typeof navigator === 'undefined' || navigator.onLine) throw error;
+      }
     }
     const cleanValue = stripUndefined(value);
-    await setDoc(row, { value: cleanValue });
+    const write = setDoc(row, { value: cleanValue });
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      void write.catch(error => console.error('Queued offline create failed to sync', error));
+      return { id: row.id, value: cleanValue, skipped: false };
+    }
+    await finishWriteOrQueue(write);
     return { id: row.id, value: cleanValue, skipped: false };
   }
   if (action === 'records.replace') {
     const row = doc(recordsRef, id);
     const cleanValue = stripUndefined(value);
-    await setDoc(row, { value: cleanValue });
+    const write = setDoc(row, { value: cleanValue });
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      void write.catch(error => console.error('Queued offline update failed to sync', error));
+      return { id, value: cleanValue };
+    }
+    await finishWriteOrQueue(write);
     return { id, value: cleanValue };
   }
   if (action === 'records.delete') {
-    await deleteDoc(doc(recordsRef, id));
+    const remove = deleteDoc(doc(recordsRef, id));
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      void remove.catch(error => console.error('Queued offline delete failed to sync', error));
+      return { id };
+    }
+    await finishWriteOrQueue(remove);
     return { id };
   }
   throw new Error(`Unsupported action: ${action}`);
