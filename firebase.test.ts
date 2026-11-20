@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sdk = vi.hoisted(() => ({
   onSnapshot: vi.fn(), getDocs: vi.fn(), waitForPendingWrites: vi.fn(), runTransaction: vi.fn(),
+  doc: vi.fn(), getDocFromCache: vi.fn(), getDocsFromCache: vi.fn(), setDoc: vi.fn(),
 }));
 vi.mock('firebase/app', () => ({ initializeApp: () => ({}) }));
 vi.mock('firebase/auth', () => ({
@@ -11,12 +12,13 @@ vi.mock('firebase/firestore', () => ({
   initializeFirestore: () => ({}), getFirestore: () => ({}),
   persistentLocalCache: () => ({}), persistentMultipleTabManager: () => ({}),
   collection: (_db: unknown, ...parts: string[]) => ({ path: parts.join('/') }),
-  doc: vi.fn(), getDoc: vi.fn(), getDocFromCache: vi.fn(), getDocs: sdk.getDocs, getDocsFromCache: vi.fn(),
-  setDoc: vi.fn(), deleteDoc: vi.fn(), onSnapshot: sdk.onSnapshot,
+  doc: sdk.doc, getDoc: vi.fn(), getDocFromCache: sdk.getDocFromCache, getDocs: sdk.getDocs, getDocsFromCache: sdk.getDocsFromCache,
+  setDoc: sdk.setDoc, deleteDoc: vi.fn(), onSnapshot: sdk.onSnapshot,
   waitForPendingWrites: sdk.waitForPendingWrites, runTransaction: sdk.runTransaction,
 }));
 
-import { subscribeToUserRecords, syncUserRecords, type User } from './firebase';
+import { firestoreRecords, subscribeToUserRecords, syncUserRecords, type User } from './firebase';
+import { overlayOfflineMutations, type OfflineMutation } from './offlineSync';
 import { liveSources, type LiveRecordCallbacks } from './liveRecords';
 
 const owner = { uid: 'test-owner-a' } as User;
@@ -95,6 +97,110 @@ describe('Firestore live subscription adapter', () => {
     await Promise.all([first, second, third]);
     // One in-flight pass plus one follow-up pass for all requests that arrived during it.
     expect(sdk.getDocs).toHaveBeenCalledTimes(2);
+    expect(sdk.runTransaction).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('payment and tip financial saves', () => {
+  type Ref = { id: string; path: string };
+  const prefix = 'users/test-owner-a';
+  const txPath = `${prefix}/data/transactions/records/payment-1`;
+  const metaPath = `${prefix}/data/meta/records/settings`;
+  const transaction = { type: 'E-Load', amount: 100, selling: 100, fee: 3, tip: 0, tipWallet: 'cash' };
+  const settings = { kind: 'meta', wallets: { cash: 1000, maribank: 500 } };
+  let store: Map<string, any>, writes: { ref: Ref; value: any }[], ids: number;
+  const clone = <T,>(value: T): T => structuredClone(value);
+  const read = (ref: Ref) => ({ ref, id: ref.id, exists: () => store.has(ref.path), data: () => clone(store.get(ref.path)) });
+  const collectionRows = (ref: Ref) => ({ docs: [...store.keys()].filter(path => path.startsWith(`${ref.path}/`)).map(path => read({ path, id: path.split('/').pop()! })) });
+  function args(create = true, tip = 0, expectedUpdatedAt?: number, expectedMetaVersion = 3) {
+    return { collection: 'transactions', id: 'payment-1', create, value: { ...transaction, tip, optional: undefined }, expectedUpdatedAt,
+      meta: { id: 'settings', expectedUpdatedAt: expectedMetaVersion, value: { ...settings, wallets: { cash: 1103 + tip, maribank: 400 } } } };
+  }
+  beforeEach(() => {
+    vi.clearAllMocks(); vi.stubGlobal('navigator', { onLine: true });
+    store = new Map([[metaPath, { value: clone(settings), updatedAt: 3 }]]); writes = []; ids = 0;
+    sdk.doc.mockImplementation((parent: Ref, ...parts: string[]) => {
+      const path = parent.path ? [parent.path, ...parts, ...(!parts.length ? [`generated-${++ids}`] : [])].join('/') : parts.join('/');
+      return { path, id: path.split('/').pop()! };
+    });
+    sdk.getDocFromCache.mockImplementation(async ref => read(ref));
+    sdk.getDocsFromCache.mockImplementation(async ref => collectionRows(ref));
+    sdk.getDocs.mockImplementation(async ref => collectionRows(ref));
+    sdk.setDoc.mockImplementation(async (ref, value) => { store.set(ref.path, clone(value)); });
+    sdk.waitForPendingWrites.mockResolvedValue(undefined);
+    sdk.runTransaction.mockImplementation(async (_db, callback) => {
+      const staged: typeof writes = [];
+      const result = await callback({
+        get: async (ref: Ref) => read(ref),
+        set: (ref: Ref, value: any) => { staged.push({ ref, value }); },
+      });
+      // Like the SDK, a throwing callback applies none of its staged writes.
+      for (const item of staged) store.set(item.ref.path, clone(item.value));
+      writes.push(...staged); return result;
+    });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('saves an owner-confirmed payment and its wallets together in one account-scoped transaction', async () => {
+    const result = await firestoreRecords('records.save_transaction', args(), owner);
+    expect(sdk.runTransaction).toHaveBeenCalledTimes(1);
+    expect(writes.map(item => item.ref.path)).toEqual([txPath, metaPath]);
+    expect(result.record.value).toEqual(transaction);
+    expect(result.meta.value.wallets).toEqual({ cash: 1103, maribank: 400 });
+    expect(store.get(txPath).value).not.toHaveProperty('optional');
+    expect(sdk.setDoc).not.toHaveBeenCalled();
+  });
+
+  it('leaves no paid transaction behind when the wallet revision conflicts', async () => {
+    await expect(firestoreRecords('records.save_transaction', args(true, 0, undefined, 2), owner)).rejects.toThrow(/Wallet balances changed/);
+    expect(store.has(txPath)).toBe(false);
+    expect(store.get(metaPath)).toEqual({ value: settings, updatedAt: 3 });
+    expect(writes).toEqual([]);
+  });
+
+  it('rejects a stale tip or payment without touching either document', async () => {
+    store.set(txPath, { value: transaction, updatedAt: 7 });
+    await expect(firestoreRecords('records.save_transaction', args(false, 17, 6), owner)).rejects.toThrow(/changed or was removed/);
+    expect(store.get(txPath)).toEqual({ value: transaction, updatedAt: 7 });
+    expect(store.get(metaPath)).toEqual({ value: settings, updatedAt: 3 });
+    expect(writes).toEqual([]);
+  });
+
+  it('does not duplicate payment or wallets if a create is retried after it already committed', async () => {
+    const first = await firestoreRecords('records.save_transaction', args(), owner);
+    const writesBeforeRetry = writes.length;
+    const result = await firestoreRecords('records.save_transaction', args(), owner);
+    expect(result.record).toEqual({ ...first.record, skipped: true });
+    expect(writes).toHaveLength(writesBeforeRetry);
+    expect(store.get(metaPath).value.wallets).toEqual({ cash: 1103, maribank: 400 });
+  });
+
+  it('commits the tip separately, preserving the confirmed payment and rejecting repeat stale submissions', async () => {
+    const paid = await firestoreRecords('records.save_transaction', args(), owner);
+    const tipped = await firestoreRecords('records.save_transaction', args(false, 17, paid.record.updatedAt, paid.meta.updatedAt), owner);
+    expect(tipped.record.value).toEqual({ ...transaction, tip: 17 });
+    expect(tipped.meta.value.wallets).toEqual({ cash: 1120, maribank: 400 });
+    const count = writes.length;
+    await expect(firestoreRecords('records.save_transaction', args(false, 17, paid.record.updatedAt, paid.meta.updatedAt), owner)).rejects.toThrow(/changed or was removed/);
+    expect(writes).toHaveLength(count);
+  });
+
+  it('retains offline confirmation then tip as proposals at the original revisions', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    const debt = { ...transaction, utang: true, utangStatus: 'unpaid', paidAmount: 0 };
+    store.set(txPath, { value: debt, updatedAt: 7 });
+    const full = args(false, 0, 7); full.value = { ...full.value, ...{ utang: true, utangStatus: 'paid', paidAmount: 100 } };
+    const confirmed = await firestoreRecords('records.save_transaction', full, owner);
+    const tip = args(false, 17, confirmed.record.updatedAt);
+    tip.value = { ...tip.value, ...{ utang: true, utangStatus: 'paid', paidAmount: 100 } };
+    await firestoreRecords('records.save_transaction', tip, owner);
+    const operations = [...store.entries()].filter(([path]) => path.includes('/offline_mutations/')).map(([path, data]) => ({ ...data, id: path.split('/').pop()! })) as OfflineMutation[];
+    expect(operations).toHaveLength(2);
+    expect(operations.find(item => item.collection === 'transactions')).toMatchObject({ expectedUpdatedAt: 7, value: { paidAmount: 100, tip: 17, amount: 100, fee: 3 } });
+    expect(operations.find(item => item.collection === 'meta')).toMatchObject({ expectedUpdatedAt: 3, value: { wallets: { cash: 1120, maribank: 400 } } });
+    expect(store.get(txPath)).toEqual({ value: debt, updatedAt: 7 });
+    expect(overlayOfflineMutations([{ id: 'payment-1', value: debt, updatedAt: 7 }], operations, 'transactions')[0].value).toMatchObject({ utangStatus: 'paid', paidAmount: 100, tip: 17 });
     expect(sdk.runTransaction).not.toHaveBeenCalled();
   });
 });

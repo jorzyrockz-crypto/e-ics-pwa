@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyTransaction, customerPayments, customerTotal, defaultTipWallet, isValidTip, normalizeTip,
+  applyTransaction, canRecordTip, customerPayments, customerTotal, defaultTipWallet, isValidTip, normalizeTip, round2,
   reverseTransaction, transactionWalletEffect, txPortion, txProfit, txTip, txTipWallet,
-  updateWalletsForEdit, type TransactionMoney, type TxType,
+  updateWalletsForEdit, utangPaymentPortion, withRecordedTip, withUtangPayment, type TransactionMoney, type TxType,
 } from './transactionFinance';
 
 const sale = (overrides: Partial<TransactionMoney> = {}): TransactionMoney => ({
@@ -144,5 +144,80 @@ describe('separate customer tips', () => {
     expect(restored.tip).toBe(17);
     expect(restored.fee).toBe(3);
     expect(applyTransaction(startingWallets, restored)).toEqual(applyTransaction(startingWallets, tx));
+  });
+});
+
+
+describe('owner-confirmed payment and tip flow', () => {
+  it('permits tips only on upfront sales or explicitly fully paid Utang, never top-ups', () => {
+    for (const type of ['E-Load', 'Cash In', 'Cash Out'] as const) {
+      expect(canRecordTip(sale({ type }))).toBe(true);
+      expect(canRecordTip(sale({ type, utang: true, utangStatus: 'paid', paidAmount: 100 }))).toBe(true);
+      expect(canRecordTip(sale({ type, utang: true, utangStatus: 'unpaid', paidAmount: 50 }))).toBe(false);
+      expect(canRecordTip(sale({ type, utang: true, utangStatus: 'unpaid', paidAmount: 100 }))).toBe(false);
+      expect(canRecordTip(sale({ type, utang: true, paidAmount: 100 }))).toBe(false);
+    }
+    expect(canRecordTip(sale({ type: 'Top-Up' }))).toBe(false);
+  });
+
+  it('records only the extra after payment without changing principal, fee, discount, or paid amount', () => {
+    const original = sale({ utang: true, utangStatus: 'paid', paidAmount: 100, discount: 5 });
+    const tipped = withRecordedTip(original, 17, 'cash');
+    expect(tipped).toMatchObject({ amount: 100, selling: 100, fee: 3, discount: 5, paidAmount: 100, tip: 17 });
+    expect(original.tip).toBeUndefined();
+    expect(txProfit(tipped)).toBe(25);
+  });
+
+  it('refuses a tip on unpaid or partially paid Utang and on provider top-ups', () => {
+    for (const paidAmount of [0, 50, 100]) expect(() => withRecordedTip(sale({ utang: true, utangStatus: 'unpaid', paidAmount }), 17, 'cash')).toThrow(/full customer payment/);
+    expect(() => withRecordedTip(sale({ type: 'Top-Up' }), 17, 'cash')).toThrow(/full customer payment/);
+    for (const amount of [-1, Infinity, NaN]) expect(() => withRecordedTip(sale(), amount, 'cash')).toThrow(/positive amount/);
+  });
+
+  it('keeps partial Utang payments unpaid and marks only the final collection fully paid', () => {
+    const debt = sale({ utang: true, utangStatus: 'unpaid', paidAmount: 0 });
+    const partial = withUtangPayment(debt, 40);
+    expect(partial).toMatchObject({ paidAmount: 40, utangStatus: 'unpaid', amount: 100, fee: 3 });
+    expect(canRecordTip(partial)).toBe(false);
+    const full = withUtangPayment(partial, 60);
+    expect(full).toMatchObject({ paidAmount: 100, utangStatus: 'paid', amount: 100, fee: 3 });
+    expect(canRecordTip(full)).toBe(true);
+    expect(() => withUtangPayment(full, 1)).toThrow(/already paid/);
+  });
+
+  it('rejects invalid or excessive collections before they can be confirmed', () => {
+    const debt = sale({ utang: true, utangStatus: 'unpaid', paidAmount: 50 });
+    for (const amount of [0, -1, NaN, Infinity, 50.01]) expect(() => withUtangPayment(debt, amount)).toThrow();
+    expect(() => withUtangPayment(sale(), 50)).toThrow();
+  });
+
+  it('collects cumulative rounded fees/discounts exactly once across several partial payments', () => {
+    let debt = sale({ utang: true, utangStatus: 'unpaid', paidAmount: 0, fee: 0.05, discount: 0.05 });
+    let wallets = { ...startingWallets }, fees = 0, discounts = 0;
+    for (const principal of [33.33, 33.33, 33.34]) {
+      const receipt = utangPaymentPortion(debt, principal);
+      fees = round2(fees + receipt.fee); discounts = round2(discounts + (receipt.discount || 0));
+      expect(receipt.tip).toBe(0);
+      const updated = withUtangPayment(debt, principal);
+      wallets = updateWalletsForEdit(wallets, debt, updated); debt = updated;
+    }
+    expect(fees).toBe(0.05); expect(discounts).toBe(0.05);
+    expect(wallets).toEqual({ cash: 1100.05, maribank: 400.05 });
+    expect(updateWalletsForEdit(wallets, debt, withRecordedTip(debt, 17, 'cash'))).toEqual({ cash: 1117.05, maribank: 400.05 });
+  });
+
+  it('allows owner confirmation of a legacy fully collected Utang without collecting principal or fees again', () => {
+    const legacy = sale({ utang: true, utangStatus: 'unpaid', paidAmount: 100 });
+    expect(canRecordTip(legacy)).toBe(false);
+    const confirmed = withUtangPayment(legacy, 0);
+    expect(confirmed.utangStatus).toBe('paid');
+    expect(utangPaymentPortion(legacy, 0)).toMatchObject({ amount: 0, fee: 0, discount: 0, tip: 0 });
+    expect(updateWalletsForEdit(startingWallets, legacy, confirmed)).toEqual(startingWallets);
+    expect(canRecordTip(confirmed)).toBe(true);
+  });
+
+  it('does not treat a legacy Utang with no paid status as a confirmed payment', () => {
+    expect(transactionWalletEffect(sale({ utang: true, paidAmount: 0 }))).toBeNull();
+    expect(transactionWalletEffect(sale({ utang: true, paidAmount: 50 }))).toMatchObject({ amount: 50, fee: 1.5 });
   });
 });

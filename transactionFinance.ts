@@ -21,6 +21,39 @@ export const isValidTip = (value: number): boolean => Number.isFinite(value) && 
 export const normalizeTip = (value: unknown): number => typeof value === 'number' && value > 0 && isValidTip(value) ? round2(value) : 0;
 export const txTip = (tx: TransactionMoney): number => tx.type === 'Top-Up' ? 0 : normalizeTip(tx.tip);
 export const txTipWallet = (tx: TransactionMoney): keyof Wallets => tx.tipWallet === 'cash' || tx.tipWallet === 'maribank' ? tx.tipWallet : defaultTipWallet(tx.type);
+
+// A tip is money already received, never part of an unpaid customer's debt.
+// Legacy upfront sales are already recorded as paid; Utang needs an explicit
+// paid status, even if an imported paidAmount happens to cover the principal.
+export const canRecordTip = (tx: TransactionMoney): boolean => tx.type !== 'Top-Up' && (!tx.utang || tx.utangStatus === 'paid');
+export function withRecordedTip<T extends TransactionMoney>(tx: T, amount: number, wallet: keyof Wallets): T {
+  if (!canRecordTip(tx)) throw new Error('Confirm full customer payment before recording a tip.');
+  if (!isValidTip(amount)) throw new Error('Extra / Tip must be zero or a positive amount within the supported range.');
+  return { ...tx, tip: normalizeTip(amount), tipWallet: wallet };
+}
+
+export function withUtangPayment<T extends TransactionMoney>(tx: T, principal: number): T {
+  if (!tx.utang || tx.utangStatus === 'paid') throw new Error('This Utang is already paid or is not an unpaid Utang.');
+  const total = round2(tx.amount);
+  const alreadyPaid = round2(Math.min(total, Math.max(0, tx.paidAmount || 0)));
+  const remaining = round2(total - alreadyPaid);
+  const paidNow = round2(principal);
+  // Legacy imports can have all principal collected but no paid marker yet.
+  // Confirming those records closes the Utang without collecting money again.
+  if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(alreadyPaid) || !Number.isFinite(principal) || paidNow < 0 || (paidNow === 0 && remaining > 0) || paidNow > remaining) throw new Error('Payment must be greater than zero and cannot exceed the remaining Utang.');
+  const paidAmount = round2(alreadyPaid + paidNow);
+  return { ...tx, paidAmount, utangStatus: paidAmount >= total ? 'paid' : 'unpaid' };
+}
+
+// Use the difference between cumulative paid portions, not independent rounded
+// fractions, so several partial collections sum to the original fee/discount.
+export function utangPaymentPortion<T extends TransactionMoney>(tx: T, principal: number): T {
+  const updated = withUtangPayment(tx, principal);
+  const before = txPortion({ ...tx, tip: 0 }, Math.min(tx.amount, Math.max(0, tx.paidAmount || 0)));
+  const after = txPortion({ ...tx, tip: 0 }, updated.paidAmount || 0);
+  return { ...txPortion(tx, principal), fee: round2(after.fee - before.fee), discount: round2(eLoadDiscount(after) - eLoadDiscount(before)), tip: 0 };
+}
+
 export const eLoadDiscount = (tx: TransactionMoney) => tx.type === 'E-Load' ? Math.min(Math.max(0, round2(tx.discount || 0)), tx.amount) : 0;
 export const txProfit = (tx: TransactionMoney) => tx.type === 'Top-Up' ? -round2(tx.fee || 0) : round2((tx.fee || 0) + eLoadDiscount(tx) + txTip(tx));
 
@@ -71,7 +104,7 @@ export function reverseTransaction(wallets: Wallets, tx: TransactionMoney): Wall
 }
 
 export function transactionWalletEffect<T extends TransactionMoney>(tx: T): T | null {
-  if (tx.utang && tx.utangStatus === 'unpaid') {
+  if (tx.utang && tx.utangStatus !== 'paid') {
     const paid = Math.min(tx.amount, Math.max(0, tx.paidAmount || 0));
     return paid > 0 ? txPortion(tx, paid) : null;
   }

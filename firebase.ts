@@ -174,7 +174,7 @@ async function processQueuedMutationsOnce(user:User){
 }
 
 // Every record is isolated under its authenticated user's Firestore namespace.
-export async function firestoreRecords(action: string, args: any, user: User) {
+export async function firestoreRecords(action: string, args: any, user: User): Promise<any> {
   const { collection: name, id, value } = args || {};
   if (!name && action!=='sync.conflicts.resolve') throw new Error('A record collection is required.');
   const recordsRef = collection(db, 'users', user.uid, 'data', name||'meta', 'records');
@@ -221,6 +221,55 @@ export async function firestoreRecords(action: string, args: any, user: User) {
     records=overlayOfflineMutations(records,operations,name);
     records.sort((a, b) => Number(b.value?.createdAt || 0) - Number(a.value?.createdAt || 0));
     return { records: records.slice(0, args.limit || records.length) };
+  }
+  if (action === 'records.save_transaction') {
+    if (name !== 'transactions' || !id) throw new Error('A transaction ID is required for a payment save.');
+    const companion = args.meta;
+    if (companion && !companion.id) throw new Error('Load the wallet balances before confirming this payment.');
+    // Keep the existing offline proposal/overlay behavior. Online, the payment
+    // (or tip) and its wallet change must succeed together: a rejected balance
+    // revision must never leave a paid row behind or duplicate it on retry.
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const record = await firestoreRecords(args.create ? 'records.create' : 'records.replace', {
+        collection: name, id, value, expectedUpdatedAt: args.expectedUpdatedAt,
+      }, user);
+      const meta = !record.skipped && companion ? await firestoreRecords('records.replace', {
+        collection: 'meta', id: companion.id, value: companion.value, expectedUpdatedAt: companion.expectedUpdatedAt,
+      }, user) : undefined;
+      return { record, meta };
+    }
+    const row = doc(recordsRef, String(id));
+    const metaRow = companion ? doc(db, 'users', user.uid, 'data', 'meta', 'records', String(companion.id)) : null;
+    return runTransaction(db, async transaction => {
+      // All reads precede writes, including when the SDK retries a transaction.
+      const current = await transaction.get(row);
+      const currentMeta = metaRow ? await transaction.get(metaRow) : null;
+      const version = Number(current.data()?.updatedAt || 0);
+      const metaVersion = Number(currentMeta?.data()?.updatedAt || 0);
+      if (args.create && current.exists()) {
+        // The entry keeps its ID across confirmation retries. A committed
+        // create is returned as-is, without counting its payment a second time.
+        return {
+          record: { id: row.id, value: current.data().value, updatedAt: version, skipped: true },
+          meta: currentMeta?.exists() ? { id: metaRow!.id, value: currentMeta.data().value, updatedAt: metaVersion } : undefined,
+        };
+      }
+      if (!args.create && !recordVersionMatches(Number(args.expectedUpdatedAt || 0), current.exists(), version)) {
+        throw new Error('This record changed or was removed on another device. Reload records and review the latest version before saving.');
+      }
+      if (companion && !recordVersionMatches(Number(companion.expectedUpdatedAt || 0), Boolean(currentMeta?.exists()), metaVersion)) {
+        throw new Error('Wallet balances changed on another device. No payment or tip changes were saved. Review the latest balances and try again.');
+      }
+      const updatedAt = Math.max(Date.now(), version + 1);
+      const cleanValue = stripUndefined(value);
+      transaction.set(row, { value: cleanValue, updatedAt });
+      let meta;
+      if (metaRow) {
+        meta = { id: metaRow.id, value: stripUndefined(companion.value), updatedAt: Math.max(Date.now(), metaVersion + 1) };
+        transaction.set(metaRow, { value: meta.value, updatedAt: meta.updatedAt });
+      }
+      return { record: { id: row.id, value: cleanValue, updatedAt }, meta };
+    });
   }
   if (action === 'records.create') {
     const row = id ? doc(recordsRef, String(id)) : doc(recordsRef);

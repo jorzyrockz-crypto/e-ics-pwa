@@ -1,15 +1,18 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { applyTransaction, customerPayments, customerTotal, defaultTipWallet, eLoadDiscount, isValidTip, normalizeTip, reverseTransaction, round2, transactionWalletEffect, txPortion, txProfit, txTip, txTipWallet, updateWalletsForEdit, type TransactionMoney, type TxType, type Wallets } from './transactionFinance';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { applyTransaction, canRecordTip, customerPayments, customerTotal, defaultTipWallet, eLoadDiscount, isValidTip, normalizeTip, reverseTransaction, round2, transactionWalletEffect, txProfit, txTip, txTipWallet, updateWalletsForEdit, utangPaymentPortion, withRecordedTip, withUtangPayment, type TransactionMoney, type TxType, type Wallets } from './transactionFinance';
 import { firestoreRecords, auth, observeAuth, signInWithGoogle, logOut, subscribePendingWrites, subscribeToUserRecords, syncUserRecords, clearSyncError, type User as FirebaseUser } from './firebase';
 import { mergeDraftFields, recordCollectionLimits, type LiveRecord, type RecordCollection } from './liveRecords';
 import { LogOut, LoaderCircle, Share2, Copy } from 'lucide-react';
 import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown } from 'lucide-react';
 
-type Tx = TransactionMoney & { kind?:string; network:string; eloadKind?:'regular'|'promo'; promoName?:string; promoDetails?:string; promoValidity?:string; provider:string; phone:string; customerName?:string; payment:string; notes:string; date:string; time:string; createdAt:number; sample?:boolean; promiseDate?:string; history?:{oldAmount:number;newAmount:number;time:string;date:string}[] };
+type Tx = TransactionMoney & { kind?:string; network:string; eloadKind?:'regular'|'promo'; promoName?:string; promoDetails?:string; promoValidity?:string; provider:string; phone:string; customerName?:string; payment:string; notes:string; date:string; time:string; createdAt:number; sample?:boolean; promiseDate?:string; paymentConfirmedAt?:number; tipRecordedAt?:number; history?:{oldAmount:number;newAmount:number;time:string;date:string}[] };
 type WalletAdjustment = { wallet:keyof Wallets; mode:'add'|'deduct'; amount:number; category:string; note:string; date:string; time:string; createdAt:number };
 type WalletAdjustmentRecord = { id:string; value:WalletAdjustment; updatedAt?:number };
 type Meta = { kind:string; businessName:string; eloadPct:number; cashInPct:number; cashOutPct:number; palawanFee:number; wallets:Wallets; lastClosed:string; lowThreshold:number; startingFloat?:number; startingFloatDate?:string };
 type TxRecord = { id:string; value:Tx; updatedAt?:number };
+type TransactionEntry = { id:string; tx:Tx; previous:TxRecord|null; keepOpen:boolean };
+type PendingPayment = ({kind:'upfront'} & TransactionEntry) | {kind:'utang'; record:TxRecord; principal:number};
+type TipPrompt = { record:TxRecord; returnToDetail:boolean };
 type Customer = { name:string; phone:string; notes:string; createdAt:number; totalTransactions:number; totalAmount:number; sample?:boolean };
 type CustomerRecord = { id:string; value:Customer; updatedAt?:number };
 type Favorite = { phone:string; name:string; type:TxType; amount:number; network:string; createdAt:number };
@@ -146,6 +149,24 @@ function previewRecords(action:string,args:any){
   let rows:any[]=[];
   try{ rows=JSON.parse(localStorage.getItem(key)||'[]'); if(!Array.isArray(rows)) rows=[]; }catch{}
   if(action==='records.list') return {records:rows.slice(0,args.limit||rows.length)};
+  if(action==='records.save_transaction'){
+    const existing=rows.find(row=>row.id===args.id);
+    if(args.create&&existing) return {record:{...existing,skipped:true}};
+    if(!args.create&&!existing) throw new Error('Record not found.');
+    const record={id:args.id,value:args.value};
+    const next=[record,...rows.filter(row=>row.id!==record.id)];
+    const metaKey='eics.preview.meta',before=localStorage.getItem(key),beforeMeta=localStorage.getItem(metaKey);
+    let metaRow;
+    if(args.meta){
+      const metadata=JSON.parse(beforeMeta||'[]');
+      const index=metadata.findIndex((row:any)=>row.id===args.meta.id);
+      if(index<0) throw new Error('Load the wallet balances before confirming this payment.');
+      metaRow={id:args.meta.id,value:args.meta.value};metadata[index]=metaRow;
+      try{localStorage.setItem(key,JSON.stringify(next));localStorage.setItem(metaKey,JSON.stringify(metadata));}
+      catch(error){if(before===null) localStorage.removeItem(key);else localStorage.setItem(key,before);throw error;}
+    }else localStorage.setItem(key,JSON.stringify(next));
+    return {record,meta:metaRow};
+  }
   if(action==='records.create'){
     if(args.id && rows.some(row=>row.id===args.id)) return {...rows.find(row=>row.id===args.id),skipped:true};
     const row={id:args.id||uid(),value:args.value}; rows.unshift(row); localStorage.setItem(key,JSON.stringify(rows)); return {...row,skipped:false};
@@ -240,6 +261,14 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
   const [loadingProgress,setLoadingProgress]=useState(8);
   const [apiError,setApiError]=useState('');
   const [saving,setSaving]=useState(false);
+  const paymentWriteInFlight=useRef(false);
+  const paymentPlanName=useId();
+  const [pendingPayment,setPendingPayment]=useState<PendingPayment|null>(null);
+  const [paymentError,setPaymentError]=useState('');
+  const [tipPrompt,setTipPrompt]=useState<TipPrompt|null>(null);
+  const [tipInput,setTipInput]=useState('');
+  const [tipWallet,setTipWallet]=useState<keyof Wallets>('cash');
+  const [tipError,setTipError]=useState('');
   const [statementImportBusy,setStatementImportBusy]=useState(false);
   const [backupBusy,setBackupBusy]=useState(false);
   const statementImportRef=useRef<HTMLInputElement|null>(null);
@@ -345,8 +374,6 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
   const [fAmount,setFAmount]=useState(100);
   const [fCustom,setFCustom]=useState('');
   const [fFee,setFFee]=useState(3);
-  const [fTip,setFTip]=useState('');
-  const [fTipWallet,setFTipWallet]=useState<keyof Wallets>('cash');
   const [fDiscount,setFDiscount]=useState(0);
   const [fPhone,setFPhone]=useState('');
   const [fCustomerName,setFCustomerName]=useState('');
@@ -355,10 +382,18 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
   const [fNotes,setFNotes]=useState('');
   const [fDate,setFDate]=useState(todayKey());
   const [fTime,setFTime]=useState(currentTimeLabel());
-  // A voluntary tip is not a debt: add it to an Utang only after it is fully paid.
-  const fUnpaidUtang = isUtang && (editing?.value.utang ? Math.min(fAmount,Math.max(0,editing.value.paidAmount||0)) : 0) < fAmount;
-  const fTipAmount = fType==='Top-Up' || fUnpaidUtang ? 0 : normalizeTip(Number(fTip));
-  const formMoney:TransactionMoney = {type:fType,amount:fAmount,fee:fFee,selling:fType==='E-Load'?fAmount:0,discount:fDiscount,tip:fTipAmount,tipWallet:fTipWallet};
+  const formPaidPrincipal=editing?.value.utang?Math.min(fAmount,Math.max(0,editing.value.utangStatus==='paid'?editing.value.amount:editing.value.paidAmount||0)):0;
+  const fUnpaidUtang = isUtang && formPaidPrincipal < fAmount;
+  // Entry/edit forms cannot create or change tips. Existing paid tips remain
+  // intact; new tips have their own modal after owner-confirmed full payment.
+  const existingFormTip=fType==='Top-Up'||!editing?0:txTip(editing.value);
+  const formMoney:TransactionMoney = {type:fType,amount:fAmount,fee:fFee,selling:fType==='E-Load'?fAmount:0,discount:fDiscount,tip:existingFormTip,tipWallet:editing?txTipWallet(editing.value):defaultTipWallet(fType)};
+  const pendingCustomer=pendingPayment?.kind==='upfront'?pendingPayment.tx:pendingPayment?.record.value;
+  const previouslyReceived=pendingPayment?.kind==='upfront'&&pendingPayment.previous?.value.type===pendingPayment.tx.type?transactionWalletEffect(pendingPayment.previous.value):null;
+  const pendingReceipt=pendingPayment?.kind==='upfront'?{...pendingPayment.tx,amount:round2(pendingPayment.tx.amount-(previouslyReceived?.amount||0)),selling:pendingPayment.tx.type==='E-Load'?round2(pendingPayment.tx.selling-(previouslyReceived?.selling||0)):0,fee:round2(pendingPayment.tx.fee-(previouslyReceived?.fee||0)),tip:0}:pendingPayment?utangPaymentPortion(pendingPayment.record.value,pendingPayment.principal):null;
+  const pendingFullPayment=pendingPayment?.kind==='upfront'||Boolean(pendingPayment&&pendingPayment.principal>=utangRemaining(pendingPayment.record.value));
+  const previewTip=normalizeTip(Number(tipInput));
+  const tipPreview=tipPrompt?{...tipPrompt.record.value,tip:previewTip,tipWallet}:null;
   const formWalletMove = applyTransaction({cash:0,maribank:0},formMoney);
   const [walletAmt,setWalletAmt]=useState(500);
   const [walletActionCategory,setWalletActionCategory]=useState('Shopee / Online shopping');
@@ -421,10 +456,6 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
     }
   }
   const reloadRecordsRef=useRef(reloadRecords); reloadRecordsRef.current=reloadRecords;
-  async function createRow(row:Tx){
-    const key = `tx-${row.date}-${row.createdAt}-${uid()}`;
-    return api("records.create", {collection:'transactions', value:row, idempotency_key:key});
-  }
   function captureMeta(){return {value:metaRef.current,id:metaIdRef.current,updatedAt:metaUpdatedAtRef.current};}
   async function saveMeta(next:Meta,base=captureMeta()){
     const clean:Meta={kind:'meta',businessName:next.businessName,eloadPct:next.eloadPct,cashInPct:next.cashInPct,cashOutPct:next.cashOutPct,palawanFee:next.palawanFee,lastClosed:next.lastClosed,lowThreshold:typeof next.lowThreshold==='number'?next.lowThreshold:1000,startingFloat:next.startingFloat,startingFloatDate:next.startingFloatDate,wallets:{cash:round2(next.wallets.cash),maribank:round2(next.wallets.maribank)}};
@@ -731,7 +762,7 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
     setAddNameSaving(false);
   }
   function openNew(type:TxType, cust?:CustomerRecord|null, preset?:{amount?:number; network?:string}){
-    setEditing(null); setFType(type); setFNetwork(preset?.network || 'Globe'); setFEloadKind('regular'); setFPromoName(''); setFPromoDetails(''); setFPromoValidity(''); setFProvider(type==='Top-Up'?'External Provider':'Main Wallet'); setFAmount(preset?.amount ?? (type==='Top-Up'?1000:100)); setFDiscount(0); setFTip(''); setFTipWallet(defaultTipWallet(type)); setFCustom(''); setFFee(type==='E-Load'?Math.round((preset?.amount ?? 100)*meta.eloadPct/100*100)/100: type==='Top-Up'?meta.palawanFee:autoFee(type,preset?.amount ?? 100));
+    setEditing(null); setFType(type); setFNetwork(preset?.network || 'Globe'); setFEloadKind('regular'); setFPromoName(''); setFPromoDetails(''); setFPromoValidity(''); setFProvider(type==='Top-Up'?'External Provider':'Main Wallet'); setFAmount(preset?.amount ?? (type==='Top-Up'?1000:100)); setFDiscount(0); setFCustom(''); setFFee(type==='E-Load'?Math.round((preset?.amount ?? 100)*meta.eloadPct/100*100)/100: type==='Top-Up'?meta.palawanFee:autoFee(type,preset?.amount ?? 100));
     setShowNameField(false); setNamePromptSkipped(false); setNameMsg(''); setDuplicateInfo(null); setIsUtang(false); setFPromiseDate('');
     if(cust){ setCustomerFromRecord(cust); } else { setFPhone(''); setFCustomerName(''); setFCustomerQuery(''); }
     setFNotes(type==='Top-Up'?'Top-Up via External Provider':''); setFDate(todayKey()); setFTime(currentTimeLabel()); setFPayment('Cash'); setShowTx(true); setSaveMsg('');
@@ -740,12 +771,12 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
     // Repeating starts one new transaction; dismiss the source sheet so the form is not hidden behind it.
     setDetail(null); setCustomerDetail(null);
     const cust = customerByPhone.get(digitsOnly(r.value.phone||''));
-    setEditing(null); setFType(r.value.type); setFNetwork(r.value.network||'Globe'); setFEloadKind(r.value.eloadKind||'regular'); setFPromoName(r.value.promoName||''); setFPromoDetails(r.value.promoDetails||''); setFPromoValidity(r.value.promoValidity||''); setFProvider(r.value.provider||'Main Wallet'); setFAmount(r.value.amount); setFDiscount(eLoadDiscount(r.value)); setFCustom(''); setFFee(r.value.fee); setFTip(''); setFTipWallet(defaultTipWallet(r.value.type));
+    setEditing(null); setFType(r.value.type); setFNetwork(r.value.network||'Globe'); setFEloadKind(r.value.eloadKind||'regular'); setFPromoName(r.value.promoName||''); setFPromoDetails(r.value.promoDetails||''); setFPromoValidity(r.value.promoValidity||''); setFProvider(r.value.provider||'Main Wallet'); setFAmount(r.value.amount); setFDiscount(eLoadDiscount(r.value)); setFCustom(''); setFFee(r.value.fee);
     if(cust) setCustomerFromRecord(cust); else { setFPhone(r.value.phone||''); setFCustomerName(r.value.customerName||''); setFCustomerQuery(displayNamePhone(r.value.customerName, r.value.phone)); }
     setIsUtang(false); setFPromiseDate(''); setDuplicateInfo(null); setFNotes(r.value.notes||''); setFDate(todayKey()); setFTime(currentTimeLabel()); setFPayment(r.value.payment||'Cash'); setShowNameField(false); setShowTx(true); showToast('A new transaction is prefilled. Review it and tap Save to record it.');
   }
   function openEdit(r:TxRecord){
-    setEditing(r); const v=r.value; setFType(v.type); setFNetwork(v.network||'Globe'); setFEloadKind(v.eloadKind||'regular'); setFPromoName(v.promoName||''); setFPromoDetails(v.promoDetails||''); setFPromoValidity(v.promoValidity||''); setFProvider(v.provider||'Main Wallet'); setFAmount(v.amount); setFDiscount(eLoadDiscount(v)); setFFee(v.fee); setFTip(txTip(v)>0?String(txTip(v)):''); setFTipWallet(txTipWallet(v));
+    setEditing(r); const v=r.value; setFType(v.type); setFNetwork(v.network||'Globe'); setFEloadKind(v.eloadKind||'regular'); setFPromoName(v.promoName||''); setFPromoDetails(v.promoDetails||''); setFPromoValidity(v.promoValidity||''); setFProvider(v.provider||'Main Wallet'); setFAmount(v.amount); setFDiscount(eLoadDiscount(v)); setFFee(v.fee);
     const cust = customerByPhone.get(digitsOnly(v.phone||''));
     const rawName = cust?.value.name || v.customerName || '';
     const name = isRealName(rawName, v.phone) ? rawName : '';
@@ -785,85 +816,142 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
       else { const fav:Favorite={phone:digitsOnly(c.value.phone), name:c.value.name, type, amount, network, createdAt:Date.now()}; const created:any=await api("records.create", {collection:'favorites', value:fav, idempotency_key:`fav-${fav.phone}-${uid()}`}); if(!liveSubscriptionActive.current) setFavorites(prev=>prev.some(row=>row.id===created.id)?prev:[{id:created.id,value:fav},...prev]); showToast('Added to Favorites.'); }
     }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
   }
-  async function markUtangPaid(r:TxRecord){
-    setSaving(true);
-    try{
-      const base=captureMeta();
-      const remaining=utangRemaining(r.value);
-      const partialTx=txPortion(r.value, remaining);
-      const nextWallets=applyTransaction(base.value.wallets, partialTx, 1);
-      const updated:Tx={...r.value, utang:true, utangStatus:'paid', paidAmount:r.value.amount};
-      await api("records.replace", {collection:'transactions', id:r.id, value:updated, expectedUpdatedAt:r.updatedAt});
-      await saveMeta({...base.value, wallets:nextWallets},base);
-      await reloadRecords(); setDetail(null); setShowPartial(false); showToast('Utang marked paid — wallets updated.');
-    }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
-    setSaving(false);
+  async function runPaymentWrite(write:()=>Promise<void>,onError:(message:string)=>void){
+    // Also guard Enter/double-clicks before React has committed disabled buttons.
+    if(paymentWriteInFlight.current) return;
+    paymentWriteInFlight.current=true; setSaving(true);
+    try{await write();}
+    catch(error){onError(error instanceof Error?error.message:String(error));}
+    finally{paymentWriteInFlight.current=false;setSaving(false);}
   }
-  async function savePartialPayment(r:TxRecord){
-    const remaining=utangRemaining(r.value);
-    const paid=round2(partialAmount||0);
-    if(!paid || paid<=0){ showErrorToast('Enter an amount greater than zero.'); return; }
-    if(paid>remaining){ showErrorToast(`Partial payment cannot be more than the remaining ${peso(remaining)}.`); return; }
-    setSaving(true);
-    try{
-      if(paid>=remaining){ await markUtangPaid(r); return; }
-      const base=captureMeta();
-      const partialTx=txPortion(r.value, paid);
-      const nextWallets=applyTransaction(base.value.wallets, partialTx, 1);
-      const updated:Tx={...r.value, utang:true, utangStatus:'unpaid', paidAmount:round2((r.value.paidAmount||0)+paid)};
-      await api("records.replace", {collection:'transactions', id:r.id, value:updated, expectedUpdatedAt:r.updatedAt});
-      await saveMeta({...base.value, wallets:nextWallets},base);
-      await reloadRecords(); setShowPartial(false); setPartialAmount(0); showToast(`Partial payment ${peso(paid)} saved — remaining ${peso(remaining-paid)}.`);
-    }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
-    setSaving(false);
+  function openTipModal(record:TxRecord,returnToDetail=false){
+    if(!canRecordTip(record.value)){showErrorToast('Confirm full customer payment before recording a tip.');return;}
+    setDetail(null); setTipInput(txTip(record.value)>0?String(txTip(record.value)):'');
+    setTipWallet(txTipWallet(record.value)); setTipError('');
+    setTipPrompt({record,returnToDetail});
   }
-  async function saveTransaction(keepOpen=false, forceDuplicate=false){
-    if(!Number.isFinite(fAmount) || fAmount<=0){ showErrorToast('Enter an amount greater than zero.'); return; }
-    if(fType!=='Top-Up' && !fUnpaidUtang && !isValidTip(Number(fTip))){ showErrorToast('Extra / Tip must be zero or a positive amount within the supported range.'); return; }
-    if(fType==='E-Load' && (fDiscount<0 || fDiscount>fAmount)){ showErrorToast('Provider discount must be between ₱0 and the load amount.'); return; }
-    if(fType==='E-Load' && !fNetwork){ showErrorToast('Choose a network.'); return; }
-    if(fType==='E-Load' && fEloadKind==='promo' && !fPromoName.trim()){ showErrorToast('Enter the promo/package name.'); return; }
-    if(fType!=='Top-Up' && digitsOnly(fPhone).length!==11){ showErrorToast('Choose or type a customer — enter an 11-digit number (09XX XXX XXXX) or pick a name.'); return; }
-    if(fType==='Top-Up' && fPhone && digitsOnly(fPhone).length!==11){ showErrorToast('Customer number must be 11 digits, or leave it blank.'); return; }
-    const phone=digitsOnly(fPhone);
-    const existingCust=customerByPhone.get(phone);
-    const custName = isRealName(fCustomerName, phone) ? fCustomerName.trim() : (existingCust && isRealName(existingCust.value.name, phone) ? existingCust.value.name : '');
-    // Duplicate check within 5 minutes
-    if(!forceDuplicate && !editing){
+  function closeTipModal(){
+    if(paymentWriteInFlight.current) return;
+    if(tipPrompt?.returnToDetail) setDetail(records.find(row=>row.id===tipPrompt.record.id)||null);
+    setTipPrompt(null); setTipError('');
+    setSaveMsg(showTx?'Payment kept — ready for the next transaction.':'Payment kept. No changes to the recorded tip.');
+  }
+  function cancelPaymentConfirmation(){
+    if(paymentWriteInFlight.current) return;
+    setPendingPayment(null);setPaymentError('');
+  }
+  function finishTransactionEntry(entry:TransactionEntry){
+    const {tx,keepOpen}=entry;
+    setDuplicateInfo(null); setShowTx(keepOpen);
+    if(!keepOpen) return;
+    setEditing(null); setFType(tx.type); setFEloadKind('regular'); setFPromoName(''); setFPromoDetails(''); setFPromoValidity('');
+    const amount=tx.type==='Top-Up'?1000:100;
+    setFAmount(amount); setFCustom(''); setFDiscount(0); setFFee(autoFee(tx.type,amount));
+    setFPhone(tx.phone); setFCustomerName(tx.customerName||''); setFCustomerQuery(displayNamePhone(tx.customerName,tx.phone));
+    setFNotes(tx.type==='Top-Up'?'Top-Up via External Provider':''); setFDate(todayKey()); setFTime(currentTimeLabel());
+    setIsUtang(false); setFPromiseDate(''); setShowNameField(false);setNamePromptSkipped(false);setNameMsg('');
+  }
+  async function savePaymentRecord(previous:TxRecord|null,tx:Tx,id=previous?.id||uid()):Promise<TxRecord>{
+    const base=captureMeta();
+    const effect=transactionWalletEffect(tx);
+    const wallets=previous?updateWalletsForEdit(base.value.wallets,previous.value,tx):effect?applyTransaction(base.value.wallets,effect):{...base.value.wallets};
+    const changesWallets=wallets.cash!==base.value.wallets.cash||wallets.maribank!==base.value.wallets.maribank;
+    if(changesWallets&&!base.id) throw new Error('Load the wallet balances before confirming this payment.');
+    const result:any=await api('records.save_transaction',{collection:'transactions',id,create:!previous,value:tx,expectedUpdatedAt:previous?.updatedAt,meta:changesWallets?{id:base.id,value:{...base.value,wallets},expectedUpdatedAt:base.updatedAt}:undefined});
+    const savedMeta=result.meta;
+    if(savedMeta&&(!metaIdRef.current||(savedMeta.id===metaIdRef.current&&Number(savedMeta.updatedAt||0)>=metaUpdatedAtRef.current))) applyRecordRowsRef.current('meta',[savedMeta]);
+    return result.record;
+  }
+  async function persistTransactionEntry(entry:TransactionEntry,promptForTip=false){
+    const {tx,previous}=entry;
+    if(tx.phone) await ensureCustomer(tx.phone,tx.customerName||'');
+    const saved=await savePaymentRecord(previous,tx,entry.id);
+    await reloadRecords(); finishTransactionEntry(entry);
+    if(promptForTip){setSaveMsg('');openTipModal(saved);}
+    else setSaveMsg(entry.keepOpen?'Saved — ready for the next one. Same customer kept.':previous?'Transaction updated; existing tip kept.':tx.utang?'Utang saved as unpaid. Confirm full payment later to record a tip.':'Transaction saved — wallets updated automatically.');
+  }
+  function markUtangPaid(record:TxRecord){
+    if(paymentWriteInFlight.current) return;
+    if(!record.value.utang||record.value.utangStatus==='paid'){showErrorToast('This Utang is already paid.');return;}
+    setPaymentError('');setPendingPayment({kind:'utang',record,principal:utangRemaining(record.value)});
+  }
+  function savePartialPayment(record:TxRecord){
+    if(paymentWriteInFlight.current) return;
+    const remaining=utangRemaining(record.value),paid=round2(partialAmount);
+    if(!Number.isFinite(paid)||paid<=0){showErrorToast('Enter an amount greater than zero.');return;}
+    if(paid>remaining){showErrorToast(`Partial payment cannot be more than the remaining ${peso(remaining)}.`);return;}
+    setPaymentError('');setPendingPayment({kind:'utang',record,principal:paid});
+  }
+  async function confirmReceivedPayment(){
+    if(!pendingPayment) return;
+    const request=pendingPayment;
+    await runPaymentWrite(async()=>{
+      setPaymentError('');
+      if(request.kind==='upfront'){
+        await persistTransactionEntry({...request,tx:{...request.tx,paymentConfirmedAt:Date.now()}},true);
+      }else{
+        const updated:Tx=withUtangPayment(request.record.value,request.principal);
+        const fullyPaid=updated.utangStatus==='paid';
+        if(fullyPaid) updated.paymentConfirmedAt=Date.now();
+        // The change in cumulative paid portions accounts for earlier
+        // collections exactly once, including rounded fees and discounts.
+        const saved=await savePaymentRecord(request.record,updated);
+        await reloadRecords();setShowPartial(false);setPartialAmount(0);
+        if(fullyPaid){setSaveMsg('');openTipModal(saved);}
+        else showToast(`Partial payment ${peso(request.principal)} confirmed — remaining ${peso(utangRemaining(updated))}. Tips are offered only when fully paid.`);
+      }
+      setPendingPayment(null);
+    },setPaymentError);
+  }
+  async function saveTipAfterPayment(){
+    if(!tipPrompt) return;
+    const prompt=tipPrompt,amount=Number(tipInput);
+    if(!isValidTip(amount)){setTipError('Extra / Tip must be zero or a positive amount within the supported range.');return;}
+    await runPaymentWrite(async()=>{
+      setTipError('');
+      const updated:Tx={...withRecordedTip(prompt.record.value,amount,tipWallet),tipRecordedAt:amount>0?Date.now():undefined};
+      // Only the tip changed. Principal and the regular fee are already paid.
+      let saved=prompt.record;
+      if(txTip(updated)!==txTip(prompt.record.value)||(txTip(updated)>0&&txTipWallet(updated)!==txTipWallet(prompt.record.value))){
+        saved=await savePaymentRecord(prompt.record,updated);
+        await reloadRecords();
+      }
+      setTipPrompt(null);
+      if(prompt.returnToDetail) setDetail(saved);
+      setSaveMsg(amount>0?`Extra / Tip ${peso(normalizeTip(amount))} recorded. The confirmed payment is unchanged.`:'Payment kept. No extra / tip recorded.');
+    },setTipError);
+  }
+  async function saveTransaction(keepOpen=false,forceDuplicate=false){
+    if(paymentWriteInFlight.current||pendingPayment||tipPrompt) return;
+    if(!Number.isFinite(fAmount)||round2(fAmount)<=0){showErrorToast('Enter an amount greater than zero.');return;}
+    if(!Number.isFinite(fFee)||fFee<0){showErrorToast('Enter a valid fee of zero or more.');return;}
+    if(fType==='Top-Up'&&editing&&txTip(editing.value)>0){showErrorToast('Remove the recorded tip from Transaction detail before changing this sale to a provider top-up.');return;}
+    if(fType==='E-Load'&&(fDiscount<0||fDiscount>fAmount)){showErrorToast('Provider discount must be between ₱0 and the load amount.');return;}
+    if(fType==='E-Load'&&!fNetwork){showErrorToast('Choose a network.');return;}
+    if(fType==='E-Load'&&fEloadKind==='promo'&&!fPromoName.trim()){showErrorToast('Enter the promo/package name.');return;}
+    if(fType!=='Top-Up'&&digitsOnly(fPhone).length!==11){showErrorToast('Choose or type a customer — enter an 11-digit number (09XX XXX XXXX) or pick a name.');return;}
+    if(fType==='Top-Up'&&fPhone&&digitsOnly(fPhone).length!==11){showErrorToast('Customer number must be 11 digits, or leave it blank.');return;}
+    const phone=digitsOnly(fPhone),existingCust=customerByPhone.get(phone);
+    const custName=isRealName(fCustomerName,phone)?fCustomerName.trim():existingCust&&isRealName(existingCust.value.name,phone)?existingCust.value.name:'';
+    if(!forceDuplicate&&!editing){
       const now=Date.now();
-      const dup = records.find(r=> digitsOnly(r.value.phone)===phone && r.value.amount===fAmount && r.value.type===fType && Math.abs(now - r.value.createdAt) < 5*60*1000);
-      if(dup){ const mins=Math.max(0, Math.floor((now-dup.value.createdAt)/60000)); setDuplicateInfo({mins, amount:fAmount, type:fType, name:custName||formatPhone(phone)}); return; }
+      const duplicate=records.find(row=>digitsOnly(row.value.phone)===phone&&row.value.amount===fAmount&&row.value.type===fType&&Math.abs(now-row.value.createdAt)<5*60*1000);
+      if(duplicate){setDuplicateInfo({mins:Math.max(0,Math.floor((now-duplicate.value.createdAt)/60000)),amount:fAmount,type:fType,name:custName||formatPhone(phone)});return;}
     }
-    const isUtangTx = isUtang && fType!=='Top-Up';
-    const history = editing && editing.value.amount!==fAmount ? [...(editing.value.history||[]), {oldAmount:editing.value.amount, newAmount:fAmount, time:fTime, date:fDate}] : editing?.value.history;
-    const previouslyPaid = editing?.value.utang ? Math.min(fAmount, Math.max(0,editing.value.paidAmount||0)) : 0;
-    const nextPaidAmount = isUtangTx ? previouslyPaid : (editing?.value.paidAmount ?? 0);
-    const tx:Tx={ type:fType, network: fType==='Top-Up' ? 'External Provider' : fType==='E-Load' ? fNetwork : 'Main Wallet', provider: fType==='Top-Up' ? 'External Provider' : 'Main Wallet', amount:fAmount, fee:fFee, tip:fTipAmount, tipWallet:fType==='Top-Up'?undefined:fTipWallet, selling:fType==='E-Load'?fAmount:0, discount:fType==='E-Load'?round2(fDiscount):0, eloadKind:fType==='E-Load'?fEloadKind:undefined, promoName:fType==='E-Load'&&fEloadKind==='promo'?fPromoName.trim():undefined, promoDetails:fType==='E-Load'&&fEloadKind==='promo'?fPromoDetails.trim():undefined, promoValidity:fType==='E-Load'&&fEloadKind==='promo'?fPromoValidity.trim():undefined, phone, customerName: phone?custName:'', payment:fType==='Cash Out'?'Main Wallet':'Cash', notes:fNotes, date:fDate, time:fTime, createdAt: editing?editing.value.createdAt:Date.now(), sample:editing?editing.value.sample:false, utang:isUtangTx, utangStatus: isUtangTx ? (nextPaidAmount>=fAmount && nextPaidAmount>0?'paid':'unpaid') : editing?.value.utangStatus, promiseDate: isUtangTx ? (fPromiseDate||undefined) : editing?.value.promiseDate, paidAmount: nextPaidAmount, history };
-    setSaving(true); setSaveMsg('');
-    try{
-      if(phone) await ensureCustomer(phone, custName);
-      const base=captureMeta();
-      let nextWallets={...base.value.wallets};
-      if(editing){
-        nextWallets=updateWalletsForEdit(nextWallets, editing.value, tx);
-        await api("records.replace", {collection:'transactions', id:editing.id, value:tx, expectedUpdatedAt:editing.updatedAt});
-      }
-      else {
-        if(!isUtangTx) nextWallets=applyTransaction(nextWallets, tx, 1);
-        await createRow(tx);
-      }
-      if(nextWallets.maribank < 0) setSaveMsg('Warning: Main Wallet balance went below ₱0. Check the amount before saving again.');
-      await saveMeta({...base.value, wallets:nextWallets},base);
-      await reloadRecords();
-      if(keepOpen){
-        const keepType=fType;
-        setEditing(null); if(keepType==='E-Load'){setFEloadKind('regular'); setFPromoName(''); setFPromoDetails(''); setFPromoValidity('');} setFAmount(keepType==='Top-Up'?1000:100); setFDiscount(0); setFTip(''); setFTipWallet(defaultTipWallet(keepType)); setFCustom(''); setFFee(autoFee(keepType, keepType==='Top-Up'?1000:100)); setFNotes(keepType==='Top-Up'?'Top-Up via External Provider':''); setFDate(todayKey()); setDuplicateInfo(null); setIsUtang(false); setFPromiseDate('');
-        setSaveMsg('Saved — ready for the next one. Same customer kept.');
-      } else {
-        setShowTx(false); setDuplicateInfo(null); setSaveMsg(editing?'Transaction updated and wallets adjusted.':'Transaction saved — wallets updated automatically.');
-      }
-    } catch(e){ const message=e instanceof Error?e.message:String(e); if(message.includes('changed or was removed on another device')) showToast(message,'error','Reload latest',()=>{ void reloadRecords(); setShowTx(false); }); else showErrorToast(message); }
-    setSaving(false);
+    const isUtangTx=isUtang&&fType!=='Top-Up';
+    const history=editing&&editing.value.amount!==fAmount?[...(editing.value.history||[]),{oldAmount:editing.value.amount,newAmount:fAmount,time:fTime,date:fDate}]:editing?.value.history;
+    const nextPaidAmount=isUtangTx?formPaidPrincipal:editing?.value.paidAmount??0;
+    const status=isUtangTx?(nextPaidAmount>=fAmount&&nextPaidAmount>0?'paid':'unpaid'):undefined;
+    const tx:Tx={type:fType,network:fType==='Top-Up'?'External Provider':fType==='E-Load'?fNetwork:'Main Wallet',provider:fType==='Top-Up'?'External Provider':'Main Wallet',amount:fAmount,fee:fFee,tip:existingFormTip,tipWallet:fType==='Top-Up'?undefined:editing?txTipWallet(editing.value):defaultTipWallet(fType),selling:fType==='E-Load'?fAmount:0,discount:fType==='E-Load'?round2(fDiscount):0,eloadKind:fType==='E-Load'?fEloadKind:undefined,promoName:fType==='E-Load'&&fEloadKind==='promo'?fPromoName.trim():undefined,promoDetails:fType==='E-Load'&&fEloadKind==='promo'?fPromoDetails.trim():undefined,promoValidity:fType==='E-Load'&&fEloadKind==='promo'?fPromoValidity.trim():undefined,phone,customerName:phone?custName:'',payment:fType==='Cash Out'?'Main Wallet':'Cash',notes:fNotes,date:fDate,time:fTime,createdAt:editing?editing.value.createdAt:Date.now(),sample:editing?editing.value.sample:false,utang:isUtangTx,utangStatus:status,promiseDate:isUtangTx?fPromiseDate||undefined:editing?.value.promiseDate,paidAmount:nextPaidAmount,history,paymentConfirmedAt:status==='unpaid'?undefined:editing?.value.paymentConfirmedAt,tipRecordedAt:editing?.value.tipRecordedAt};
+    if(txTip(tx)>0&&!canRecordTip(tx)){showErrorToast('Remove the recorded tip from Transaction detail before reopening this payment as unpaid Utang.');return;}
+    const entry:TransactionEntry={id:editing?.id||`tx-${uid()}`,tx,previous:editing,keepOpen};
+    if(canRecordTip(tx)&&(!editing||!canRecordTip(editing.value))){
+      setPaymentError('');setPendingPayment({kind:'upfront',...entry});return;
+    }
+    await runPaymentWrite(()=>persistTransactionEntry(entry),message=>{
+      if(message.includes('changed or was removed on another device')) showToast(message,'error','Reload latest',()=>{void reloadRecords();setShowTx(false);});
+      else showErrorToast(message);
+    });
   }
   async function saveCustomerFromForm(){
     const phone=digitsOnly(cPhone);
@@ -1087,9 +1175,15 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
       const isCustomerInput = !!(active && active.getAttribute && active.getAttribute('data-customer-input')==='true');
       const isTextTyping = !!(active && ((active.tagName==='TEXTAREA') || (active.tagName==='INPUT' && (active as HTMLInputElement).type==='text') || active.tagName==='SELECT' || active.isContentEditable));
       const isButton = !!(active && active.tagName==='BUTTON');
-      const anySheet = showTx || detail || customerDetail || showCustomerForm || showWalletAction || showEOD || addNameTarget || showHelp || showServices;
+      const anySheet = showTx || detail || customerDetail || showCustomerForm || showWalletAction || showEOD || addNameTarget || showHelp || showServices || pendingPayment || tipPrompt;
       const key = e.key;
       const lower = key.toLowerCase();
+      if(pendingPayment||tipPrompt){
+        if(key==='Escape'){e.preventDefault();if(!saving){if(tipPrompt) closeTipModal();else cancelPaymentConfirmation();}}
+        // Let native buttons and the tip form handle Enter. Do not trigger
+        // background saves, navigation, shortcuts, or the service chooser.
+        return;
+      }
       if(showHelp){
         if(key==='Escape' || key==='?' || lower==='h'){ e.preventDefault(); setShowHelp(false); }
         return;
@@ -1221,7 +1315,7 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
     };
     window.addEventListener('keydown', onKeyDown);
     return ()=> window.removeEventListener('keydown', onKeyDown);
-  }, [showTx, detail, customerDetail, showCustomerForm, showWalletAction, showEOD, addNameTarget, confirmDelete, confirmDeleteCustomer, confirmClear, showHelp, shortcutsOn, tab, filtered, sortedCustomers, selectedTxId, selectedCustomerId, fType, fAmount, last7, selectedDay, meta, showServices, dashboardRecent, recentIndex, expectedCash, startingFloat]);
+  }, [pendingPayment,tipPrompt,saving,showTx, detail, customerDetail, showCustomerForm, showWalletAction, showEOD, addNameTarget, confirmDelete, confirmDeleteCustomer, confirmClear, showHelp, shortcutsOn, tab, filtered, sortedCustomers, selectedTxId, selectedCustomerId, fType, fAmount, last7, selectedDay, meta, showServices, dashboardRecent, recentIndex, expectedCash, startingFloat]);
 
   const reminderPreview = useMemo(()=>utangReminder ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(utangReminderSvg(utangReminder.value,meta.businessName,utangReminderTheme,utangReminderAll ? records.filter(r=>r.value.utang && r.value.utangStatus!=='paid' && digitsOnly(r.value.phone||'')===digitsOnly(utangReminder.value.phone||'')) : null))}` : '',[utangReminder,meta.businessName,records,utangReminderTheme]);
 
@@ -1516,8 +1610,32 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
 
       {showServices && <ServicesModal highlight={servicesHighlight} onHighlight={setServicesHighlight} onClose={()=>setShowServices(false)} onSelect={(t)=>{ setShowServices(false); openNew(t); }} />}
 
-      {showTx && <Sheet onClose={()=>setShowTx(false)} title={editing?'Edit transaction': fType==='Top-Up'?'Top-Up via External Provider':'Add transaction'}>
-        <div data-arrow-group="transaction-type" className="flex flex-wrap gap-2">{(['E-Load','Cash In','Cash Out','Top-Up'] as const).map(t=> <button key={t} onClick={()=>{setFType(t); setFTip(''); setFTipWallet(defaultTipWallet(t)); if(t!=='E-Load') setFDiscount(0); if(t==='Top-Up'){setFAmount(1000); setFFee(meta.palawanFee); setFNotes('Top-Up via External Provider');} else if(t==='E-Load'){setFAmount(100); setFFee(autoFee(t,100));} else {setFAmount(100); setFFee(autoFee(t,100));}}} className={`flex-1 min-h-[48px] rounded-xl font-black text-[13px] px-2 ${fType===t? t==='Top-Up'?'bg-[#00a651] text-white':'bg-[var(--ink)] text-white':'bg-[var(--surface2)] border border-[var(--line)]'}`}>{t==='Top-Up'?'Top-Up via External Provider':t}</button>)}</div>
+      {pendingPayment && !tipPrompt && pendingReceipt && pendingCustomer && <Sheet title="Confirm payment received" onClose={cancelPaymentConfirmation} closeDisabled={saving}>
+        <p className="font-bold text-sm text-[var(--muted)]">Only confirm after you, the owner, have verified the customer payment. This records money already received; it does not charge the customer.</p>
+        <div className="rounded-2xl bg-[var(--surface2)] p-4 mt-3"><p className="font-extrabold">{displayNamePhone(pendingCustomer.customerName,pendingCustomer.phone)}</p><p className="text-xs font-bold text-[var(--muted)] mt-1">{pendingPayment.kind==='utang'?'Utang payment':pendingCustomer.utang?'Utang — fully settled':'Upfront payment'} • {pendingCustomer.type}</p><dl className="space-y-2 text-sm font-bold mt-3"><Row k={pendingPayment.kind==='utang'||previouslyReceived?'Principal paid now':'Principal'} v={peso(pendingReceipt.amount)}/><Row k="Regular fee" v={peso(pendingReceipt.fee)}/><Row k="Payment to confirm (no tip)" v={peso(customerTotal(pendingReceipt))}/><Row k="Received in" v={walletLabel(defaultTipWallet(pendingReceipt.type))}/></dl></div>
+        {pendingPayment.kind==='utang' && <p className="text-sm font-bold mt-3">Remaining principal after this payment: {peso(Math.max(0,round2(utangRemaining(pendingPayment.record.value)-pendingPayment.principal)))}</p>}
+        {(previouslyReceived||(pendingPayment.kind==='utang'&&pendingPayment.principal===0)) && <p className="text-xs font-bold text-[var(--muted)] mt-2">Previously recorded principal and fees are kept. This confirmation counts only the remaining payment shown above, never the earlier collections.</p>}
+        <p className="rounded-xl bg-[var(--green-soft)] p-3 mt-3 text-sm font-bold">{pendingFullPayment?'After confirmation, you can record an optional tip in a separate modal.':'This is a partial payment. The tip modal will appear only after the Utang is fully paid.'}</p>
+        {paymentError && <p role="alert" className="text-sm font-bold text-[var(--red)] mt-3">{paymentError}</p>}
+        <div className="sheet-save-bar grid gap-2 mt-5"><button type="button" disabled={saving} onClick={()=>void confirmReceivedPayment()} className="big-btn bg-[var(--green)] text-white w-full"><CheckCircle2 size={18}/>{saving?'Confirming…':'Confirm payment received'}</button><button type="button" disabled={saving} onClick={cancelPaymentConfirmation} className="big-btn border border-[var(--line)] w-full">Back — not confirmed</button></div>
+      </Sheet>}
+
+      {tipPrompt && tipPreview && <Sheet title="Extra / Tip" onClose={closeTipModal} closeDisabled={saving}>
+        <div className="rounded-2xl bg-[var(--green-soft)] p-3 flex items-start gap-2"><CheckCircle2 className="text-[var(--green)] shrink-0 mt-0.5" size={20}/><div><p className="font-extrabold">Full payment confirmed</p><p className="text-sm font-bold mt-1">{displayNamePhone(tipPrompt.record.value.customerName,tipPrompt.record.value.phone)}</p><p className="text-xs font-bold text-[var(--muted)] mt-1">{tipPrompt.record.value.utang?'Utang is fully paid.':'Upfront payment is recorded.'} Principal and regular fee are already accounted for.</p></div></div>
+        <form noValidate onSubmit={event=>{event.preventDefault();void saveTipAfterPayment();}}>
+          <p className="text-sm font-bold text-[var(--muted)] mt-3">Did the customer leave extra for you to keep? This is optional. Skipping or closing this modal keeps the confirmed payment and any existing tip.</p>
+          <label htmlFor={`${paymentPlanName}-extra-tip`} className="label block mt-4">Extra / Tip (₱, optional)</label><input id={`${paymentPlanName}-extra-tip`} type="number" min="0" step="0.01" value={tipInput} onChange={event=>{setTipInput(event.target.value);setTipError('');}} disabled={saving} placeholder="0" className="field mt-1" inputMode="decimal" aria-describedby={`${paymentPlanName}-extra-tip-help`}/>
+          <p id={`${paymentPlanName}-extra-tip-help`} className="text-xs font-bold text-[var(--muted)] mt-1.5">Only enter extra actually received and allowed to be kept, never change owed. Example: ₱3 fee, customer gives ₱20 for the fee → enter ₱17 extra. A tip does not change the principal, regular fee, or Utang balance.</p>
+          <label htmlFor={`${paymentPlanName}-tip-wallet`} className="label block mt-3">Extra received in</label><select id={`${paymentPlanName}-tip-wallet`} value={tipWallet} onChange={event=>{setTipWallet(event.target.value as keyof Wallets);setTipError('');}} disabled={saving} className="field mt-1"><option value="cash">Cash on Hand</option><option value="maribank">Main Wallet</option></select>
+          <dl className="rounded-2xl bg-[var(--surface2)] p-3 mt-3 text-sm font-bold space-y-2"><Row k="Regular fee (unchanged)" v={peso(tipPrompt.record.value.fee)}/><Row k="Extra / Tip" v={peso(previewTip)}/><Row k="Total transaction profit" v={peso(txProfit(tipPreview))}/></dl>
+          {txTip(tipPrompt.record.value)>0 && <p className="text-xs font-bold text-[var(--muted)] mt-2">Correcting a recorded tip? Enter 0 to remove it. Only the tip difference will adjust balances.</p>}
+          {tipError && <p role="alert" className="text-sm font-bold text-[var(--red)] mt-3">{tipError} The confirmed base payment is kept.</p>}
+          <div className="sheet-save-bar grid gap-2 mt-5"><button type="submit" disabled={saving} className="big-btn bg-[var(--green)] text-white w-full">{saving?'Saving tip…':txTip(tipPrompt.record.value)>0?'Save tip changes':'Save tip'}</button><button type="button" disabled={saving} onClick={closeTipModal} className="big-btn border border-[var(--line)] w-full">{txTip(tipPrompt.record.value)>0?'Keep recorded tip':'No tip — finish'}</button></div>
+        </form>
+      </Sheet>}
+
+      {showTx && !pendingPayment && !tipPrompt && <Sheet onClose={()=>setShowTx(false)} title={editing?'Edit transaction': fType==='Top-Up'?'Top-Up via External Provider':'Add transaction'}>
+        <div data-arrow-group="transaction-type" className="flex flex-wrap gap-2">{(['E-Load','Cash In','Cash Out','Top-Up'] as const).map(t=> <button key={t} onClick={()=>{setFType(t); if(t!=='E-Load') setFDiscount(0); if(t==='Top-Up'){setFAmount(1000); setFFee(meta.palawanFee); setFNotes('Top-Up via External Provider');} else if(t==='E-Load'){setFAmount(100); setFFee(autoFee(t,100));} else {setFAmount(100); setFFee(autoFee(t,100));}}} className={`flex-1 min-h-[48px] rounded-xl font-black text-[13px] px-2 ${fType===t? t==='Top-Up'?'bg-[#00a651] text-white':'bg-[var(--ink)] text-white':'bg-[var(--surface2)] border border-[var(--line)]'}`}>{t==='Top-Up'?'Top-Up via External Provider':t}</button>)}</div>
         {fType==='Top-Up' && <div className="rounded-2xl p-3 mt-3 font-bold text-sm" style={{background:'#e8f8ef', color:'#007a3d'}}>Top-Up via External Provider — Cash on Hand → Main Wallet. External Provider is only a top-up source, not a customer wallet.</div>}
         <CustomerSuggest query={fCustomerQuery} onQuery={handleCustomerQuery} customers={customers} stats={customerStats} recentPhones={recentCustomerPhones} frequent={frequentCustomers} label={fType==='Top-Up'?'Customer (optional) — name or number':'Customer — type name or number'} required={fType!=='Top-Up'} onPick={(c)=>setCustomerFromRecord(c)} onSaveNew={async(parsed)=>{ const realName=isRealName(parsed.name, parsed.phone)?parsed.name:''; const created:any=await createCustomerRow({name:realName, phone:parsed.phone, notes:'', createdAt:Date.now(), totalTransactions:0, totalAmount:0}); await reloadRecords(); const rec=customers.find(x=>x.id===created.id) || {id:created.id, value:{name:realName, phone:parsed.phone, notes:'', createdAt:Date.now(), totalTransactions:0, totalAmount:0}}; setCustomerFromRecord(rec as CustomerRecord); }} />
         {showNameField && !namePromptSkipped && digitsOnly(fPhone).length===11 && <div className="rounded-2xl border border-[#fdba74] bg-[#fff7ed] p-3 mt-3">
@@ -1529,7 +1647,7 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
           <div className="flex gap-2 mt-3"><button disabled={nameSaving || !fCustomerName.trim()} onClick={saveNameInForm} className="min-h-[44px] px-4 rounded-xl bg-[#ea580c] text-white font-black text-sm flex-1">{nameSaving?'Saving…':'Save Name'}</button><button onClick={()=>{ setNamePromptSkipped(true); setNameMsg(''); }} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] bg-white font-black text-sm">Skip for now</button></div>
         </div>}
         {!showNameField && !namePromptSkipped && digitsOnly(fPhone).length===11 && (()=>{ const ex=customerByPhone.get(digitsOnly(fPhone)); return ex && !isRealName(ex.value.name, ex.value.phone) ? <button onClick={()=>setShowNameField(true)} className="mt-2 min-h-[40px] px-3 rounded-full bg-[#fff7ed] border border-[#fdba74] text-[#ea580c] text-xs font-black">+ Add Name</button> : null; })()}
-        {fType!=='Top-Up' && <label className="flex items-center gap-3 rounded-2xl border border-[var(--line)] bg-[var(--surface2)] p-3 mt-4 cursor-pointer"><input type="checkbox" checked={isUtang} onChange={e=>{setIsUtang(e.target.checked); if(e.target.checked && editing?.value.utangStatus!=='paid') setFTip('');}} className="w-5 h-5 accent-[#7c3aed]"/><span><span className="block font-extrabold text-sm">Utang / Pay Later</span><span className="block text-xs font-bold text-[var(--muted)]">Save as unpaid. Wallets update only when marked paid.</span></span></label>}
+        {fType!=='Top-Up' && <fieldset className="mt-4"><legend className="label">Payment plan</legend><div className="grid grid-cols-2 gap-2 mt-1.5"><label className={`flex items-start gap-2 rounded-2xl border p-3 cursor-pointer ${!isUtang?'border-[var(--green)] bg-[var(--green-soft)]':'border-[var(--line)] bg-[var(--surface2)]'}`}><input type="radio" name={paymentPlanName} checked={!isUtang} onChange={()=>setIsUtang(false)} className="mt-0.5 w-5 h-5 shrink-0 accent-[var(--green)]"/><span><span className="block font-extrabold text-sm">Upfront payment</span><span className="block text-xs font-bold text-[var(--muted)]">Owner confirms payment received before recording a tip.</span></span></label><label className={`flex items-start gap-2 rounded-2xl border p-3 cursor-pointer ${isUtang?'border-[#7c3aed] bg-[#f5f3ff]':'border-[var(--line)] bg-[var(--surface2)]'}`}><input type="radio" name={paymentPlanName} checked={isUtang} onChange={()=>setIsUtang(true)} className="mt-0.5 w-5 h-5 shrink-0 accent-[#7c3aed]"/><span><span className="block font-extrabold text-sm">Utang / Pay Later</span><span className="block text-xs font-bold text-[var(--muted)]">Tip prompt only after full payment, never on partial payments.</span></span></label></div></fieldset>}
         {isUtang && fType!=='Top-Up' && <div className="rounded-2xl border border-[#ddd6fe] bg-[#f5f3ff] p-3 mt-3"><p className="label">Promise to pay:</p><div data-arrow-group="promise-date" className="flex flex-wrap gap-2 mt-2"><button type="button" onClick={()=>setFPromiseDate(addDaysKey(todayKey(),1))} className={`chip ${fPromiseDate===addDaysKey(todayKey(),1)?'active':''}`}>Tomorrow</button><button type="button" onClick={()=>setFPromiseDate(addDaysKey(todayKey(),3))} className={`chip ${fPromiseDate===addDaysKey(todayKey(),3)?'active':''}`}>In 3 days</button><button type="button" onClick={()=>setFPromiseDate(addDaysKey(todayKey(),7))} className={`chip ${fPromiseDate===addDaysKey(todayKey(),7)?'active':''}`}>Next Week (7 days)</button><button type="button" onClick={()=>setFPromiseDate('')} className={`chip ${!fPromiseDate?'active':''}`}>No date yet</button></div><label className="label block mt-3">Pick Date</label><input type="date" value={fPromiseDate} onChange={e=>setFPromiseDate(e.target.value)} className="field mt-1" aria-label="Promise to pay date"/><p className="text-xs font-bold text-[var(--muted)] mt-1.5">{fPromiseDate ? `Promised: ${fullDate(fPromiseDate)} — “Sabi bukas daw” / “Next week daw” can go in Notes below.` : 'Default: No date yet. Pick one in 1 tap above.'}</p></div>}
         {duplicateInfo && <div className="rounded-2xl border border-[#fdba74] bg-[#fff7ed] p-3 mt-3"><p className="font-extrabold text-sm text-[#9a3412]">You already saved {peso(duplicateInfo.amount)} {duplicateInfo.type} to {duplicateInfo.name} {duplicateInfo.mins===0?'just now':`${duplicateInfo.mins} min${duplicateInfo.mins>1?'s':''} ago`} — save again?</p><div className="flex gap-2 mt-3"><button onClick={()=>{ setDuplicateInfo(null); saveTransaction(false, true); }} className="min-h-[44px] px-4 rounded-xl bg-[#ea580c] text-white font-black text-sm flex-1">Save Again</button><button onClick={()=>setDuplicateInfo(null)} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] bg-white font-black text-sm">Cancel</button></div></div>}
         {fType==='E-Load' ? <>
@@ -1553,19 +1671,14 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
           <p className="text-xs font-bold text-[var(--muted)] mt-1">Suggested fee: {feeParts(fType,fAmount).pct}% of {peso(fAmount)} = {peso(feeParts(fType,fAmount).pctAmt)}. Edit above if needed.</p>
         </>}
         {fType!=='Top-Up' && <>
-          <div className="rounded-2xl border border-[var(--line)] p-3 mt-4">
-            <label htmlFor="extra-tip" className="label block">Extra / Tip (₱, optional)</label>
-            <input id="extra-tip" type="number" min="0" step="0.01" value={fUnpaidUtang?'':fTip} onChange={e=>setFTip(e.target.value)} disabled={fUnpaidUtang} placeholder="0" className="field mt-1 disabled:opacity-50" inputMode="decimal" aria-describedby="extra-tip-help"/>
-            <p id="extra-tip-help" className="text-xs font-bold text-[var(--muted)] mt-1.5">{fUnpaidUtang?'Add a tip by editing this transaction after the Utang is fully paid. A voluntary tip is not added to the customer’s debt.':'Only enter extra the customer lets you keep, not cash you will return as change. Example: ₱3 fee, customer gives ₱20 for the fee → enter ₱17 here.'}</p>
-            {!fUnpaidUtang && fTipAmount>0 && <><label htmlFor="tip-wallet" className="label block mt-3">Extra received in</label><select id="tip-wallet" value={fTipWallet} onChange={e=>setFTipWallet(e.target.value as keyof Wallets)} className="field mt-1"><option value="cash">Cash on Hand</option><option value="maribank">Main Wallet</option></select></>}
-          </div>
+          <p className="rounded-2xl border border-[var(--line)] p-3 mt-4 text-xs font-bold text-[var(--muted)]">{existingFormTip>0?`Recorded tip ${peso(existingFormTip)} is kept unchanged. Manage it separately from Transaction detail.`:fUnpaidUtang?'No tip is added to this debt. A separate optional tip modal appears only after the owner confirms full payment.':'Tips are recorded separately, after the owner confirms the customer has paid in full.'}</p>
           <div className="rounded-2xl bg-[var(--green-soft)] p-3 mt-3 font-bold text-sm space-y-1" aria-label="Payment summary">
-            <p>Regular fee: <b>{peso(fFee)}</b> • Extra / Tip: <b>{peso(fTipAmount)}</b></p>
+            <p>Regular fee: <b>{peso(fFee)}</b>{existingFormTip>0 && <> • Recorded tip: <b>{peso(existingFormTip)}</b></>}</p>
             <p>Customer pays total: <b><output aria-label="Customer total">{peso(customerTotal(formMoney))}</output></b></p>
             <p>{customerPaymentLabel(formMoney)}</p>
             <p>{fType==='E-Load'?`You send ${peso(fAmount)} load${fEloadKind==='promo'?' / promo':''}.`:fType==='Cash In'?`You send ${peso(fAmount)} FULL via Main Wallet.`:`You give ${peso(fAmount)} FULL cash.`}</p>
             {fType==='E-Load' && <p className="text-xs text-[var(--muted)]">Provider discount {peso(fDiscount)} • Actual wallet cost {peso(fAmount-fDiscount)}</p>}
-            <p>Total profit: <b><output aria-label="Total profit">{peso(txProfit(formMoney))}</output></b> (fee{fType==='E-Load'?' + discount':''} + extra)</p>
+            <p>Total profit: <b><output aria-label="Total profit">{peso(txProfit(formMoney))}</output></b> (fee{fType==='E-Load'?' + discount':''}{existingFormTip>0?' + recorded tip':''})</p>
             <p className="text-xs text-[var(--muted)]">{fUnpaidUtang?'When fully paid':'Balance'}: Cash on Hand {signedPeso(formWalletMove.cash)} • Main Wallet {signedPeso(formWalletMove.maribank)}</p>
             {fUnpaidUtang && <p className="text-[#6d28d9]">Utang — unpaid amounts will not move wallets until paid.</p>}
           </div>
@@ -1575,16 +1688,17 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
 
         <div className="sheet-save-bar grid grid-cols-2 gap-2 mt-5"><button disabled={saving} onClick={()=>saveTransaction(false)} className="big-btn bg-[var(--green)] text-white" style={fType==='Top-Up'?{background:'#00a651'}:undefined}>{saving?'Saving…':editing?'Save Changes': fType==='Top-Up'?'Save Top-Up via External Provider':'Save Transaction'}</button><button disabled={saving} onClick={()=>saveTransaction(true)} className="big-btn border-2 border-[var(--line)]">Save &amp; Add Another</button></div>
         <button onClick={()=>setShowTx(false)} className="big-btn border border-[var(--line)] w-full mt-2">Cancel</button>
-        <p className="text-xs font-bold text-[var(--muted)] text-center mt-2">Main Wallet and Cash on Hand update automatically. New name + number saves as a customer automatically.</p>
+        <p className="text-xs font-bold text-[var(--muted)] text-center mt-2">{fType==='Top-Up'?'Main Wallet and Cash on Hand update automatically.':fUnpaidUtang?'Save the Utang now; confirm received payments later. No tip is collected while unpaid.':'Next: confirm the customer payment received, then record an optional tip.'} New name + number saves as a customer automatically.</p>
       </Sheet>}
 
-      {detail && <Sheet onClose={()=>setDetail(null)} title="Transaction detail">
+      {detail && !pendingPayment && !tipPrompt && <Sheet onClose={()=>setDetail(null)} title="Transaction detail">
         <div className="rounded-2xl bg-[var(--surface2)] p-4"><p className="font-display font-extrabold text-3xl">{peso(detail.value.amount)}</p><p className="font-bold text-[var(--muted)]">{detail.value.type==='Top-Up'?'Top-Up via External Provider':detail.value.type} • {detail.value.type==='Top-Up'?'External Provider → Main Wallet':`${detail.value.network} • via Main Wallet`} • {dateLabel(detail.value.date)} at {detail.value.time}</p><p className="font-black text-[var(--green)] mt-1">{detail.value.type==='Top-Up' ? `External Provider fee: ${peso(detail.value.fee||0)}` : detail.value.type==='E-Load' ? `Customer fee ${peso(detail.value.fee||0)} + provider discount ${peso(eLoadDiscount(detail.value))} + extra / tip ${peso(txTip(detail.value))} = ${peso(txProfit(detail.value))} total profit` : `Regular fee ${peso(detail.value.fee||0)} + extra / tip ${peso(txTip(detail.value))} = ${peso(txProfit(detail.value))} total profit`}</p>{detail.value.utang && <><p className="font-black text-[13px] mt-1"><span className={`px-2 py-1 rounded-full ${detail.value.utangStatus==='paid'?'bg-[var(--green-soft)] text-[var(--green)]': utangPromiseStatus(detail.value)==='overdue'?'bg-[#fef2f2] text-[var(--red)]': utangPromiseStatus(detail.value)==='due-today'?'bg-[#fffbeb] text-[#92400e]':'bg-[#fef3c7] text-[#92400e]'}`}>Utang — {utangPromiseLabel(detail.value)}</span></p><p className="text-sm font-bold mt-2">Promise to Pay: {utangPromiseDateLabel(detail.value)}{detail.value.promiseDate ? ` • ${fullDate(detail.value.promiseDate)}` : ''}</p>{detail.value.utangStatus!=='paid' && <p className="text-sm font-bold">Total {peso(detail.value.amount)} • Paid {peso(detail.value.paidAmount||0)} • Remaining {peso(utangRemaining(detail.value))}</p>}</>}{detail.value.history && detail.value.history.length>0 && <div className="mt-3 rounded-xl bg-white p-3 border border-[var(--line)]"><p className="text-xs font-black uppercase tracking-wide text-[var(--muted)]">Edit history</p>{detail.value.history.map((h,i)=><p key={i} className="text-sm font-bold mt-1">Edited: {peso(h.oldAmount)} → {peso(h.newAmount)}, {h.date} {h.time}</p>)}</div>}</div>
         {(() => { const cust = customerByPhone.get(digitsOnly(detail.value.phone||'')); const showDeleted = !cust && isRealName(detail.value.customerName, detail.value.phone) && !!detail.value.phone; const hasName = cust ? isRealName(cust.value.name, detail.value.phone) : isRealName(detail.value.customerName, detail.value.phone); return <div className="rounded-2xl border border-[var(--line)] p-3 mt-3 flex items-center gap-3"><span className="w-11 h-11 rounded-full bg-[#0e2a47] text-white grid place-items-center font-black shrink-0">{showDeleted?initials('Deleted Customer'):displayInitials(cust?.value.name || detail.value.customerName, detail.value.phone)}</span><div className="flex-1 min-w-0"><p className="font-extrabold truncate">{showDeleted?'Deleted Customer': displayNameOnly(cust?.value.name || detail.value.customerName, detail.value.phone) || 'No customer'}</p><p className="text-xs font-bold text-[var(--muted)]">{hasName && detail.value.phone?formatPhone(detail.value.phone):''}{cust?.value.notes?`${hasName?' • ':''}${cust.value.notes}`:''}</p></div>{!hasName && !showDeleted && detail.value.phone && <button onClick={()=>openAddName(detail.value.phone)} className="min-h-[40px] px-3 rounded-full bg-[#fff7ed] border border-[#fdba74] text-[#ea580c] font-black text-xs shrink-0">+ Add Name</button>}{cust && <button onClick={()=>{ setDetail(null); setCustomerDetail(cust); }} className="min-h-[44px] px-3 rounded-xl bg-[var(--ink)] text-white font-black text-xs shrink-0">View Customer</button>}</div> })()}
         <dl className="mt-4 space-y-2 text-sm font-bold">
           <Row k="Provider" v={detail.value.type==='Top-Up'?'External Provider (top-up source)':'Main Wallet (main app)'}/>
           <Row k="Regular payment" v={detail.value.payment}/><Row k="Phone" v={detail.value.phone?formatPhone(detail.value.phone):'—'}/><Row k="Notes" v={detail.value.notes||'—'}/>
           {detail.value.utang && <><Row k="Promise to Pay" v={detail.value.promiseDate ? fullDate(detail.value.promiseDate) : 'No date yet'}/><Row k="Utang Status" v={`${utangPromiseLabel(detail.value)} • Paid ${peso(detail.value.paidAmount||0)} • Remaining ${peso(utangRemaining(detail.value))}`}/></>}
+          {detail.value.paymentConfirmedAt && <Row k="Full payment confirmed" v={new Date(detail.value.paymentConfirmedAt).toLocaleString('en-PH')}/>}
           <Row k="Regular fee" v={peso(detail.value.fee||0)}/>
           {detail.value.type!=='Top-Up' && <Row k="Extra / Tip" v={`${peso(txTip(detail.value))}${txTip(detail.value)>0?` → ${walletLabel(txTipWallet(detail.value))}`:''}`}/>}
           <Row k={detail.value.type==='Top-Up'?'Top-up cost':'Customer pays'} v={detail.value.type==='Top-Up'?peso(customerTotal(detail.value)):`${customerPaymentLabel(detail.value)} • Total ${peso(customerTotal(detail.value))}`}/>
@@ -1594,6 +1708,7 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
         </dl>
         <div className="flex gap-2 mt-4 flex-wrap"><button onClick={()=>toggleFavoriteForTx(detail)} className="min-h-[44px] px-3 rounded-xl border border-[var(--line)] font-black text-sm flex items-center gap-1.5"><Star size={16} fill={favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'currentColor':'none'}/> {favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'Favorited':'Add to Favorites'}</button><button onClick={()=>repeatTx(detail)} className="min-h-[44px] px-3 rounded-xl border border-[var(--line)] font-black text-sm">Repeat</button>{detail.value.utang && detail.value.utangStatus!=='paid' && <button onClick={()=>{setUtangReminderAll(false); setUtangReminder(detail); setDetail(null);}} className="min-h-[44px] px-3 rounded-xl bg-[#e8f8ef] text-[#087a48] font-black text-sm flex items-center gap-1.5"><Share2 size={16}/> Share reminder</button>}{detail.value.utang && detail.value.utangStatus!=='paid' && <button onClick={()=>markUtangPaid(detail)} className="min-h-[44px] px-3 rounded-xl bg-[var(--green)] text-white font-black text-sm">Mark Paid</button>}</div>
         {detail.value.utang && detail.value.utangStatus!=='paid' && <div className="rounded-2xl border border-[var(--line)] p-3 mt-4"><p className="font-extrabold text-sm">Partial Payment — “tomorrow partial”</p><p className="text-xs font-bold text-[var(--muted)] mt-0.5">Remaining {peso(utangRemaining(detail.value))} • Promise date stays unless you Edit it.</p>{!showPartial ? <button onClick={()=>{setPartialAmount(utangRemaining(detail.value)); setShowPartial(true);}} className="min-h-[44px] px-4 rounded-xl bg-[#7c3aed] text-white font-black text-sm mt-3">Partial Payment</button> : <div onKeyDown={(e)=>{ if(e.key==='Enter' && !((e.target as HTMLElement).tagName==='BUTTON')){ e.preventDefault(); savePartialPayment(detail); } }}><label className="label block mt-3">Amount paid now</label><input type="number" value={partialAmount} onChange={e=>setPartialAmount(Number(e.target.value))} className="field mt-1" inputMode="decimal" aria-label="Amount paid now"/><p className="text-sm font-bold mt-2">Remaining after this payment: {peso(Math.max(0, round2(utangRemaining(detail.value)-(partialAmount||0))))}</p><div className="flex gap-2 mt-3 flex-wrap"><button disabled={saving} onClick={()=>savePartialPayment(detail)} className="min-h-[44px] px-4 rounded-xl bg-[var(--green)] text-white font-black text-sm flex-1">{saving?'Saving…':'Save Partial Payment'}</button><button onClick={()=>markUtangPaid(detail)} disabled={saving} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Mark Paid Fully</button><button onClick={()=>setShowPartial(false)} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Cancel</button></div></div>}</div>}
+        {canRecordTip(detail.value) && <button type="button" onClick={()=>openTipModal(detail,true)} className="big-btn w-full mt-3 bg-[var(--green-soft)] text-[var(--green)] border border-[var(--line)]"><HandCoins size={18}/>{txTip(detail.value)>0?'Edit recorded tip':'Record extra / tip'}</button>}
         <div className="grid grid-cols-2 gap-2 mt-3"><button onClick={()=>{const r=detail; setDetail(null); openEdit(r);}} className="big-btn bg-[var(--ink)] text-white"><Pencil size={18}/> Edit</button><button onClick={()=>setConfirmDelete(detail)} className="big-btn border-2 border-red-200 text-[var(--red)]"><Trash2 size={18}/> Delete</button></div>
         {confirmDelete && <div className="mt-4 rounded-2xl border border-red-200 p-3"><p className="font-bold text-sm">Delete this transaction? Wallets will be reversed.</p><div className="flex gap-2 mt-2"><button onClick={()=>deleteTransaction(confirmDelete)} className="min-h-[44px] px-4 rounded-xl bg-[var(--red)] text-white font-black text-sm">Yes, delete</button><button onClick={()=>setConfirmDelete(null)} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Cancel</button></div></div>}
       </Sheet>}
@@ -1668,7 +1783,7 @@ function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
         <div className="grid sm:grid-cols-2 gap-3 mt-4">
           <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Navigation</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>D</Kbd> Dashboard</li><li><Kbd>T</Kbd> Transactions</li><li><Kbd>U</Kbd> Customers (Users)</li><li><Kbd>G</Kbd> Utang</li><li><Kbd>W</Kbd> Wallets</li><li><Kbd>R</Kbd> Report</li><li><Kbd>S</Kbd> Settings</li><li><Kbd>/</Kbd> Focus search</li><li><Kbd>Esc</Kbd> Close / back to Dashboard</li><li><Kbd>?</Kbd> / <Kbd>H</Kbd> This help</li></ul></div>
           <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Quick Actions</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>1</Kbd> E-Load Sale</li><li><Kbd>2</Kbd> Cash In</li><li><Kbd>3</Kbd> Cash Out</li><li><Kbd>4</Kbd> Top-Up via External Provider</li><li><Kbd>N</Kbd> New (E-Load / New Customer)</li><li><Kbd>C</Kbd> Cash Count / End Day (Dashboard only)</li><li><Kbd>X</Kbd> Close Day (Dashboard only)</li></ul></div>
-          <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Forms</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>Tab</Kbd> Customer → Amount → Fee → Extra / Tip → Notes → Save</li><li><Kbd>Enter</Kbd> Save</li><li><Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd> Save &amp; Add Another (same customer)</li><li><Kbd>Esc</Kbd> Cancel</li><li><Kbd>↑</Kbd><Kbd>↓</Kbd> Move in customer suggestions</li><li><Kbd>Enter</Kbd> Pick highlighted customer</li><li><Kbd>A</Kbd> ₱20 · <Kbd>S</Kbd> ₱50 · <Kbd>D</Kbd> ₱100 · <Kbd>F</Kbd> ₱200 · <Kbd>G</Kbd> ₱500 (form open, not typing a name)</li></ul></div>
+          <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Forms</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>Tab</Kbd> Customer → Amount → Fee → Notes → Save</li><li>Owner confirms payment → optional tip modal. Utang: only when fully paid.</li><li><Kbd>Enter</Kbd> Save</li><li><Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd> Save &amp; Add Another (same customer)</li><li><Kbd>Esc</Kbd> Cancel</li><li><Kbd>↑</Kbd><Kbd>↓</Kbd> Move in customer suggestions</li><li><Kbd>Enter</Kbd> Pick highlighted customer</li><li><Kbd>A</Kbd> ₱20 · <Kbd>S</Kbd> ₱50 · <Kbd>D</Kbd> ₱100 · <Kbd>F</Kbd> ₱200 · <Kbd>G</Kbd> ₱500 (form open, not typing a name)</li></ul></div>
           <div className="rounded-2xl bg-[var(--surface2)] p-3"><h3 className="font-display font-bold">Lists</h3><ul className="text-sm font-bold space-y-1.5 mt-2"><li><Kbd>↑</Kbd><Kbd>↓</Kbd> or <Kbd>J</Kbd><Kbd>K</Kbd> Move selection</li><li><Kbd>Enter</Kbd> Open selected</li><li><Kbd>E</Kbd> Edit selected</li><li><Kbd>Del</Kbd> / <Kbd>Backspace</Kbd> Delete (with confirm)</li><li><Kbd>F</Kbd> Focus filters, then <Kbd>←</Kbd><Kbd>→</Kbd> to move, <Kbd>Enter</Kbd> to apply</li><li>On Dashboard recent list: <Kbd>↑</Kbd><Kbd>↓</Kbd> + <Kbd>Enter</Kbd> repeats that transaction</li><li>Favorites: tap a chip to pre-fill the sale form</li></ul></div>
         </div>
         <button onClick={()=>setShowHelp(false)} className="big-btn bg-[var(--ink)] text-white w-full mt-4">Close <Kbd>?</Kbd></button>
@@ -1729,7 +1844,7 @@ function TxRow({r,customers,onClick,onAddName,selected,selectedRef,onRepeat,onTo
 }
 function Row({k,v}:{k:string;v:string}){ return <div className="flex justify-between gap-3"><dt className="text-[var(--muted)]">{k}</dt><dd className="text-right break-words">{v}</dd></div>; }
 function Stat({label,v}:{label:string;v:string}){ return <div className="rounded-2xl bg-[var(--surface2)] p-3"><p className="label">{label}</p><p className="font-display font-extrabold text-xl mt-1">{v}</p></div>; }
-function Sheet({children,onClose,title}:{children:React.ReactNode; onClose:()=>void; title:string}){
+function Sheet({children,onClose,title,closeDisabled=false}:{children:React.ReactNode; onClose:()=>void; title:string; closeDisabled?:boolean}){
   const ref=useRef<HTMLDivElement|null>(null);
   const openerRef=useRef<HTMLElement|null>(null);
   useEffect(()=>{
@@ -1762,7 +1877,7 @@ function Sheet({children,onClose,title}:{children:React.ReactNode; onClose:()=>v
   };
   return <div ref={ref} onKeyDown={onKeyDown} className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4" role="dialog" aria-modal="true" aria-label={title}>
     <div className="sheet-panel w-full max-w-[560px] max-h-[92vh] overflow-y-auto bg-[var(--surface)] rounded-t-[24px] sm:rounded-[24px] p-5 pb-8 shadow-2xl">
-      <div className="flex justify-between items-center gap-3"><h2 className="font-display font-bold text-[22px]">{title}</h2><button onClick={onClose} className="w-10 h-10 grid place-items-center rounded-full bg-[var(--surface2)]" aria-label="Close"><X size={20}/></button></div>
+      <div className="flex justify-between items-center gap-3"><h2 className="font-display font-bold text-[22px]">{title}</h2><button disabled={closeDisabled} onClick={onClose} className="w-10 h-10 grid place-items-center rounded-full bg-[var(--surface2)]" aria-label="Close"><X size={20}/></button></div>
       <div className="sheet-body mt-4">{children}</div>
     </div>
   </div>;
