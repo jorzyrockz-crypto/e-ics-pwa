@@ -272,13 +272,14 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
   .dash-col-right > div:first-child{grid-row:auto}
   .dash-col-right > section:last-child{grid-column:auto}
 }
-/* On laptop-sized desktop canvases, flatten the two dashboard groups into a
-   balanced two-column grid. Keeping each group as one tall grid item leaves a
-   large empty patch beneath whichever group has less content. */
+/* On laptop-sized desktop canvases, flow dashboard cards as masonry-style
+   columns (similar to Keep). Row-based grids reserve the height of the tallest
+   card in each row, leaving large blank patches beside shorter cards. */
 @media (min-width:1024px) and (max-width:1539px){
+  .dashboard-grid{display:block;column-count:2;column-gap:16px;column-fill:balance}
   .dash-col-left,.dash-col-middle{display:contents}
-  .dashboard-grid{grid-auto-flow:row;align-items:start}
-  .dashboard-grid > *{min-width:0}
+  .dashboard-grid > :not(.dash-col-right){display:inline-block;vertical-align:top;width:100%;min-width:0;margin:0 0 16px!important;break-inside:avoid}
+  .dashboard-grid > .dash-col-right{display:grid;width:100%;min-width:0;margin:0!important;column-span:all;break-inside:avoid}
 }
 
 @media (min-width:1540px){
