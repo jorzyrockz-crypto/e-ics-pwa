@@ -6,6 +6,7 @@ import CustomerAvatar from './app/CustomerAvatar';
 import PromoNameSuggest from './app/PromoNameSuggest';
 import AppearanceSettings from './app/AppearanceSettings';
 import { useAppearance, type AppearanceControls } from './app/appearance';
+import { useWalletBanner } from './app/useWalletBanner';
 import { collectSavedPromos } from './app/savedPromos';
 import { LogOut, LoaderCircle, Share2, Copy } from 'lucide-react';
 import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown } from 'lucide-react';
@@ -264,6 +265,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   const [metaId,setMetaId]=useState<string|null>(null);
   const [metaUpdatedAt,setMetaUpdatedAt]=useState(0);
   const [loading,setLoading]=useState(true);
+  const banner = useWalletBanner(!loading, tab);
   const [loadingProgress,setLoadingProgress]=useState(8);
   const [apiError,setApiError]=useState('');
   const [saving,setSaving]=useState(false);
@@ -1412,14 +1414,15 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         </div>
       </aside>
       <div className="app-main-wrap"><div className="app-main max-w-[1024px] mx-auto px-3 sm:px-5 pb-28 md:pb-10">
-        <header data-safe-area-sticky-top style={{top:'var(--safe-area-inset-top)'}} className="sticky z-30 -mx-3 sm:-mx-5 px-3 sm:px-5 pt-3 pb-3 bg-[var(--header-bg)] backdrop-blur">
+        <span ref={banner.anchorRef} aria-hidden="true" className="block h-0"/>
+        <header ref={banner.headerRef} data-safe-area-sticky-top data-compact={banner.compact} onFocusCapture={event=>{if(!banner.walletRef.current?.contains(event.target as Node)) banner.restore();}} className="scroll-wallet-banner sticky z-30 -mx-3 sm:-mx-5 px-3 sm:px-5 pt-3 pb-3 bg-[var(--header-bg)] backdrop-blur">
           <div className="mobile-header-row flex flex-col sm:flex-row items-start sm:justify-between gap-3">
             <div className="mobile-header-brand min-w-0 w-full sm:w-auto">
               <div className="flex items-center gap-2 flex-wrap"><img src={`${import.meta.env.BASE_URL}icons/eload-tracker-192.png?v=3`} alt="" aria-hidden="true" className="w-9 h-9 rounded-xl shrink-0 object-cover shadow-sm"/><p className="text-[11px] font-black tracking-[0.14em] uppercase text-[var(--muted)]">E-LOAD Tracker • Main App • Sari-Sari</p>{previewMode ? <span className="text-[10px] font-black bg-[var(--amber-soft)] text-[var(--amber)] px-2 py-1 rounded-full">Local preview</span> : !isOnline ? <span className="text-[10px] font-black bg-[var(--red-soft)] text-[var(--red)] px-2 py-1 rounded-full flex items-center gap-1" title="Changes are stored locally and sync when online. Conflicting offline edits are kept for review."><WifiOff size={12}/> Offline{pendingWrites>0?` • ${pendingWrites} queued`:''}</span> : liveError||syncError ? <span className="text-[10px] font-black bg-[var(--orange-soft)] text-[var(--amber)] px-2 py-1 rounded-full">Sync needs attention</span> : isSyncing||pendingWrites>0||livePendingWrites||!liveConnected ? <span className="text-[10px] font-black bg-[var(--amber-soft)] text-[var(--amber)] px-2 py-1 rounded-full">{pendingWrites>0?`Syncing ${pendingWrites} change${pendingWrites===1?'':'s'}…`:livePendingWrites||isSyncing?'Syncing changes…':'Connecting live updates…'}</span> : <span className="text-[10px] font-black bg-[var(--green-soft)] text-[var(--green)] px-2 py-1 rounded-full" title={`Changes from your other devices appear automatically.${lastSyncedAt?` Last confirmed cloud update: ${new Date(lastSyncedAt).toLocaleString()}`:''}`}>Live sync{lastSyncedAt?` • ${new Date(lastSyncedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`:''}</span>}</div>
               <h1 className="business-title font-display font-extrabold leading-[1.05] mt-1">{meta.businessName}</h1>
               <p className="text-sm text-[var(--muted)] font-semibold flex items-center gap-1 flex-wrap break-words" style={{overflowWrap:'anywhere', wordBreak:'break-word'}}><CalendarDays size={14} className="shrink-0"/>{fullDate(todayKey())}</p>
             </div>
-            <div className="mobile-header-wallet shrink-0 text-left sm:text-right w-full sm:w-auto">
+            <div ref={banner.walletRef} className="mobile-header-wallet shrink-0 text-left sm:text-right w-full sm:w-auto">
               <svg aria-hidden="true" className="mobile-wallet-art pointer-events-none absolute -right-1 bottom-0 z-0 h-[68px] w-[68px] opacity-40" viewBox="0 0 80 80" fill="none"><defs><linearGradient id="headerClay" x1="17" y1="20" x2="62" y2="68" gradientUnits="userSpaceOnUse"><stop stopColor="#c7f4d9"/><stop offset="1" stopColor="#42c783"/></linearGradient><filter id="headerClayShadow" x="4" y="5" width="72" height="72" filterUnits="userSpaceOnUse"><feDropShadow dx="0" dy="3" stdDeviation="3" floodColor="#087a48" floodOpacity=".22"/></filter></defs><g filter="url(#headerClayShadow)"><ellipse cx="38" cy="56" rx="25" ry="10" fill="#26a966"/><path d="M13 45v11c0 6 11 11 25 11s25-5 25-11V45" fill="url(#headerClay)"/><ellipse cx="38" cy="45" rx="25" ry="10" fill="#e3f8eb"/><ellipse cx="38" cy="45" rx="16" ry="6" stroke="#70cc96" strokeWidth="2"/><ellipse cx="48" cy="31" rx="19" ry="8" fill="#36b777"/><path d="M29 23v8c0 5 9 8 19 8s19-3 19-8v-8" fill="#9ce7b9"/><ellipse cx="48" cy="23" rx="19" ry="8" fill="#effcf3"/></g></svg>
               <p className="label">Main Wallet</p>
               <p className="font-display font-extrabold text-[22px] sm:text-[26px] text-[var(--wallet-ink)]">{peso(meta.wallets.maribank)}</p>

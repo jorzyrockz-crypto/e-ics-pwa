@@ -210,7 +210,7 @@ button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 @media (max-width:767px){
   body{font-size:16px}
   .app-main{max-width:100%;padding-inline:12px;padding-bottom:calc(118px + env(safe-area-inset-bottom))}
-  .mobile-header-row{gap:8px}
+  .scroll-wallet-banner .mobile-header-row{flex-direction:column;gap:8px}
   .mobile-header-brand{width:100%;}
   .mobile-header-wallet{position:relative;isolation:isolate;overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:12px;row-gap:0;width:100%!important;padding:10px 12px;border:1px solid var(--line);border-radius:16px;background:var(--surface);text-align:left!important}
   .mobile-header-wallet > :not(svg){position:relative;z-index:1}
@@ -454,6 +454,26 @@ button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 @media (min-width:1024px){.account-session-bar{margin-left:var(--sidebar-width);padding-inline:28px}.account-session-signout{min-height:44px}}
 @media (pointer:coarse){.account-session-signout{min-height:48px;padding-inline:16px}}
 @media (pointer:coarse) and (orientation:landscape) and (min-width:1024px) and (max-height:1100px){.account-session-bar{margin-left:0}}
+
+/* The sticky shell keeps its expanded flow height while sliding/clipping the
+   brand and top tabs out of view. Only the existing live wallet remains visible;
+   content never jumps or generates a fake reverse-scroll as the banner changes. */
+.scroll-wallet-banner{top:var(--safe-area-inset-top);--banner-inline-padding:12px}
+@media (min-width:640px){.scroll-wallet-banner{--banner-inline-padding:20px}}
+/* Keep this query aligned with walletBannerQuery in app/useWalletBanner.ts. */
+@media (max-width:767px), (min-width:768px) and (max-width:1199px) and (orientation:portrait){
+  .scroll-wallet-banner{clip-path:inset(0);transition:top 180ms ease-out,clip-path 180ms ease-out}
+  .scroll-wallet-banner[data-compact="true"]{height:var(--banner-expanded-height);top:calc(var(--safe-area-inset-top) - var(--banner-collapse-distance));clip-path:inset(var(--banner-collapse-distance) 0 0)}
+  .scroll-wallet-banner[data-compact="true"] .mobile-header-brand,
+  .scroll-wallet-banner[data-compact="true"] .top-nav{opacity:0;pointer-events:none}
+  .scroll-wallet-banner[data-compact="true"] .mobile-header-wallet{position:absolute;top:auto;bottom:12px;left:var(--banner-inline-padding);right:var(--banner-inline-padding);isolation:isolate;overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;align-content:center;column-gap:12px;row-gap:0;width:auto!important;min-width:0;max-width:none;min-height:var(--banner-wallet-height);padding:10px 12px;border:1px solid var(--line);border-radius:16px;background:var(--surface);text-align:left!important}
+  .scroll-wallet-banner[data-compact="true"] .mobile-header-wallet > :not(svg){position:relative;z-index:1}
+  .scroll-wallet-banner[data-compact="true"] .mobile-header-wallet > .label{grid-column:1;grid-row:1}
+  .scroll-wallet-banner[data-compact="true"] .mobile-header-wallet > p:nth-of-type(2){grid-column:2;grid-row:1/3;align-self:center;white-space:nowrap}
+  .scroll-wallet-banner[data-compact="true"] .mobile-header-wallet > p:nth-of-type(3){grid-column:1;grid-row:2}
+  .scroll-wallet-banner[data-compact="true"] .mobile-header-wallet > div{grid-column:1/-1;grid-row:3;justify-content:flex-start!important;margin-top:8px}
+}
+@media (prefers-reduced-motion:reduce){.scroll-wallet-banner{transition:none}}
 
 /* The preference control is local-only. Native radios keep arrow-key behavior
    and every label remains a comfortable touch target on narrow phones. */
