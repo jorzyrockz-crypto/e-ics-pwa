@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { applyTransaction, customerPayments, customerTotal, defaultTipWallet, eLoadDiscount, isValidTip, normalizeTip, reverseTransaction, round2, transactionWalletEffect, txPortion, txProfit, txTip, txTipWallet, updateWalletsForEdit, type TransactionMoney, type TxType, type Wallets } from './transactionFinance';
-import { firestoreRecords, auth, observeAuth, signInWithGoogle, logOut, subscribePendingWrites, waitForCloudSync, clearSyncError, type User as FirebaseUser } from './firebase';
+import { firestoreRecords, auth, observeAuth, signInWithGoogle, logOut, subscribePendingWrites, subscribeToUserRecords, syncUserRecords, clearSyncError, type User as FirebaseUser } from './firebase';
+import { mergeDraftFields, recordCollectionLimits, type LiveRecord, type RecordCollection } from './liveRecords';
 import { LogOut, LoaderCircle, Share2, Copy } from 'lucide-react';
 import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown } from 'lucide-react';
 
@@ -137,7 +138,6 @@ function writeStoredRecords(collection:string, records:any[]){
   try { localStorage.setItem(`${STORAGE_PREFIX}${collection}`, JSON.stringify(records)); }
   catch { throw new Error('Could not save records in this browser. Check available storage and try again.'); }
 }
-let activeUser: FirebaseUser | null = null;
 let localPreviewMode = false;
 function previewRecords(action:string,args:any){
   const collectionName=args?.collection;
@@ -156,11 +156,6 @@ function previewRecords(action:string,args:any){
   }
   if(action==='records.delete'){ rows=rows.filter(row=>row.id!==args.id); localStorage.setItem(key,JSON.stringify(rows)); return {id:args.id}; }
   throw new Error(`Unsupported action: ${action}`);
-}
-async function api(action:string, args:any){
-  if(localPreviewMode) return previewRecords(action,args);
-  if (!activeUser) throw new Error('Sign in with Google to access your synced records.');
-  return firestoreRecords(action, args, activeUser);
 }
 
 const walletDefs:{key:keyof Wallets; label:string; color:string; hint:string}[]=[
@@ -230,11 +225,15 @@ function handleModalArrowKeys(e:React.KeyboardEvent, container:HTMLElement):bool
   return false;
 }
 
-function Dashboard(){
+function Dashboard({user,previewMode}:{user:FirebaseUser;previewMode:boolean}){
+  // Capture this account for the component's lifetime, including in-flight work.
+  async function api(action:string,args:any){ return previewMode?previewRecords(action,args):firestoreRecords(action,args,user); }
   const [tab,setTab]=useState<'home'|'transactions'|'customers'|'wallets'|'report'|'settings'|'utang'>('home');
   const [records,setRecords]=useState<TxRecord[]>([]);
   const [customers,setCustomers]=useState<CustomerRecord[]>([]);
   const [meta,setMeta]=useState<Meta>(defaultMeta);
+  const [settingsDraft,setSettingsDraft]=useState<{base:Meta;values:Meta}|null>(null);
+  const settings=settingsDraft?.values||meta;
   const [metaId,setMetaId]=useState<string|null>(null);
   const [metaUpdatedAt,setMetaUpdatedAt]=useState(0);
   const [loading,setLoading]=useState(true);
@@ -291,7 +290,11 @@ function Dashboard(){
   const [isOnline,setIsOnline]=useState(typeof navigator!=='undefined' ? navigator.onLine : true);
   const [pendingWrites,setPendingWrites]=useState(0);
   const [isSyncing,setIsSyncing]=useState(false);
-  const [lastSyncedAt,setLastSyncedAt]=useState<number|null>(()=>{try{return Number(localStorage.getItem('eics.last-cloud-sync'))||null;}catch{return null;}});
+  const [lastSyncedAt,setLastSyncedAt]=useState<number|null>(()=>{try{return Number(localStorage.getItem(`eics.last-cloud-sync.${user.uid}`))||null;}catch{return null;}});
+  const [liveConnected,setLiveConnected]=useState(false);
+  const [livePendingWrites,setLivePendingWrites]=useState(false);
+  const [liveError,setLiveError]=useState('');
+  const [liveRetry,setLiveRetry]=useState(0);
   const [syncError,setSyncError]=useState('');
   const [syncConflicts,setSyncConflicts]=useState<SyncConflictRecord[]>([]);
   const [actualCash,setActualCash]=useState(0);
@@ -367,40 +370,81 @@ function Dashboard(){
   const metaIdRef=useRef(metaId); metaIdRef.current=metaId;
   const metaUpdatedAtRef=useRef(metaUpdatedAt); metaUpdatedAtRef.current=metaUpdatedAt;
 
-  async function reloadRecords(){
-    const data:any = await api("records.list", {collection:'transactions', limit:100});
-    const list:TxRecord[] = (data.records||[]).map((r:any)=>{ const norm = normalizeTx(r.value); return norm ? {id:r.id, value:norm, updatedAt:r.updatedAt} : null; }).filter(Boolean) as TxRecord[];
-    list.sort((a,b)=> (b.value.date||'').localeCompare(a.value.date||'') || b.value.createdAt-a.value.createdAt);
-    setRecords(list);
-    const m:any = await api("records.list", {collection:'meta', limit:10});
-    if(m.records?.length){
-      const raw = m.records[0].value || {};
-      const oldW = raw.wallets || {};
-      const wallets:Wallets = { cash: typeof oldW.cash === 'number' ? round2(oldW.cash) : defaultMeta.wallets.cash, maribank: typeof oldW.maribank === 'number' ? round2(oldW.maribank) : defaultMeta.wallets.maribank };
-      const palawanRaw = raw.palawanFee ?? raw.palawanTopUpFee;
-      setMeta({ kind:'meta', businessName: raw.businessName === 'May E-Load & Cash In/Out' ? defaultMeta.businessName : typeof raw.businessName === 'string' && raw.businessName ? raw.businessName : defaultMeta.businessName, eloadPct: typeof raw.eloadPct === 'number' ? raw.eloadPct : defaultMeta.eloadPct, cashInPct: typeof raw.cashInPct === 'number' ? raw.cashInPct : defaultMeta.cashInPct, cashOutPct: typeof raw.cashOutPct === 'number' ? raw.cashOutPct : defaultMeta.cashOutPct, palawanFee: typeof palawanRaw === 'number' ? palawanRaw : defaultMeta.palawanFee, wallets, lastClosed: typeof raw.lastClosed === 'string' ? raw.lastClosed : '', lowThreshold: typeof raw.lowThreshold === 'number' ? raw.lowThreshold : defaultMeta.lowThreshold, startingFloat: typeof raw.startingFloat === 'number' ? raw.startingFloat : undefined, startingFloatDate: typeof raw.startingFloatDate === 'string' ? raw.startingFloatDate : undefined });
-      setMetaId(m.records[0].id);
-      setMetaUpdatedAt(Number(m.records[0].updatedAt||0));
-    }
-    const c:any = await api("records.list", {collection:'customers', limit:100});
-    const clist:CustomerRecord[] = (c.records||[]).map((r:any)=>{ const norm=normalizeCustomer(r.value); return norm ? {id:r.id, value:norm, updatedAt:r.updatedAt} : null; }).filter(Boolean) as CustomerRecord[];
-    clist.sort((a,b)=> b.value.createdAt-a.value.createdAt);
-    setCustomers(clist);
-    try{ const dr:any = await api("records.list", {collection:'daily_reports', limit:100}); const dlist:DailyReportRecord[] = (dr.records||[]).map((r:any)=>({id:r.id, value:r.value})).filter((x:any)=>x.value && x.value.date); dlist.sort((a,b)=>b.value.date.localeCompare(a.value.date)); setDailyReports(dlist); }catch{}
-    try{ const fv:any = await api("records.list", {collection:'favorites', limit:100}); const flist:FavoriteRecord[] = (fv.records||[]).map((r:any)=>({id:r.id, value:r.value})).filter((x:any)=>x.value && x.value.phone); flist.sort((a,b)=>b.value.createdAt-a.value.createdAt); setFavorites(flist); }catch{}
-    try{ const wa:any = await api("records.list", {collection:'wallet_adjustments', limit:200}); const wlist:WalletAdjustmentRecord[] = (wa.records||[]).map((r:any)=>({id:r.id,value:r.value})).filter((x:any)=>x.value && x.value.wallet && x.value.mode); wlist.sort((a,b)=>b.value.createdAt-a.value.createdAt); setWalletAdjustments(wlist); }catch{}
-    try{const cf:any=await api('records.list',{collection:'sync_conflicts',limit:100});setSyncConflicts((cf.records||[]) as SyncConflictRecord[]);}catch{}
-    return list;
+  const liveRevisions=useRef<Partial<Record<RecordCollection,number>>>({});
+  const liveSubscriptionActive=useRef(false);
+  function applyRecordRows(name:RecordCollection,rows:LiveRecord[]){
+    if(name==='transactions'){
+      const list:TxRecord[]=rows.map(r=>{const value=normalizeTx(r.value);return value?{id:r.id,value,updatedAt:r.updatedAt}:null;}).filter(Boolean) as TxRecord[];
+      list.sort((a,b)=>(b.value.date||'').localeCompare(a.value.date||'')||b.value.createdAt-a.value.createdAt);
+      setRecords(list);
+      setDetail(previous=>previous?list.find(row=>row.id===previous.id)||null:null);
+      setUtangReminder(previous=>previous?list.find(row=>row.id===previous.id)||null:null);
+    }else if(name==='meta'){
+      // All devices must select the same metadata document, including accounts
+      // with older duplicate seed rows. Do not pin each device to its own seed.
+      const row=rows[0];
+      if(!row) return;
+      const raw=row.value||{}, oldW=raw.wallets||{}, palawanRaw=raw.palawanFee??raw.palawanTopUpFee;
+      const wallets:Wallets={cash:typeof oldW.cash==='number'?round2(oldW.cash):defaultMeta.wallets.cash,maribank:typeof oldW.maribank==='number'?round2(oldW.maribank):defaultMeta.wallets.maribank};
+      const next:Meta={kind:'meta',businessName:raw.businessName==='May E-Load & Cash In/Out'?defaultMeta.businessName:typeof raw.businessName==='string'&&raw.businessName?raw.businessName:defaultMeta.businessName,eloadPct:typeof raw.eloadPct==='number'?raw.eloadPct:defaultMeta.eloadPct,cashInPct:typeof raw.cashInPct==='number'?raw.cashInPct:defaultMeta.cashInPct,cashOutPct:typeof raw.cashOutPct==='number'?raw.cashOutPct:defaultMeta.cashOutPct,palawanFee:typeof palawanRaw==='number'?palawanRaw:defaultMeta.palawanFee,wallets,lastClosed:typeof raw.lastClosed==='string'?raw.lastClosed:'',lowThreshold:typeof raw.lowThreshold==='number'?raw.lowThreshold:1000,startingFloat:typeof raw.startingFloat==='number'?raw.startingFloat:undefined,startingFloatDate:typeof raw.startingFloatDate==='string'?raw.startingFloatDate:undefined};
+      metaRef.current=next; metaIdRef.current=row.id; metaUpdatedAtRef.current=Number(row.updatedAt||0);
+      setMeta(next); setMetaId(row.id); setMetaUpdatedAt(Number(row.updatedAt||0));
+    }else if(name==='customers'){
+      const list:CustomerRecord[]=rows.map(r=>{const value=normalizeCustomer(r.value);return value?{id:r.id,value,updatedAt:r.updatedAt}:null;}).filter(Boolean) as CustomerRecord[];
+      list.sort((a,b)=>b.value.createdAt-a.value.createdAt);
+      setCustomers(list);
+      setCustomerDetail(previous=>previous?list.find(row=>row.id===previous.id)||null:null);
+    }else if(name==='daily_reports'){
+      const list:DailyReportRecord[]=rows.filter(r=>r.value?.date);
+      list.sort((a,b)=>b.value.date.localeCompare(a.value.date)); setDailyReports(list);
+    }else if(name==='favorites'){
+      const list:FavoriteRecord[]=rows.filter(r=>r.value?.phone);
+      list.sort((a,b)=>b.value.createdAt-a.value.createdAt); setFavorites(list);
+    }else if(name==='wallet_adjustments'){
+      const list:WalletAdjustmentRecord[]=rows.filter(r=>r.value?.wallet&&r.value?.mode);
+      list.sort((a,b)=>b.value.createdAt-a.value.createdAt); setWalletAdjustments(list);
+    }else if(name==='sync_conflicts') setSyncConflicts(rows as SyncConflictRecord[]);
   }
+  const applyRecordRowsRef=useRef(applyRecordRows); applyRecordRowsRef.current=applyRecordRows;
+  async function reloadRecords(){
+    // Bootstrap/legacy import, preview mode, and listener-error fallback only.
+    // Active listeners already deliver local and remote writes; don't refetch
+    // the whole workspace after every save or create a snapshot/reload loop.
+    if(liveSubscriptionActive.current) return;
+    for(const name of Object.keys(recordCollectionLimits) as RecordCollection[]){
+      const revision=liveRevisions.current[name]||0;
+      try{
+        const data:any=await api('records.list',{collection:name,limit:recordCollectionLimits[name]});
+        // A slow one-shot read must never roll back a newer live snapshot.
+        if(revision===(liveRevisions.current[name]||0)) applyRecordRowsRef.current(name,data.records||[]);
+      }catch(error){if(['transactions','meta','customers'].includes(name)) throw error;}
+    }
+  }
+  const reloadRecordsRef=useRef(reloadRecords); reloadRecordsRef.current=reloadRecords;
   async function createRow(row:Tx){
     const key = `tx-${row.date}-${row.createdAt}-${uid()}`;
     return api("records.create", {collection:'transactions', value:row, idempotency_key:key});
   }
-  async function saveMeta(next:Meta){
-    const clean:Meta = { kind:'meta', businessName:next.businessName, eloadPct:next.eloadPct, cashInPct:next.cashInPct, cashOutPct:next.cashOutPct, palawanFee:next.palawanFee, lastClosed:next.lastClosed, lowThreshold: typeof next.lowThreshold==='number'?next.lowThreshold:1000, startingFloat: next.startingFloat, startingFloatDate: next.startingFloatDate, wallets:{ cash: round2(next.wallets.cash), maribank: round2(next.wallets.maribank) }};
-    if(metaIdRef.current){ const r:any=await api("records.replace", {collection:'meta', id:metaIdRef.current, value:clean, expectedUpdatedAt:metaUpdatedAtRef.current}); setMetaUpdatedAt(Number(r.updatedAt||metaUpdatedAtRef.current)); }
-    else { const r:any = await api("records.create", {collection:'meta', value:clean, idempotency_key:`meta-${uid()}`}); setMetaId(r.id); setMetaUpdatedAt(Number(r.updatedAt||0)); }
-    setMeta(clean);
+  function captureMeta(){return {value:metaRef.current,id:metaIdRef.current,updatedAt:metaUpdatedAtRef.current};}
+  async function saveMeta(next:Meta,base=captureMeta()){
+    const clean:Meta={kind:'meta',businessName:next.businessName,eloadPct:next.eloadPct,cashInPct:next.cashInPct,cashOutPct:next.cashOutPct,palawanFee:next.palawanFee,lastClosed:next.lastClosed,lowThreshold:typeof next.lowThreshold==='number'?next.lowThreshold:1000,startingFloat:next.startingFloat,startingFloatDate:next.startingFloatDate,wallets:{cash:round2(next.wallets.cash),maribank:round2(next.wallets.maribank)}};
+    // Pin the revision used for the calculation, not a newer revision arriving
+    // while the transaction/customer writes are in flight on another device.
+    const row:any=base.id?await api('records.replace',{collection:'meta',id:base.id,value:clean,expectedUpdatedAt:base.updatedAt}):await api('records.create',{collection:'meta',value:clean,idempotency_key:`meta-${uid()}`});
+    const updatedAt=Number(row.updatedAt||base.updatedAt);
+    if(!metaIdRef.current||(row.id===metaIdRef.current&&updatedAt>=metaUpdatedAtRef.current)) applyRecordRowsRef.current('meta',[{id:row.id,value:clean,updatedAt}]);
+  }
+  function changeBusinessSetting<K extends 'businessName'|'eloadPct'|'cashInPct'|'cashOutPct'|'palawanFee'|'lowThreshold'>(key:K,value:Meta[K]){
+    setSettingsDraft(previous=>({base:previous?.base||metaRef.current,values:{...(previous?.values||metaRef.current),[key]:value}}));
+  }
+  async function saveBusinessSettings(){
+    setSaving(true);
+    try{
+      const base=captureMeta();
+      const next=settingsDraft?mergeDraftFields(base.value,settingsDraft.base,settingsDraft.values,['businessName','eloadPct','cashInPct','cashOutPct','palawanFee','lowThreshold']):base.value;
+      await saveMeta(next,base); setSettingsDraft(null); setSaveMsg('Settings saved.');
+    }catch(error){showErrorToast(error instanceof Error?error.message:String(error));}
+    setSaving(false);
   }
   async function createCustomerRow(c:Customer){
     const key=`cust-${c.phone}-${c.createdAt}-${uid()}`;
@@ -415,51 +459,116 @@ function Dashboard(){
     if(!existing){
       const created:any = await createCustomerRow({name, phone, notes:'', createdAt:Date.now(), totalTransactions:0, totalAmount:0});
       const norm=normalizeCustomer(created.value||{name,phone,notes:'',createdAt:Date.now(),totalTransactions:0,totalAmount:0});
-      if(norm) setCustomers(prev=> prev.some(p=>p.id===created.id)?prev:[{id:created.id, value:norm}, ...prev]);
+      if(norm&&!liveSubscriptionActive.current) setCustomers(prev=>prev.some(p=>p.id===created.id)?prev:[{id:created.id,value:norm,updatedAt:created.updatedAt},...prev]);
       return created;
     }
     if(hasName && name!==existing.value.name){
       const updated={...existing.value, name};
-await api("records.replace", {collection:'customers', id:existing.id, value:updated, expectedUpdatedAt:existing.updatedAt});
-      setCustomers(prev=>prev.map(p=>p.id===existing.id?{...p, value:updated}:p));
+      const result:any=await api("records.replace", {collection:'customers', id:existing.id, value:updated, expectedUpdatedAt:existing.updatedAt});
+      if(!liveSubscriptionActive.current) setCustomers(prev=>prev.map(p=>p.id===existing.id?{...p,value:updated,updatedAt:result.updatedAt}:p));
     }
     return existing;
   }
 
-  useEffect(()=>{ (async()=>{
-    const loadingStartedAt=Date.now();
-    try{
-      await reloadRecords();
-      const m:any = await api("records.list", {collection:'meta', limit:10});
-      if(!m.records?.length){
-        const cleanMeta={...defaultMeta, wallets:{...defaultWallets}};
-        if(typeof navigator==='undefined' || navigator.onLine){ try{ const r:any=await api("records.create", {collection:'meta', value:cleanMeta, idempotency_key:`meta-seed-${uid()}`}); setMetaId(r.id); setMetaUpdatedAt(Number(r.updatedAt||0)); } catch{} }
-        setMeta(cleanMeta);
-      }
-      const c:any = await api("records.list", {collection:'customers', limit:100});
-      if(!c.records?.length && (typeof navigator==='undefined' || navigator.onLine)){
-        for(const s of seedCustomers){
-          try{ await api("records.create", {collection:'customers', value:s, idempotency_key:`cust-seed-${s.phone}-${uid()}`}); } catch{}
-        }
-        await reloadRecords();
-      }
-    } catch(e){ setApiError('The saved records could not be loaded yet. Your entries will be kept in this view until the connection returns — please try again.'); }
-    const remainingSplashTime=Math.max(0,1000-(Date.now()-loadingStartedAt));
-    if(remainingSplashTime) await new Promise<void>(resolve=>window.setTimeout(resolve,remainingSplashTime));
-    setLoadingProgress(100);
-    await new Promise<void>(resolve=>window.setTimeout(resolve,220));
-    setLoading(false);
-  })(); },[]);
-
-  useEffect(()=>subscribePendingWrites((count,error)=>{ setPendingWrites(count); setSyncError(error); }),[]);
   useEffect(()=>{
-    const sync=()=>{setIsSyncing(true);void waitForCloudSync().then(async()=>{clearSyncError();setSyncError('');const stamp=Date.now();setLastSyncedAt(stamp);try{localStorage.setItem('eics.last-cloud-sync',String(stamp));}catch{} await reloadRecords();}).catch(error=>setSyncError(error instanceof Error?error.message:String(error))).finally(()=>setIsSyncing(false));};
-    const onOnline=()=>{ setIsOnline(true); setApiError(''); sync(); };
-    const onOffline=()=>{setIsOnline(false);setIsSyncing(false);};
-    window.addEventListener('online', onOnline); window.addEventListener('offline', onOffline);
-    if(typeof navigator!=='undefined' && navigator.onLine) sync();
-    return ()=>{ window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
-  },[]);
+    let cancelled=false;
+    void (async()=>{
+      const loadingStartedAt=Date.now();
+      try{
+        await reloadRecords();
+        if(cancelled) return;
+        const m:any=await api('records.list',{collection:'meta',limit:10});
+        if(cancelled) return;
+        if(!m.records?.length){
+          const cleanMeta={...defaultMeta,wallets:{...defaultWallets}};
+          if(typeof navigator==='undefined'||navigator.onLine){
+            try{const r:any=await api('records.create',{collection:'meta',id:'settings',value:cleanMeta});if(!cancelled) applyRecordRowsRef.current('meta',[r]);}catch{}
+          }
+        }
+        if(cancelled) return;
+        const c:any=await api('records.list',{collection:'customers',limit:100});
+        if(cancelled) return;
+        if(!c.records?.length&&(typeof navigator==='undefined'||navigator.onLine)){
+          for(const customer of seedCustomers){
+            if(cancelled) return;
+            try{await api('records.create',{collection:'customers',value:customer,idempotency_key:`cust-seed-${customer.phone}-${uid()}`});}catch{}
+          }
+          if(!cancelled) await reloadRecords();
+        }
+      }catch(error){if(!cancelled) setApiError('The saved records could not be loaded yet. Your entries will be kept in this view until the connection returns — please try again.');}
+      if(cancelled) return;
+      const remainingSplashTime=Math.max(0,1000-(Date.now()-loadingStartedAt));
+      if(remainingSplashTime) await new Promise<void>(resolve=>window.setTimeout(resolve,remainingSplashTime));
+      if(cancelled) return;
+      setLoadingProgress(100);
+      await new Promise<void>(resolve=>window.setTimeout(resolve,220));
+      if(!cancelled) setLoading(false);
+    })();
+    return ()=>{cancelled=true;};
+  },[user.uid,previewMode]);
+
+  useEffect(()=>subscribePendingWrites((count,error)=>{setPendingWrites(count);setSyncError(error);}),[user.uid]);
+  useEffect(()=>{
+    if(loading||previewMode) return;
+    let active=true;
+    liveSubscriptionActive.current=true;
+    setLiveConnected(false); setLivePendingWrites(false); setLiveError('');
+    const stop=subscribeToUserRecords(user,{
+      onRecords:(name,rows)=>{
+        if(!active) return;
+        liveRevisions.current[name]=(liveRevisions.current[name]||0)+1;
+        applyRecordRowsRef.current(name,rows);
+      },
+      onStatus:status=>{
+        if(!active) return;
+        setLiveConnected(status.connected); setLivePendingWrites(status.hasPendingWrites);
+        if(status.connected){
+          const stamp=Date.now(); setLastSyncedAt(stamp); setApiError('');
+          try{localStorage.setItem(`eics.last-cloud-sync.${user.uid}`,String(stamp));}catch{}
+        }
+      },
+      onError:error=>{if(active){liveSubscriptionActive.current=false;setLiveError(error.message);setLiveConnected(false);}},
+    });
+    return ()=>{active=false;liveSubscriptionActive.current=false;stop();};
+  },[user.uid,previewMode,loading,liveRetry]);
+
+  useEffect(()=>{
+    if(loading) return;
+    let stopped=false, syncing=false;
+    let resumeTimer:ReturnType<typeof setTimeout>|undefined;
+    const sync=async()=>{
+      if(stopped||syncing||!navigator.onLine) return;
+      syncing=true; setIsSyncing(true);
+      try{
+        if(previewMode) await reloadRecordsRef.current(); else await syncUserRecords(user);
+        if(!stopped){clearSyncError();setSyncError('');}
+      }catch(error){if(!stopped) setSyncError(error instanceof Error?error.message:String(error));}
+      finally{syncing=false;if(!stopped) setIsSyncing(false);}
+    };
+    const resume=()=>{
+      if(resumeTimer) clearTimeout(resumeTimer);
+      resumeTimer=setTimeout(()=>{
+        if(stopped||document.visibilityState==='hidden'||!navigator.onLine) return;
+        // Re-open the listeners after an installed PWA/tab was suspended.
+        // Coalesce focus + visibility/pageshow events into one reconnect.
+        if(!previewMode) setLiveRetry(value=>value+1);
+        void sync();
+      },100);
+    };
+    const onOnline=()=>{setIsOnline(true);resume();};
+    const onOffline=()=>{setIsOnline(false);setLiveConnected(false);setIsSyncing(false);};
+    window.addEventListener('online',onOnline); window.addEventListener('offline',onOffline);
+    window.addEventListener('focus',resume); window.addEventListener('pageshow',resume);
+    document.addEventListener('visibilitychange',resume);
+    setIsOnline(navigator.onLine);
+    if(!previewMode&&navigator.onLine) void sync();
+    return ()=>{
+      stopped=true; if(resumeTimer) clearTimeout(resumeTimer);
+      window.removeEventListener('online',onOnline); window.removeEventListener('offline',onOffline);
+      window.removeEventListener('focus',resume); window.removeEventListener('pageshow',resume);
+      document.removeEventListener('visibilitychange',resume);
+    };
+  },[user.uid,previewMode,loading]);
   const txs = useMemo(()=>records.map(r=>r.value),[records]);
   const todayTxs = txs.filter(t=>t.date===todayKey());
   const dayTxs = txs.filter(t=>t.date===selectedDay);
@@ -604,8 +713,8 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
     if(cleanPhone.length!==11) throw new Error('Enter an 11-digit number first.');
     if(!isRealName(cleanName, cleanPhone)) throw new Error('Enter a name — not the number again.');
     const existing=customers.find(x=>digitsOnly(x.value.phone)===cleanPhone);
-    if(existing){ const updated={...existing.value, name:cleanName}; await api("records.replace", {collection:'customers', id:existing.id, value:updated, expectedUpdatedAt:existing.updatedAt}); setCustomers(prev=>prev.map(p=>p.id===existing.id?{...p, value:updated}:p)); }
-    else { const created:any=await createCustomerRow({name:cleanName, phone:cleanPhone, notes:'', createdAt:Date.now(), totalTransactions:0, totalAmount:0}); const norm=normalizeCustomer(created.value||{name:cleanName, phone:cleanPhone}); if(norm) setCustomers(prev=> prev.some(p=>p.id===created.id)?prev:[{id:created.id, value:norm}, ...prev]); }
+    if(existing){ const updated={...existing.value, name:cleanName}; const result:any=await api("records.replace", {collection:'customers', id:existing.id, value:updated, expectedUpdatedAt:existing.updatedAt}); if(!liveSubscriptionActive.current) setCustomers(prev=>prev.map(p=>p.id===existing.id?{...p,value:updated,updatedAt:result.updatedAt}:p)); }
+    else { const created:any=await createCustomerRow({name:cleanName, phone:cleanPhone, notes:'', createdAt:Date.now(), totalTransactions:0, totalAmount:0}); const norm=normalizeCustomer(created.value||{name:cleanName, phone:cleanPhone}); if(norm&&!liveSubscriptionActive.current) setCustomers(prev=>prev.some(p=>p.id===created.id)?prev:[{id:created.id,value:norm,updatedAt:created.updatedAt},...prev]); }
   }
   async function saveNameInForm(){
     const name=fCustomerName.trim();
@@ -665,26 +774,27 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
   async function toggleFavoriteForTx(r:TxRecord){
     const v=r.value; const existing=favorites.find(f=>digitsOnly(f.value.phone)===digitsOnly(v.phone) && f.value.amount===v.amount && f.value.type===v.type && f.value.network===v.network);
     try{
-      if(existing){ await api("records.delete", {collection:'favorites', id:existing.id}); setFavorites(prev=>prev.filter(f=>f.id!==existing.id)); showToast('Removed from Favorites.'); }
-      else { const fav:Favorite={phone:digitsOnly(v.phone), name:isRealName(v.customerName, v.phone)?(v.customerName||''):customerByPhone.get(digitsOnly(v.phone))?.value.name||'', type:v.type, amount:v.amount, network:v.network, createdAt:Date.now()}; const created:any=await api("records.create", {collection:'favorites', value:fav, idempotency_key:`fav-${fav.phone}-${fav.amount}-${fav.type}-${uid()}`}); setFavorites(prev=>[{id:created.id, value:fav}, ...prev]); showToast('Added to Favorites.'); }
+      if(existing){ await api("records.delete", {collection:'favorites', id:existing.id}); if(!liveSubscriptionActive.current) setFavorites(prev=>prev.filter(f=>f.id!==existing.id)); showToast('Removed from Favorites.'); }
+      else { const fav:Favorite={phone:digitsOnly(v.phone), name:isRealName(v.customerName, v.phone)?(v.customerName||''):customerByPhone.get(digitsOnly(v.phone))?.value.name||'', type:v.type, amount:v.amount, network:v.network, createdAt:Date.now()}; const created:any=await api("records.create", {collection:'favorites', value:fav, idempotency_key:`fav-${fav.phone}-${fav.amount}-${fav.type}-${uid()}`}); if(!liveSubscriptionActive.current) setFavorites(prev=>prev.some(row=>row.id===created.id)?prev:[{id:created.id,value:fav},...prev]); showToast('Added to Favorites.'); }
     }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
   }
   async function toggleFavoriteForCustomer(c:CustomerRecord, type:TxType='E-Load', amount=100, network='Globe'){
     const existing=favorites.find(f=>digitsOnly(f.value.phone)===digitsOnly(c.value.phone) && f.value.amount===amount && f.value.type===type);
     try{
-      if(existing){ await api("records.delete", {collection:'favorites', id:existing.id}); setFavorites(prev=>prev.filter(f=>f.id!==existing.id)); showToast('Removed from Favorites.'); }
-      else { const fav:Favorite={phone:digitsOnly(c.value.phone), name:c.value.name, type, amount, network, createdAt:Date.now()}; const created:any=await api("records.create", {collection:'favorites', value:fav, idempotency_key:`fav-${fav.phone}-${uid()}`}); setFavorites(prev=>[{id:created.id, value:fav}, ...prev]); showToast('Added to Favorites.'); }
+      if(existing){ await api("records.delete", {collection:'favorites', id:existing.id}); if(!liveSubscriptionActive.current) setFavorites(prev=>prev.filter(f=>f.id!==existing.id)); showToast('Removed from Favorites.'); }
+      else { const fav:Favorite={phone:digitsOnly(c.value.phone), name:c.value.name, type, amount, network, createdAt:Date.now()}; const created:any=await api("records.create", {collection:'favorites', value:fav, idempotency_key:`fav-${fav.phone}-${uid()}`}); if(!liveSubscriptionActive.current) setFavorites(prev=>prev.some(row=>row.id===created.id)?prev:[{id:created.id,value:fav},...prev]); showToast('Added to Favorites.'); }
     }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
   }
   async function markUtangPaid(r:TxRecord){
     setSaving(true);
     try{
+      const base=captureMeta();
       const remaining=utangRemaining(r.value);
       const partialTx=txPortion(r.value, remaining);
-      const nextWallets=applyTransaction(metaRef.current.wallets, partialTx, 1);
+      const nextWallets=applyTransaction(base.value.wallets, partialTx, 1);
       const updated:Tx={...r.value, utang:true, utangStatus:'paid', paidAmount:r.value.amount};
       await api("records.replace", {collection:'transactions', id:r.id, value:updated, expectedUpdatedAt:r.updatedAt});
-      await saveMeta({...metaRef.current, wallets:nextWallets});
+      await saveMeta({...base.value, wallets:nextWallets},base);
       await reloadRecords(); setDetail(null); setShowPartial(false); showToast('Utang marked paid — wallets updated.');
     }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
     setSaving(false);
@@ -697,11 +807,12 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
     setSaving(true);
     try{
       if(paid>=remaining){ await markUtangPaid(r); return; }
+      const base=captureMeta();
       const partialTx=txPortion(r.value, paid);
-      const nextWallets=applyTransaction(metaRef.current.wallets, partialTx, 1);
+      const nextWallets=applyTransaction(base.value.wallets, partialTx, 1);
       const updated:Tx={...r.value, utang:true, utangStatus:'unpaid', paidAmount:round2((r.value.paidAmount||0)+paid)};
       await api("records.replace", {collection:'transactions', id:r.id, value:updated, expectedUpdatedAt:r.updatedAt});
-      await saveMeta({...metaRef.current, wallets:nextWallets});
+      await saveMeta({...base.value, wallets:nextWallets},base);
       await reloadRecords(); setShowPartial(false); setPartialAmount(0); showToast(`Partial payment ${peso(paid)} saved — remaining ${peso(remaining-paid)}.`);
     }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
     setSaving(false);
@@ -731,7 +842,8 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
     setSaving(true); setSaveMsg('');
     try{
       if(phone) await ensureCustomer(phone, custName);
-      let nextWallets={...meta.wallets};
+      const base=captureMeta();
+      let nextWallets={...base.value.wallets};
       if(editing){
         nextWallets=updateWalletsForEdit(nextWallets, editing.value, tx);
         await api("records.replace", {collection:'transactions', id:editing.id, value:tx, expectedUpdatedAt:editing.updatedAt});
@@ -741,7 +853,7 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
         await createRow(tx);
       }
       if(nextWallets.maribank < 0) setSaveMsg('Warning: Main Wallet balance went below ₱0. Check the amount before saving again.');
-      await saveMeta({...metaRef.current, wallets:nextWallets});
+      await saveMeta({...base.value, wallets:nextWallets},base);
       await reloadRecords();
       if(keepOpen){
         const keepType=fType;
@@ -774,11 +886,12 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
     if(!tx) return;
     setSaving(true);
     try{
+      const base=captureMeta();
       const effect=transactionWalletEffect(tx);
-      const wallets=effect?applyTransaction(metaRef.current.wallets,effect):{...metaRef.current.wallets};
+      const wallets=effect?applyTransaction(base.value.wallets,effect):{...base.value.wallets};
       await api("records.create", {collection:'transactions', value:tx, idempotency_key:`undo-${tx.createdAt}-${uid()}`});
       // Restore this transaction's effect, not an old snapshot that could erase later sales.
-      await saveMeta({...metaRef.current, wallets});
+      await saveMeta({...base.value, wallets},base);
       if(undoTimerRef.current) clearTimeout(undoTimerRef.current);
       await reloadRecords(); setUndoInfo(null); setSaveMsg('Transaction restored.');
     }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
@@ -787,10 +900,11 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
   async function deleteTransaction(r:TxRecord){
     setSaving(true);
     try{
+      const base=captureMeta();
       const effect=transactionWalletEffect(r.value);
-      const next=effect?reverseTransaction(metaRef.current.wallets,effect):{...metaRef.current.wallets};
+      const next=effect?reverseTransaction(base.value.wallets,effect):{...base.value.wallets};
       await api("records.delete", {collection:'transactions', id:r.id, expectedUpdatedAt:r.updatedAt});
-      await saveMeta({...metaRef.current, wallets:next});
+      await saveMeta({...base.value, wallets:next},base);
       await reloadRecords(); setDetail(null); setConfirmDelete(null);
       setUndoInfo({tx:r.value});
       if(undoTimerRef.current) clearTimeout(undoTimerRef.current);
@@ -812,12 +926,14 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
     setSaving(true);
     let adjustmentId:string|undefined;
     try{
+      const base=captureMeta();
       const adjustment:WalletAdjustment={wallet:showWalletAction,mode:walletMode,amount:round2(walletAmt),category:walletMode==='deduct'?walletActionCategory.trim():'Balance correction',note:walletActionNote.trim(),date:todayKey(),time:new Date().toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit'}),createdAt:Date.now()};
       const created:any=await api('records.create',{collection:'wallet_adjustments',value:adjustment,idempotency_key:`wallet-${adjustment.createdAt}-${uid()}`});
       adjustmentId=created.id;
-      const next={...metaRef.current,wallets:{...metaRef.current.wallets,[showWalletAction]:round2(metaRef.current.wallets[showWalletAction]+(walletMode==='add'?walletAmt:-walletAmt))}};
-      try{ await saveMeta(next); }catch(e){ if(adjustmentId) await api('records.delete',{collection:'wallet_adjustments',id:adjustmentId}); throw e; }
-      setWalletAdjustments(prev=>[{id:adjustmentId||uid(),value:adjustment},...prev]);
+      const next={...base.value,wallets:{...base.value.wallets,[showWalletAction]:round2(base.value.wallets[showWalletAction]+(walletMode==='add'?walletAmt:-walletAmt))}};
+      try{ await saveMeta(next,base); }catch(e){ if(adjustmentId) await api('records.delete',{collection:'wallet_adjustments',id:adjustmentId}); throw e; }
+      const rowId=adjustmentId||uid();
+      if(!liveSubscriptionActive.current) setWalletAdjustments(prev=>prev.some(row=>row.id===rowId)?prev:[{id:rowId,value:adjustment},...prev]);
       const label=walletMode==='deduct'?`Deducted ${peso(walletAmt)} — ${adjustment.category}${adjustment.note?`: ${adjustment.note}`:''}.`:`Added ${peso(walletAmt)} to ${walletDefs.find(w=>w.key===showWalletAction)?.label}.`;
       setShowWalletAction(null); setSaveMsg(label);
     }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
@@ -826,11 +942,12 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
   async function clearSample(){
     setSaving(true);
     try{
+      const base=captureMeta();
       const sample = records.filter(r=>r.value.sample);
       for(const r of sample){ await api("records.delete", {collection:'transactions', id:r.id, expectedUpdatedAt:r.updatedAt}); }
       const sampleCust = customers.filter(c=>c.value.sample);
       for(const c of sampleCust){ await api("records.delete", {collection:'customers', id:c.id, expectedUpdatedAt:c.updatedAt}); }
-      await saveMeta({...metaRef.current, wallets:{...defaultWallets}});
+      await saveMeta({...base.value, wallets:{...defaultWallets}},base);
       await reloadRecords(); setConfirmClear(false); setSaveMsg('Sample data cleared. Your starting balances were restored.');
     } catch(e){ setSaveMsg(e instanceof Error?e.message:String(e)); }
     setSaving(false);
@@ -838,10 +955,11 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
   async function endOfDay(){
     setSaving(true);
     try{
+      const base=captureMeta();
       const diff = round2(actualCash - expectedCash);
-      const report:DailyReport={date:todayKey(), sales:todaySales, profit:todayProfit, tips:todayTips, count:todayTxs.length, cash:meta.wallets.cash, maribank:meta.wallets.maribank, topUp:sum(topUpToday,t=>t.amount), wallets:meta.wallets, startingFloat, actualCash, difference:diff, tomorrowFloat, createdAt:Date.now()};
+      const report:DailyReport={date:todayKey(), sales:todaySales, profit:todayProfit, tips:todayTips, count:todayTxs.length, cash:base.value.wallets.cash, maribank:base.value.wallets.maribank, topUp:sum(topUpToday,t=>t.amount), wallets:base.value.wallets, startingFloat, actualCash, difference:diff, tomorrowFloat, createdAt:Date.now()};
       await api("records.create", {collection:'daily_reports', value:report, idempotency_key:`eod-${todayKey()}-${uid()}`});
-      await saveMeta({...metaRef.current, lastClosed:todayKey(), startingFloat:tomorrowFloat, startingFloatDate:tomorrowKey()});
+      await saveMeta({...base.value, lastClosed:todayKey(), startingFloat:tomorrowFloat, startingFloatDate:tomorrowKey()},base);
       await reloadRecords(); setShowEOD(false); setSaveMsg('Day closed — summary saved. Tomorrow starts with '+peso(tomorrowFloat)+' float.');
     } catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
     setSaving(false);
@@ -923,9 +1041,10 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
       const names=['transactions','customers','daily_reports','favorites','wallet_adjustments'];
       for(const name of names){ const rows=backup.collections[name]??[]; if(!Array.isArray(rows)||rows.some((row:any)=>!row||typeof row.id!=='string'||!row.value||typeof row.value!=='object')) throw new Error(`Backup has invalid ${name} data.`); }
       if(!window.confirm('Restore this backup? Existing records with matching IDs will be kept; missing records will be added. Business settings and wallet balances will be replaced from the backup.')) return;
+      const base=captureMeta();
       let added=0,skipped=0;
       for(const name of names){ for(const row of backup.collections[name]){ const result:any=await api('records.create',{collection:name,id:row.id,value:row.value}); if(result.skipped) skipped++; else added++; } }
-      if(backup.settings&&typeof backup.settings==='object') await saveMeta({...defaultMeta,...backup.settings,kind:'meta'});
+      if(backup.settings&&typeof backup.settings==='object') await saveMeta({...defaultMeta,...backup.settings,kind:'meta'},base);
       await reloadRecords();
       showToast(`Backup restored: ${added} records added${skipped?`, ${skipped} existing kept`:''}.`);
     }catch(error){ showErrorToast(error instanceof Error?error.message:'Could not restore this backup.'); }
@@ -1140,7 +1259,7 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
         <header data-safe-area-sticky-top style={{top:'var(--safe-area-inset-top)'}} className="sticky z-30 -mx-3 sm:-mx-5 px-3 sm:px-5 pt-3 pb-3 bg-[var(--bg)]/95 backdrop-blur">
           <div className="mobile-header-row flex flex-col sm:flex-row items-start sm:justify-between gap-3">
             <div className="mobile-header-brand min-w-0 w-full sm:w-auto">
-              <div className="flex items-center gap-2 flex-wrap"><img src={`${import.meta.env.BASE_URL}icons/eload-tracker-192.png?v=3`} alt="" aria-hidden="true" className="w-9 h-9 rounded-xl shrink-0 object-cover shadow-sm"/><p className="text-[11px] font-black tracking-[0.14em] uppercase text-[var(--muted)]">E-LOAD Tracker • Main App • Sari-Sari</p>{!isOnline ? <span className="text-[10px] font-black bg-[#fef2f2] text-[var(--red)] px-2 py-1 rounded-full flex items-center gap-1" title="Changes are stored locally and sync when online. If two devices edit the same record while offline, review both copies after reconnecting; online edits are checked for conflicts."><WifiOff size={12}/> Offline{pendingWrites>0?` • ${pendingWrites} queued`:''}</span> : isSyncing||pendingWrites>0 ? <span className="text-[10px] font-black bg-[#fffbeb] text-[#92400e] px-2 py-1 rounded-full">{pendingWrites>0?`Syncing ${pendingWrites} change${pendingWrites===1?'':'s'}…`:'Checking sync…'}</span> : <span className="text-[10px] font-black bg-[#e8f8ef] text-[#087a48] px-2 py-1 rounded-full" title={lastSyncedAt?`Last cloud sync: ${new Date(lastSyncedAt).toLocaleString()}`:'No confirmed sync time on this device yet.'}>Synced{lastSyncedAt?` • ${new Date(lastSyncedAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}`:''}</span>}</div>
+              <div className="flex items-center gap-2 flex-wrap"><img src={`${import.meta.env.BASE_URL}icons/eload-tracker-192.png?v=3`} alt="" aria-hidden="true" className="w-9 h-9 rounded-xl shrink-0 object-cover shadow-sm"/><p className="text-[11px] font-black tracking-[0.14em] uppercase text-[var(--muted)]">E-LOAD Tracker • Main App • Sari-Sari</p>{previewMode ? <span className="text-[10px] font-black bg-[#fffbeb] text-[#92400e] px-2 py-1 rounded-full">Local preview</span> : !isOnline ? <span className="text-[10px] font-black bg-[#fef2f2] text-[var(--red)] px-2 py-1 rounded-full flex items-center gap-1" title="Changes are stored locally and sync when online. Conflicting offline edits are kept for review."><WifiOff size={12}/> Offline{pendingWrites>0?` • ${pendingWrites} queued`:''}</span> : liveError||syncError ? <span className="text-[10px] font-black bg-[#fff7ed] text-[#92400e] px-2 py-1 rounded-full">Sync needs attention</span> : isSyncing||pendingWrites>0||livePendingWrites||!liveConnected ? <span className="text-[10px] font-black bg-[#fffbeb] text-[#92400e] px-2 py-1 rounded-full">{pendingWrites>0?`Syncing ${pendingWrites} change${pendingWrites===1?'':'s'}…`:livePendingWrites||isSyncing?'Syncing changes…':'Connecting live updates…'}</span> : <span className="text-[10px] font-black bg-[#e8f8ef] text-[#087a48] px-2 py-1 rounded-full" title={`Changes from your other devices appear automatically.${lastSyncedAt?` Last confirmed cloud update: ${new Date(lastSyncedAt).toLocaleString()}`:''}`}>Live sync{lastSyncedAt?` • ${new Date(lastSyncedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`:''}</span>}</div>
               <h1 className="business-title font-display font-extrabold leading-[1.05] mt-1">{meta.businessName}</h1>
               <p className="text-sm text-[var(--muted)] font-semibold flex items-center gap-1 flex-wrap break-words" style={{overflowWrap:'anywhere', wordBreak:'break-word'}}><CalendarDays size={14} className="shrink-0"/>{fullDate(todayKey())}</p>
             </div>
@@ -1162,6 +1281,7 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
         </header>
 
         {apiError && <div className="card p-3 mb-3 flex gap-2 bg-[#fff7ed]"><AlertTriangle className="text-[var(--orange)] shrink-0" size={20}/><p className="text-sm font-bold">{apiError}</p></div>}
+        {liveError && !previewMode && <div role="alert" className="card p-3 mb-3 flex items-center gap-3 bg-[#fff7ed]"><AlertTriangle className="text-[var(--orange)] shrink-0" size={20}/><p className="flex-1 text-sm font-bold">Live updates are paused: {liveError}. Your current records are kept.</p><button type="button" disabled={!isOnline} onClick={()=>setLiveRetry(value=>value+1)} className="min-h-[44px] px-3 rounded-xl border border-[var(--line)] font-black text-sm disabled:opacity-50">Retry live sync</button></div>}
         {syncError && <div role="alert" className="card p-3 mb-3 flex gap-2 bg-[#fff7ed]"><AlertTriangle className="text-[var(--orange)] shrink-0" size={20}/><p className="text-sm font-bold">A queued change could not sync: {syncError}. Keep this device’s data and contact support before clearing site storage.</p></div>}
         {syncConflicts.length>0 && <section role="alert" className="card p-4 mb-3 border-2 border-amber-300 bg-[#fffbeb]"><h2 className="font-display font-bold text-lg">Review offline edits ({syncConflicts.length})</h2><p className="text-sm font-semibold mt-1">These records changed on another device before your offline edits synced. Choose which version to keep; the other copy will not be applied. For wallet/settings conflicts, compare both balances and reconcile transactions after choosing.</p><div className="mt-2 space-y-2">{syncConflicts.map(conflict=>{const remote=conflict.value.remoteValue;const local=conflict.value.value;const describe=(value:any)=>value?.wallets?`Main wallet ${peso(value.wallets.maribank||0)} · Cash ${peso(value.wallets.cash||0)}`:value?`${value.type||value.kind||'Record'}${value.date?` • ${value.date}`:''}${typeof value.amount==='number'?` • ${peso(value.amount)}`:''}`:'Record was deleted';return <div key={conflict.id} className="rounded-xl border border-amber-200 bg-white p-3"><p className="font-black text-sm">{conflict.value.collection} · {conflict.value.recordId}</p><p className="text-xs font-semibold text-[var(--muted)] mt-1">Cloud: {describe(remote)}{conflict.value.action==='delete'?' · your offline change was a delete':` · Your offline version: ${describe(local)}`}</p><div className="flex flex-wrap gap-2 mt-2"><button onClick={()=>void resolveSyncConflict(conflict,'use_remote')} className="min-h-[40px] rounded-xl border border-[var(--line)] px-3 text-xs font-black">Keep cloud version</button><button onClick={()=>void resolveSyncConflict(conflict,'keep_local')} className="min-h-[40px] rounded-xl bg-[var(--ink)] px-3 text-xs font-black text-white">Apply my offline change</button></div></div>})}</div></section>}
         {maribankLow && <div className="card p-4 mb-3 flex gap-3 items-start" style={{borderColor:'#fbbf24', background:'#fffbeb'}}><AlertTriangle className="text-[var(--amber)] shrink-0 mt-0.5" size={22}/><div className="flex-1"><p className="font-display font-bold">Main Wallet balance low — {peso(meta.wallets.maribank)}</p><p className="text-sm font-semibold text-[var(--muted)]">Need to top-up via External Provider before the next rush.</p></div><button onClick={()=>openNew('Top-Up')} className="shrink-0 min-h-[44px] px-4 rounded-xl bg-[#00a651] text-white font-black text-sm">Top-Up via External Provider</button></div>}
@@ -1362,17 +1482,18 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
             <section className="card p-4 sm:p-5">
               <h2 className="font-display font-bold text-xl flex items-center gap-2"><SettingsIcon size={20}/> Business settings</h2>
               <p className="text-sm font-semibold text-[var(--muted)] mt-1">Main app: Main Wallet. External Provider is only a top-up source.</p>
-              <label className="label block mt-4">Business name</label><input value={meta.businessName} onChange={e=>setMeta({...meta,businessName:e.target.value})} className="field mt-1"/>
+              {settingsDraft && <div className="rounded-xl bg-[var(--surface2)] p-3 mt-3 text-sm font-bold">Your unsaved settings are kept while balances update live. <button type="button" onClick={()=>setSettingsDraft(null)} className="underline text-[var(--green)]">Discard draft / use latest settings</button></div>}
+              <label className="label block mt-4">Business name</label><input value={settings.businessName} onChange={e=>changeBusinessSetting('businessName',e.target.value)} className="field mt-1"/>
               <div className="grid sm:grid-cols-2 gap-3 mt-3">
-                <div><label className="label">E-Load Profit % (added to customer total)</label><input type="number" step="0.1" value={meta.eloadPct} onChange={e=>setMeta({...meta,eloadPct:Number(e.target.value)})} className="field mt-1"/></div>
-                <div><label className="label">Cash In - % Fee (Added on Top)</label><input type="number" step="0.1" value={meta.cashInPct} onChange={e=>setMeta({...meta,cashInPct:Number(e.target.value)})} className="field mt-1"/></div>
-                <div><label className="label">Cash Out - % Fee (Added on Top)</label><input type="number" step="0.1" value={meta.cashOutPct} onChange={e=>setMeta({...meta,cashOutPct:Number(e.target.value)})} className="field mt-1"/></div>
-                <div><label className="label">External Provider Top-Up Fee (Flat ₱)</label><input type="number" value={meta.palawanFee} onChange={e=>setMeta({...meta,palawanFee:Number(e.target.value)})} className="field mt-1"/></div>
-                <div><label className="label">Low Balance threshold — Main Wallet (₱)</label><input type="number" value={meta.lowThreshold} onChange={e=>setMeta({...meta,lowThreshold:Number(e.target.value)})} className="field mt-1"/></div>
+                <div><label className="label">E-Load Profit % (added to customer total)</label><input type="number" step="0.1" value={settings.eloadPct} onChange={e=>changeBusinessSetting('eloadPct',Number(e.target.value))} className="field mt-1"/></div>
+                <div><label className="label">Cash In - % Fee (Added on Top)</label><input type="number" step="0.1" value={settings.cashInPct} onChange={e=>changeBusinessSetting('cashInPct',Number(e.target.value))} className="field mt-1"/></div>
+                <div><label className="label">Cash Out - % Fee (Added on Top)</label><input type="number" step="0.1" value={settings.cashOutPct} onChange={e=>changeBusinessSetting('cashOutPct',Number(e.target.value))} className="field mt-1"/></div>
+                <div><label className="label">External Provider Top-Up Fee (Flat ₱)</label><input type="number" value={settings.palawanFee} onChange={e=>changeBusinessSetting('palawanFee',Number(e.target.value))} className="field mt-1"/></div>
+                <div><label className="label">Low Balance threshold — Main Wallet (₱)</label><input type="number" value={settings.lowThreshold} onChange={e=>changeBusinessSetting('lowThreshold',Number(e.target.value))} className="field mt-1"/></div>
                 <div className="flex items-end"><p className="text-xs font-bold text-[var(--muted)]">When Main Wallet is at or below this amount, a subtle amber “Main Wallet low - top up soon” pill shows. No popup.</p></div>
               </div>
               <p className="text-sm font-semibold text-[var(--muted)] mt-3">Fee = Amount × % ÷ 100. E-Load customers pay the load amount plus its profit/fee; Cash In/Out fees are added on top. Example: Cash In ₱500 at 2% = ₱10 fee, so the customer pays ₱510.</p>
-              <button disabled={saving} onClick={async()=>{ setSaving(true); try{ await saveMeta(meta); setSaveMsg('Settings saved.'); } catch(e){ setSaveMsg(e instanceof Error?e.message:String(e)); } setSaving(false); }} className="big-btn bg-[var(--green)] text-white px-6 mt-4 w-full sm:w-auto">{saving?'Saving…':'Save Settings'}</button>
+              <button disabled={saving} onClick={saveBusinessSettings} className="big-btn bg-[var(--green)] text-white px-6 mt-4 w-full sm:w-auto">{saving?'Saving…':'Save Settings'}</button>
               <button onClick={exportAllCSV} className="big-btn border-2 border-[var(--line)] px-5 mt-3 w-full sm:w-auto"><FileDown size={18}/> Export CSV — All Transactions</button>
               <input ref={statementImportRef} type="file" accept="application/json,.json" className="hidden" aria-label="Choose statement sales JSON file" onChange={e=>{const file=e.target.files?.[0]; if(file) void importStatementSales(file);}} />
               <button type="button" disabled={statementImportBusy||saving} onClick={()=>statementImportRef.current?.click()} className="big-btn border-2 border-[var(--line)] px-5 mt-3 w-full sm:w-auto"><Download size={18}/>{statementImportBusy?'Importing statement sales…':'Import statement sales JSON'}</button>
@@ -1722,11 +1843,11 @@ export default function App(){
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState('');
   const [previewMode, setPreviewMode] = useState(false);
-  useEffect(() => observeAuth(auth, u => { if(!localPreviewMode){ activeUser = u; setUser(u); } setAuthReady(true); }), []);
+  useEffect(() => observeAuth(auth, u => { if(!localPreviewMode) setUser(u); setAuthReady(true); }), []);
   const handleSignIn = async () => { setSigningIn(true); setAuthError(''); try { await signInWithGoogle(); } catch (e) { setAuthError(e instanceof Error ? e.message : 'Google sign-in failed. Please try again.'); } finally { setSigningIn(false); } };
-  const enterLocalPreview = () => { localPreviewMode=true; activeUser=null; setPreviewMode(true); setUser({uid:'local-preview',displayName:'Local Preview',email:null} as FirebaseUser); };
+  const enterLocalPreview = () => { localPreviewMode=true; setPreviewMode(true); setUser({uid:'local-preview',displayName:'Local Preview',email:null} as FirebaseUser); };
   const handleSignOut = async () => { if(previewMode){ localPreviewMode=false; setPreviewMode(false); setUser(null); return; } await logOut(); };
   if (!authReady) return <div className="min-h-screen grid place-items-center bg-[#f5f8f6] text-[#163b2a]"><LoaderCircle className="animate-spin" size={30}/><span className="sr-only">Checking sign-in…</span></div>;
   if (!user) return <div className="min-h-screen bg-[#f5f8f6] text-[#163b2a] flex items-center justify-center p-5"><section className="w-full max-w-md rounded-[28px] bg-white shadow-xl border border-[#e1ebe5] p-7 sm:p-9 text-center"><div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-[#e9f7ef] text-[#16834c]"><Smartphone size={28}/></div><p className="text-xs font-black uppercase tracking-[.18em] text-[#16834c]">E-Load Tracker</p><h1 className="mt-2 font-display text-3xl font-extrabold">Your store, in sync.</h1><p className="mt-3 text-sm leading-6 text-slate-600">Sign in with Google to securely access your dashboard and sync your store records across devices.</p><button type="button" onClick={handleSignIn} disabled={signingIn} className="mt-7 flex min-h-12 w-full items-center justify-center gap-3 rounded-xl bg-[#163b2a] px-5 font-bold text-white disabled:opacity-60">{signingIn?<LoaderCircle className="animate-spin" size={20}/>:<span className="grid h-6 w-6 place-items-center rounded-full bg-white text-sm font-black text-[#4285F4]">G</span>}{signingIn?'Connecting…':'Continue with Google'}</button>{authError&&<p role="alert" className="mt-4 text-sm font-semibold text-red-600">{authError}</p>}{import.meta.env.DEV && <><div className="my-5 flex items-center gap-3 text-xs font-bold text-slate-400"><span className="h-px flex-1 bg-slate-200"/>PREVIEW ONLY<span className="h-px flex-1 bg-slate-200"/></div><button type="button" onClick={enterLocalPreview} className="flex min-h-12 w-full items-center justify-center rounded-xl border-2 border-[#16834c] px-5 font-extrabold text-[#16834c] hover:bg-[#effaf3]">Preview without signing in</button><p className="mt-2 text-xs font-semibold text-slate-500">Preview data stays in this browser and is not synced to your Google account.</p></>}<p className="mt-6 text-xs text-slate-500">Your data is stored privately in your Google-account workspace.</p></section></div>;
-  return <><div className="account-session-bar">{previewMode&&<span className="mr-auto rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-900">Preview mode · local data only</span>}<span className="account-session-name">{user.displayName || user.email}</span><button onClick={handleSignOut} aria-label={previewMode?'Exit preview':'Sign out'} title={previewMode?'Exit preview':'Sign out'} className="account-session-signout"><LogOut size={17}/><span>{previewMode?'Exit preview':'Sign out'}</span></button></div><Dashboard/></>;
+  return <><div className="account-session-bar">{previewMode&&<span className="mr-auto rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-900">Preview mode · local data only</span>}<span className="account-session-name">{user.displayName || user.email}</span><button onClick={handleSignOut} aria-label={previewMode?'Exit preview':'Sign out'} title={previewMode?'Exit preview':'Sign out'} className="account-session-signout"><LogOut size={17}/><span>{previewMode?'Exit preview':'Sign out'}</span></button></div><Dashboard key={previewMode?'local-preview':user.uid} user={user} previewMode={previewMode}/></>;
 }

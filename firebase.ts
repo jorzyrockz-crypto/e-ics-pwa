@@ -1,7 +1,8 @@
 import { initializeApp } from 'firebase/app';
 import { coalesceOfflineMutation, overlayOfflineMutations, recordVersionMatches, type OfflineMutation } from './offlineSync';
+import { listenToRecordCollections, type LiveRecordCallbacks } from './liveRecords';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, type User } from 'firebase/auth';
-import { initializeFirestore, getFirestore, collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, setDoc, deleteDoc, persistentLocalCache, persistentMultipleTabManager, waitForPendingWrites, runTransaction, type Firestore } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, setDoc, deleteDoc, onSnapshot, persistentLocalCache, persistentMultipleTabManager, waitForPendingWrites, runTransaction, type Firestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDSzRMrsCvxA6faVN7TUsL9-tfCNTJJTzk',
@@ -105,7 +106,46 @@ async function queueOfflineMutation(user:User,collectionName:string,recordId:str
   return operation;
 }
 
-async function processQueuedMutations(user:User){
+const mutationRuns = new Map<string,{again:boolean;promise:Promise<void>}>();
+function processQueuedMutations(user:User):Promise<void>{
+  if(typeof navigator!=='undefined'&&!navigator.onLine) return Promise.resolve();
+  const running=mutationRuns.get(user.uid);
+  if(running){ running.again=true; return running.promise; }
+  const task={again:false,promise:Promise.resolve()};
+  mutationRuns.set(user.uid,task);
+  task.promise=(async()=>{
+    try{
+      do{
+        task.again=false;
+        await processQueuedMutationsOnce(user);
+      }while(task.again && (typeof navigator==='undefined'||navigator.onLine));
+    }finally{mutationRuns.delete(user.uid);}
+  })();
+  return task.promise;
+}
+
+export async function syncUserRecords(user:User){
+  if(typeof navigator!=='undefined'&&!navigator.onLine) return;
+  await waitForCloudSync();
+  await processQueuedMutations(user);
+  await waitForCloudSync();
+}
+
+export function subscribeToUserRecords(user:User,callbacks:LiveRecordCallbacks):()=>void{
+  return listenToRecordCollections((source,next,error)=>{
+    const ref=source==='offline_mutations'?userMutationsRef(user):collection(db,'users',user.uid,'data',source,'records');
+    return onSnapshot(ref,{includeMetadataChanges:true},snapshot=>next({
+      records:snapshot.docs.map(row=>({id:row.id,value:source==='offline_mutations'?row.data():row.data().value,updatedAt:Number(row.data().updatedAt||0)})),
+      fromCache:snapshot.metadata.fromCache,
+      hasPendingWrites:snapshot.metadata.hasPendingWrites,
+    }),error);
+  },{...callbacks,onPendingMutations:()=>{
+    void processQueuedMutations(user);
+    callbacks.onPendingMutations?.();
+  }});
+}
+
+async function processQueuedMutationsOnce(user:User){
   if(typeof navigator!=='undefined'&&!navigator.onLine) return;
   let snapshot;
   try{snapshot=await getDocs(userMutationsRef(user));}catch{return;}
@@ -189,7 +229,7 @@ export async function firestoreRecords(action: string, args: any, user: User) {
         const existing = typeof navigator !== 'undefined' && !navigator.onLine
           ? await getDocFromCache(row)
           : await getDoc(row);
-        if (existing.exists()) return { id: row.id, value: existing.data().value, skipped: true };
+        if (existing.exists()) return { id: row.id, value: existing.data().value, updatedAt: Number(existing.data().updatedAt || 0), skipped: true };
       } catch (error) {
         if (typeof navigator === 'undefined' || navigator.onLine) throw error;
       }
