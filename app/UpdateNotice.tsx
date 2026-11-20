@@ -81,7 +81,7 @@ export default function UpdateNotice() {
   if (!readyWorker || dismissed) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-slate-950/50 p-4 backdrop-blur-md" role="presentation">
+    <div className="fixed inset-0 z-[100] grid place-items-center overflow-y-auto bg-[var(--scrim)] p-4 backdrop-blur-md" role="presentation">
       <section
         ref={dialogRef}
         onKeyDownCapture={event => {
@@ -132,7 +132,7 @@ export default function UpdateNotice() {
           {applyError && <p role="alert" className="mt-3 text-sm font-bold text-[var(--red)]">{applyError}</p>}
           <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <button ref={laterRef} type="button" disabled={applying} onClick={() => setDismissed(true)} className="min-h-12 rounded-xl border border-[var(--line)] px-5 font-extrabold text-[var(--ink)] hover:bg-[var(--surface2)]">Later</button>
-            <button type="button" disabled={applying} onClick={() => void updateNow()} className="min-h-12 rounded-xl bg-[var(--green)] px-6 font-extrabold text-white shadow-sm hover:brightness-95">{applying ? 'Updating…' : 'Update now'}</button>
+            <button type="button" disabled={applying} onClick={() => void updateNow()} className="min-h-12 rounded-xl bg-[var(--green-solid)] px-6 font-extrabold text-white shadow-sm hover:brightness-95">{applying ? 'Updating…' : 'Update now'}</button>
           </div>
         </div>
       </section>

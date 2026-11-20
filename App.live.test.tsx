@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveRecord, LiveRecordCallbacks, RecordCollection } from './liveRecords';
 import type { User } from './firebase';
+import { appearanceStorageKey } from './app/appearance';
 
 // Keep the UI tests local: these streams represent another device, never a real
 // Google account or the production database. The SDK adapter is tested separately.
@@ -142,8 +143,126 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
-  cleanup(); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks();
+  cleanup(); vi.clearAllTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
+  Reflect.deleteProperty(document.documentElement, 'scrollHeight');
   localStorage.clear();
+});
+
+describe('scrolling wallet banner without financial side effects', () => {
+  function phoneScrolling() {
+    let position = 0, id = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    const originalRect = Element.prototype.getBoundingClientRect;
+    vi.stubGlobal('innerWidth', 390); vi.stubGlobal('innerHeight', 844); vi.stubGlobal('scrollY', 0);
+    // Shadow the inherited DOM getter instead of spying on it: happy-dom's
+    // prototype accessor restoration can otherwise leak into the next test.
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, value: 8000 });
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: query.includes('max-width'), media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => true })));
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { frames.set(++id, callback); return id; }));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn((frame: number) => { frames.delete(frame); }));
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this.nextElementSibling?.matches('.scroll-wallet-banner')) return { x: 0, y: 48 - position, top: 48 - position, bottom: 48 - position, left: 0, right: 0, width: 0, height: 0, toJSON() {} };
+      if (!this.matches('.scroll-wallet-banner,.mobile-header-wallet')) return originalRect.call(this);
+      const height = this.matches('.mobile-header-wallet') ? 120 : 300;
+      return { x: 0, y: 0, top: 0, bottom: height, left: 0, right: 390, width: 390, height, toJSON() {} };
+    });
+    return (top: number) => act(() => {
+      position = top; vi.stubGlobal('scrollY', top); fireEvent.scroll(window);
+      const callbacks = [...frames.values()]; frames.clear(); for (const callback of callbacks) callback(0);
+    });
+  }
+
+  it('keeps the same live wallet and actions while collapsing/restoring, with no writes and no state carried to another account', async () => {
+    const scroll = phoneScrolling(), view = await mount();
+    const header = view.container.querySelector('header')!, wallet = header.querySelector('.mobile-header-wallet')!;
+    const action = within(wallet as HTMLElement).getByRole('button', { name: '+ Quick Sale' });
+    scroll(400); expect(header.dataset.compact).toBe('true');
+    await act(async () => { const latest = meta('Cloud Store', 12000, 6500); latest.updatedAt = 50; emit('meta', [latest]); });
+    expect(wallet.textContent).toContain('₱6,500'); expect(wallet.textContent).toContain('₱12,000');
+    expect(header.querySelector('.mobile-header-wallet')).toBe(wallet);
+    expect(within(wallet as HTMLElement).getByRole('button', { name: '+ Quick Sale' })).toBe(action);
+    scroll(380); expect(header.dataset.compact).toBe('false');
+    scroll(420); expect(header.dataset.compact).toBe('true');
+    await act(async () => { for (const observer of cloud.authObservers) observer({ uid: 'owner-b', displayName: 'Owner B' } as User); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    const otherHeader = view.container.querySelector('header')!;
+    expect(otherHeader.dataset.compact).toBe('false');
+    expect(otherHeader.textContent).toContain('Other Store'); expect(otherHeader.querySelector('.mobile-header-wallet')?.textContent).toContain('₱300');
+    expect(cloud.rows['owner-a'].meta![0].value.wallets).toEqual({ cash: 12000, maribank: 6500 });
+    expect(cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list')).toHaveLength(0);
+  });
+
+  it('preserves settings and sale drafts, keeps modal scrolling separate, and restores the full banner on section changes', async () => {
+    const scroll = phoneScrolling(), view = await mount(), before = clone(cloud.rows);
+    nav(view.container, 'Settings');
+    fireEvent.change(field(view.container, 'Business name'), { target: { value: 'Unfinished store name' } });
+    const header = view.container.querySelector('header')!;
+    scroll(400); expect(header.dataset.compact).toBe('true');
+    scroll(370); expect(header.dataset.compact).toBe('false');
+    expect(field(view.container, 'Business name').value).toBe('Unfinished store name');
+    nav(view.container, 'Dashboard'); scroll(420); expect(header.dataset.compact).toBe('true');
+    fireEvent.click(within(header.querySelector('.mobile-header-wallet') as HTMLElement).getByRole('button', { name: '+ Quick Sale' }));
+    const form = within(view.container).getByRole('dialog', { name: 'Add transaction' }); fillCustomer(form);
+    fireEvent.change(field(form, 'Notes'), { target: { value: 'Do not discard this sale' } });
+    scroll(300); expect(header.dataset.compact).toBe('true');
+    expect(field(form, 'Notes').value).toBe('Do not discard this sale');
+    fireEvent.click(within(form).getByRole('button', { name: 'Cancel' }));
+    scroll(260); expect(header.dataset.compact).toBe('false');
+    nav(view.container, 'Settings');
+    expect(field(view.container, 'Business name').value).toBe('Unfinished store name');
+    expect(cloud.rows).toEqual(before);
+    expect(cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list')).toHaveLength(0);
+  });
+});
+
+describe('appearance without financial side effects', () => {
+  it('changes the local theme immediately without saving business settings or losing a live settings draft', async () => {
+    const view = await mount(); nav(view.container, 'Settings');
+    const before = clone(cloud.rows);
+    fireEvent.change(field(view.container, 'Business name'), { target: { value: 'Unsaved store name' } });
+    const appearance = within(view.container).getByRole('region', { name: 'Appearance' });
+    expect(within(view.container).queryByRole('button', { name: 'Add transaction — shortcut 1' })).toBeNull();
+    fireEvent.click(within(appearance).getByRole('radio', { name: 'Dark' }));
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(localStorage.getItem(appearanceStorageKey)).toBe('dark');
+    expect(field(view.container, 'Business name').value).toBe('Unsaved store name');
+    await act(async () => { const changed = meta('Cloud name', 10100, 5100); changed.updatedAt = 50; emit('meta', [changed]); });
+    expect(field(view.container, 'Business name').value).toBe('Unsaved store name');
+    expect((within(appearance).getByRole('radio', { name: 'Dark' }) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(within(appearance).getByRole('radio', { name: 'Light' }));
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(cloud.rows['owner-a'].transactions).toEqual(before['owner-a'].transactions);
+    expect(cloud.rows['owner-a'].meta![0].value).toMatchObject({ businessName: 'Cloud name', wallets: { cash: 10100, maribank: 5100 } });
+    expect(cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list')).toHaveLength(0);
+  });
+
+  it('keeps an unsaved transaction intact when another tab changes appearance', async () => {
+    const view = await mount(), form = openSale(view.container); fillCustomer(form);
+    fireEvent.change(field(form, 'Notes'), { target: { value: 'Keep this unfinished sale' } });
+    fireEvent.change(within(form).getByLabelText('Custom load amount'), { target: { value: '250' } });
+    const before = clone(cloud.rows);
+    await act(async () => { window.dispatchEvent(new StorageEvent('storage', { key: appearanceStorageKey, newValue: 'dark' })); });
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(within(view.container).getByRole('dialog', { name: 'Add transaction' })).toBe(form);
+    expect(field(form, 'Notes').value).toBe('Keep this unfinished sale');
+    expect((within(form).getByLabelText('Custom load amount') as HTMLInputElement).value).toBe('250');
+    expect(form.querySelector<HTMLInputElement>('[data-customer-input]')!.value).toBe('Ada Test 09171234567');
+    expect(cloud.rows).toEqual(before);
+    expect(cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list')).toHaveLength(0);
+  });
+
+  it('keeps the browser theme while changing accounts without copying store records or settings', async () => {
+    localStorage.setItem(appearanceStorageKey, 'dark');
+    const view = await mount(); expect(document.documentElement.dataset.theme).toBe('dark');
+    const before = clone(cloud.rows);
+    await act(async () => { for (const observer of cloud.authObservers) observer({ uid: 'owner-b', displayName: 'Owner B' } as User); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    nav(view.container, 'Settings');
+    expect((within(within(view.container).getByRole('region', { name: 'Appearance' })).getByRole('radio', { name: 'Dark' }) as HTMLInputElement).checked).toBe(true);
+    expect(field(view.container, 'Business name').value).toBe('Other Store');
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(cloud.rows).toEqual(before);
+  });
 });
 
 describe('promo name suggestions from saved sales', () => {
