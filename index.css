@@ -307,7 +307,17 @@ button:focus-visible{outline:2px solid var(--green);outline-offset:2px}
   .dashboard-grid,.dash-col{min-width:0}
   .dashboard-grid>*{min-width:0}
   .top-suki-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}
-  .mobile-header-wallet{max-width:340px}
+  .mobile-header-wallet{max-width:100%}
+  /* The dashboard already exposes Quick Sale in its wallet card; keep the floating
+     action off the dense overview so it never covers the utang preview or balances. */
+  .fab-dashboard{display:none!important}
+  .utang-overview{padding:16px}
+  .utang-overview > div:first-child{align-items:flex-start}
+  .utang-overview > div:first-child > div{min-width:0;flex:1 1 100%}
+  .utang-overview > div:first-child > button{width:100%;}
+  .utang-overview > div:nth-child(2){gap:8px}
+  .utang-overview > button{min-width:0}
+  .mobile-bottom-nav{padding-bottom:calc(8px + env(safe-area-inset-bottom));}
 }
 
 /* Signed-in account controls stay in document flow instead of covering dashboard content. */
