@@ -1,7 +1,8 @@
 import { initializeApp } from 'firebase/app';
 import { coalesceOfflineMutation, overlayOfflineMutations, recordVersionMatches, type OfflineMutation } from './offlineSync';
+import { listenToRecordCollections, type LiveRecordCallbacks } from './liveRecords';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, type User } from 'firebase/auth';
-import { initializeFirestore, getFirestore, collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, setDoc, deleteDoc, persistentLocalCache, persistentMultipleTabManager, waitForPendingWrites, runTransaction, type Firestore } from 'firebase/firestore';
+import { initializeFirestore, getFirestore, collection, doc, getDoc, getDocFromCache, getDocs, getDocsFromCache, setDoc, deleteDoc, onSnapshot, persistentLocalCache, persistentMultipleTabManager, waitForPendingWrites, runTransaction, type Firestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDSzRMrsCvxA6faVN7TUsL9-tfCNTJJTzk',
@@ -105,7 +106,46 @@ async function queueOfflineMutation(user:User,collectionName:string,recordId:str
   return operation;
 }
 
-async function processQueuedMutations(user:User){
+const mutationRuns = new Map<string,{again:boolean;promise:Promise<void>}>();
+function processQueuedMutations(user:User):Promise<void>{
+  if(typeof navigator!=='undefined'&&!navigator.onLine) return Promise.resolve();
+  const running=mutationRuns.get(user.uid);
+  if(running){ running.again=true; return running.promise; }
+  const task={again:false,promise:Promise.resolve()};
+  mutationRuns.set(user.uid,task);
+  task.promise=(async()=>{
+    try{
+      do{
+        task.again=false;
+        await processQueuedMutationsOnce(user);
+      }while(task.again && (typeof navigator==='undefined'||navigator.onLine));
+    }finally{mutationRuns.delete(user.uid);}
+  })();
+  return task.promise;
+}
+
+export async function syncUserRecords(user:User){
+  if(typeof navigator!=='undefined'&&!navigator.onLine) return;
+  await waitForCloudSync();
+  await processQueuedMutations(user);
+  await waitForCloudSync();
+}
+
+export function subscribeToUserRecords(user:User,callbacks:LiveRecordCallbacks):()=>void{
+  return listenToRecordCollections((source,next,error)=>{
+    const ref=source==='offline_mutations'?userMutationsRef(user):collection(db,'users',user.uid,'data',source,'records');
+    return onSnapshot(ref,{includeMetadataChanges:true},snapshot=>next({
+      records:snapshot.docs.map(row=>({id:row.id,value:source==='offline_mutations'?row.data():row.data().value,updatedAt:Number(row.data().updatedAt||0)})),
+      fromCache:snapshot.metadata.fromCache,
+      hasPendingWrites:snapshot.metadata.hasPendingWrites,
+    }),error);
+  },{...callbacks,onPendingMutations:()=>{
+    void processQueuedMutations(user);
+    callbacks.onPendingMutations?.();
+  }});
+}
+
+async function processQueuedMutationsOnce(user:User){
   if(typeof navigator!=='undefined'&&!navigator.onLine) return;
   let snapshot;
   try{snapshot=await getDocs(userMutationsRef(user));}catch{return;}
@@ -134,7 +174,7 @@ async function processQueuedMutations(user:User){
 }
 
 // Every record is isolated under its authenticated user's Firestore namespace.
-export async function firestoreRecords(action: string, args: any, user: User) {
+export async function firestoreRecords(action: string, args: any, user: User): Promise<any> {
   const { collection: name, id, value } = args || {};
   if (!name && action!=='sync.conflicts.resolve') throw new Error('A record collection is required.');
   const recordsRef = collection(db, 'users', user.uid, 'data', name||'meta', 'records');
@@ -182,6 +222,55 @@ export async function firestoreRecords(action: string, args: any, user: User) {
     records.sort((a, b) => Number(b.value?.createdAt || 0) - Number(a.value?.createdAt || 0));
     return { records: records.slice(0, args.limit || records.length) };
   }
+  if (action === 'records.save_transaction') {
+    if (name !== 'transactions' || !id) throw new Error('A transaction ID is required for a payment save.');
+    const companion = args.meta;
+    if (companion && !companion.id) throw new Error('Load the wallet balances before confirming this payment.');
+    // Keep the existing offline proposal/overlay behavior. Online, the payment
+    // (or tip) and its wallet change must succeed together: a rejected balance
+    // revision must never leave a paid row behind or duplicate it on retry.
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const record = await firestoreRecords(args.create ? 'records.create' : 'records.replace', {
+        collection: name, id, value, expectedUpdatedAt: args.expectedUpdatedAt,
+      }, user);
+      const meta = !record.skipped && companion ? await firestoreRecords('records.replace', {
+        collection: 'meta', id: companion.id, value: companion.value, expectedUpdatedAt: companion.expectedUpdatedAt,
+      }, user) : undefined;
+      return { record, meta };
+    }
+    const row = doc(recordsRef, String(id));
+    const metaRow = companion ? doc(db, 'users', user.uid, 'data', 'meta', 'records', String(companion.id)) : null;
+    return runTransaction(db, async transaction => {
+      // All reads precede writes, including when the SDK retries a transaction.
+      const current = await transaction.get(row);
+      const currentMeta = metaRow ? await transaction.get(metaRow) : null;
+      const version = Number(current.data()?.updatedAt || 0);
+      const metaVersion = Number(currentMeta?.data()?.updatedAt || 0);
+      if (args.create && current.exists()) {
+        // The entry keeps its ID across confirmation retries. A committed
+        // create is returned as-is, without counting its payment a second time.
+        return {
+          record: { id: row.id, value: current.data().value, updatedAt: version, skipped: true },
+          meta: currentMeta?.exists() ? { id: metaRow!.id, value: currentMeta.data().value, updatedAt: metaVersion } : undefined,
+        };
+      }
+      if (!args.create && !recordVersionMatches(Number(args.expectedUpdatedAt || 0), current.exists(), version)) {
+        throw new Error('This record changed or was removed on another device. Reload records and review the latest version before saving.');
+      }
+      if (companion && !recordVersionMatches(Number(companion.expectedUpdatedAt || 0), Boolean(currentMeta?.exists()), metaVersion)) {
+        throw new Error('Wallet balances changed on another device. No payment or tip changes were saved. Review the latest balances and try again.');
+      }
+      const updatedAt = Math.max(Date.now(), version + 1);
+      const cleanValue = stripUndefined(value);
+      transaction.set(row, { value: cleanValue, updatedAt });
+      let meta;
+      if (metaRow) {
+        meta = { id: metaRow.id, value: stripUndefined(companion.value), updatedAt: Math.max(Date.now(), metaVersion + 1) };
+        transaction.set(metaRow, { value: meta.value, updatedAt: meta.updatedAt });
+      }
+      return { record: { id: row.id, value: cleanValue, updatedAt }, meta };
+    });
+  }
   if (action === 'records.create') {
     const row = id ? doc(recordsRef, String(id)) : doc(recordsRef);
     if (id) {
@@ -189,7 +278,7 @@ export async function firestoreRecords(action: string, args: any, user: User) {
         const existing = typeof navigator !== 'undefined' && !navigator.onLine
           ? await getDocFromCache(row)
           : await getDoc(row);
-        if (existing.exists()) return { id: row.id, value: existing.data().value, skipped: true };
+        if (existing.exists()) return { id: row.id, value: existing.data().value, updatedAt: Number(existing.data().updatedAt || 0), skipped: true };
       } catch (error) {
         if (typeof navigator === 'undefined' || navigator.onLine) throw error;
       }
