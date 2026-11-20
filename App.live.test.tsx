@@ -138,6 +138,74 @@ afterEach(() => {
   localStorage.clear();
 });
 
+describe('clay customer avatars across the dashboard', () => {
+  const portrait = (root: ParentNode) => {
+    const image = root.querySelector<HTMLImageElement>('.customer-avatar img');
+    expect(image).not.toBeNull();
+    return image!.getAttribute('src');
+  };
+
+  it('keeps the same portrait in Top Suki, the customer list/profile, reports, and transaction details', async () => {
+    cloud.rows['owner-a'].transactions = [transaction()];
+    const view = await mount();
+    const src = portrait(view.container.querySelector('.top-suki-card')!);
+    nav(view.container, 'Customers');
+    expect(portrait(view.container)).toBe(src);
+    fireEvent.click(within(view.container).getByText('Ada Test'));
+    const profile = within(view.container).getByRole('dialog', { name: 'Customer detail' });
+    expect(portrait(profile)).toBe(src);
+    expect(profile.querySelector('.customer-avatar')?.getAttribute('aria-hidden')).toBe('true');
+    fireEvent.click(within(profile).getByRole('button', { name: /^Close$/ }));
+    nav(view.container, 'Report');
+    expect(portrait(view.container)).toBe(src);
+    expect(portrait(transactionDetail(view.container))).toBe(src);
+  });
+
+  it('uses clay portraits in Recent, Frequent, and name/number matches without affecting customer selection', async () => {
+    cloud.rows['owner-a'].transactions = [transaction()];
+    const view = await mount();
+    const src = portrait(view.container.querySelector('.top-suki-card')!);
+    const form = openSale(view.container), input = form.querySelector<HTMLInputElement>('[data-customer-input]')!;
+    fireEvent.focus(input);
+    expect(within(form).getByText('Recent')).not.toBeNull();
+    expect(within(form).getByText('Frequent')).not.toBeNull();
+    const suggestions = form.querySelectorAll<HTMLImageElement>('.customer-avatar img');
+    expect(suggestions).toHaveLength(2);
+    expect([...suggestions].every(image => image.getAttribute('src') === src)).toBe(true);
+    fireEvent.change(input, { target: { value: 'Ada' } });
+    expect(within(form).getByText('Matches')).not.toBeNull();
+    expect(portrait(form)).toBe(src);
+    fireEvent.mouseDown(within(form).getByRole('button', { name: /Ada Test • 0917 123 4567/ }));
+    expect(input.value).toBe('Ada Test • 0917 123 4567');
+    expect(within(form).queryByText('Matches')).toBeNull();
+  });
+
+  it('preserves a phone-only customer avatar after a live name correction without writing any records', async () => {
+    cloud.rows['owner-a'].customers = [{ ...clone(customer), value: { ...customer.value, name: '' } }];
+    const view = await mount(); nav(view.container, 'Customers');
+    const src = portrait(view.container);
+    const writes = cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list').length;
+    await act(async () => { emit('customers', [{ ...clone(customer), updatedAt: 50, value: { ...customer.value, name: 'Ada Corrected' } }]); });
+    expect(portrait(view.container)).toBe(src);
+    expect(view.container.textContent).toContain('Ada Corrected');
+    expect(cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list')).toHaveLength(writes);
+  });
+
+  it('keeps Utang and deleted-customer transaction portraits consistent without bringing back initials', async () => {
+    const sale = transaction(); sale.value = { ...sale.value, utang: true, utangStatus: 'unpaid', tip: 0 };
+    cloud.rows['owner-a'].transactions = [sale];
+    const view = await mount();
+    const src = portrait(view.container.querySelector('.top-suki-card')!);
+    await act(async () => { emit('customers', []); });
+    nav(view.container, 'Utang'); expect(portrait(view.container)).toBe(src);
+    fireEvent.click(within(view.container).getByRole('button', { name: 'View / Partial' }));
+    const detail = within(view.container).getByRole('dialog', { name: 'Transaction detail' });
+    expect(within(detail).getByText('Deleted Customer')).not.toBeNull();
+    expect(portrait(detail)).toBe(src);
+    expect(detail.querySelector('.customer-avatar')?.textContent).toBe('');
+  });
+});
+
 describe('dashboard cross-device updates', () => {
   it('uses one shared metadata seed when two devices open a new workspace together', async () => {
     cloud.rows['owner-a'].meta = [];

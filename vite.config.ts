@@ -27,6 +27,8 @@ export default defineConfig({
         'icons/favicon-32.png',
         'icons/eload-tracker-touch-180.png',
         'icons/eload-tracker-monochrome.svg',
+        // All customer portraits must remain available even on offline-first use.
+        'avatars/*.webp',
       ],
       manifest: {
         id: deploymentBase,
