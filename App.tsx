@@ -7,15 +7,16 @@ type TxType = 'E-Load' | 'Cash In' | 'Cash Out' | 'Top-Up';
 type Tx = { kind?:string; type:TxType; network:string; eloadKind?:'regular'|'promo'; promoName?:string; promoDetails?:string; promoValidity?:string; provider:string; amount:number; fee:number; selling:number; discount?:number; phone:string; customerName?:string; payment:string; notes:string; date:string; time:string; createdAt:number; sample?:boolean; utang?:boolean; utangStatus?:'unpaid'|'paid'; promiseDate?:string; paidAmount?:number; history?:{oldAmount:number;newAmount:number;time:string;date:string}[] };
 type Wallets = { cash:number; maribank:number };
 type WalletAdjustment = { wallet:keyof Wallets; mode:'add'|'deduct'; amount:number; category:string; note:string; date:string; time:string; createdAt:number };
-type WalletAdjustmentRecord = { id:string; value:WalletAdjustment };
+type WalletAdjustmentRecord = { id:string; value:WalletAdjustment; updatedAt?:number };
 type Meta = { kind:string; businessName:string; eloadPct:number; cashInPct:number; cashOutPct:number; palawanFee:number; wallets:Wallets; lastClosed:string; lowThreshold:number; startingFloat?:number; startingFloatDate?:string };
 type TxRecord = { id:string; value:Tx; updatedAt?:number };
 type Customer = { name:string; phone:string; notes:string; createdAt:number; totalTransactions:number; totalAmount:number; sample?:boolean };
 type CustomerRecord = { id:string; value:Customer; updatedAt?:number };
 type Favorite = { phone:string; name:string; type:TxType; amount:number; network:string; createdAt:number };
-type FavoriteRecord = { id:string; value:Favorite };
+type FavoriteRecord = { id:string; value:Favorite; updatedAt?:number };
 type DailyReport = { date:string; sales:number; profit:number; count:number; cash:number; maribank:number; topUp:number; wallets:Wallets; startingFloat:number; actualCash:number; difference:number; tomorrowFloat:number; createdAt:number };
 type DailyReportRecord = { id:string; value:DailyReport };
+type SyncConflictRecord = {id:string;value:{kind:'conflict';collection:string;recordId:string;action:'replace'|'delete';value?:any;remoteValue?:any;remoteUpdatedAt:number;conflictAt:number}};
 
 const peso = (n:number)=> '₱' + (isNaN(n)?0:n).toLocaleString('en-PH',{minimumFractionDigits: n%1?2:0, maximumFractionDigits:2});
 const todayKey = ()=>{ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
@@ -259,6 +260,7 @@ function Dashboard(){
   const [customers,setCustomers]=useState<CustomerRecord[]>([]);
   const [meta,setMeta]=useState<Meta>(defaultMeta);
   const [metaId,setMetaId]=useState<string|null>(null);
+  const [metaUpdatedAt,setMetaUpdatedAt]=useState(0);
   const [loading,setLoading]=useState(true);
   const [loadingProgress,setLoadingProgress]=useState(8);
   const [apiError,setApiError]=useState('');
@@ -315,6 +317,7 @@ function Dashboard(){
   const [isSyncing,setIsSyncing]=useState(false);
   const [lastSyncedAt,setLastSyncedAt]=useState<number|null>(()=>{try{return Number(localStorage.getItem('eics.last-cloud-sync'))||null;}catch{return null;}});
   const [syncError,setSyncError]=useState('');
+  const [syncConflicts,setSyncConflicts]=useState<SyncConflictRecord[]>([]);
   const [actualCash,setActualCash]=useState(0);
   const [tomorrowFloat,setTomorrowFloat]=useState(0);
   const [tomorrowTouched,setTomorrowTouched]=useState(false);
@@ -379,6 +382,7 @@ function Dashboard(){
 
   const metaRef=useRef(meta); metaRef.current=meta;
   const metaIdRef=useRef(metaId); metaIdRef.current=metaId;
+  const metaUpdatedAtRef=useRef(metaUpdatedAt); metaUpdatedAtRef.current=metaUpdatedAt;
 
   async function reloadRecords(){
     const data:any = await api("records.list", {collection:'transactions', limit:100});
@@ -393,6 +397,7 @@ function Dashboard(){
       const palawanRaw = raw.palawanFee ?? raw.palawanTopUpFee;
       setMeta({ kind:'meta', businessName: typeof raw.businessName === 'string' && raw.businessName ? raw.businessName : defaultMeta.businessName, eloadPct: typeof raw.eloadPct === 'number' ? raw.eloadPct : defaultMeta.eloadPct, cashInPct: typeof raw.cashInPct === 'number' ? raw.cashInPct : defaultMeta.cashInPct, cashOutPct: typeof raw.cashOutPct === 'number' ? raw.cashOutPct : defaultMeta.cashOutPct, palawanFee: typeof palawanRaw === 'number' ? palawanRaw : defaultMeta.palawanFee, wallets, lastClosed: typeof raw.lastClosed === 'string' ? raw.lastClosed : '', lowThreshold: typeof raw.lowThreshold === 'number' ? raw.lowThreshold : defaultMeta.lowThreshold, startingFloat: typeof raw.startingFloat === 'number' ? raw.startingFloat : undefined, startingFloatDate: typeof raw.startingFloatDate === 'string' ? raw.startingFloatDate : undefined });
       setMetaId(m.records[0].id);
+      setMetaUpdatedAt(Number(m.records[0].updatedAt||0));
     }
     const c:any = await api("records.list", {collection:'customers', limit:100});
     const clist:CustomerRecord[] = (c.records||[]).map((r:any)=>{ const norm=normalizeCustomer(r.value); return norm ? {id:r.id, value:norm, updatedAt:r.updatedAt} : null; }).filter(Boolean) as CustomerRecord[];
@@ -401,6 +406,7 @@ function Dashboard(){
     try{ const dr:any = await api("records.list", {collection:'daily_reports', limit:100}); const dlist:DailyReportRecord[] = (dr.records||[]).map((r:any)=>({id:r.id, value:r.value})).filter((x:any)=>x.value && x.value.date); dlist.sort((a,b)=>b.value.date.localeCompare(a.value.date)); setDailyReports(dlist); }catch{}
     try{ const fv:any = await api("records.list", {collection:'favorites', limit:100}); const flist:FavoriteRecord[] = (fv.records||[]).map((r:any)=>({id:r.id, value:r.value})).filter((x:any)=>x.value && x.value.phone); flist.sort((a,b)=>b.value.createdAt-a.value.createdAt); setFavorites(flist); }catch{}
     try{ const wa:any = await api("records.list", {collection:'wallet_adjustments', limit:200}); const wlist:WalletAdjustmentRecord[] = (wa.records||[]).map((r:any)=>({id:r.id,value:r.value})).filter((x:any)=>x.value && x.value.wallet && x.value.mode); wlist.sort((a,b)=>b.value.createdAt-a.value.createdAt); setWalletAdjustments(wlist); }catch{}
+    try{const cf:any=await api('records.list',{collection:'sync_conflicts',limit:100});setSyncConflicts((cf.records||[]) as SyncConflictRecord[]);}catch{}
     return list;
   }
   async function createRow(row:Tx){
@@ -409,8 +415,8 @@ function Dashboard(){
   }
   async function saveMeta(next:Meta){
     const clean:Meta = { kind:'meta', businessName:next.businessName, eloadPct:next.eloadPct, cashInPct:next.cashInPct, cashOutPct:next.cashOutPct, palawanFee:next.palawanFee, lastClosed:next.lastClosed, lowThreshold: typeof next.lowThreshold==='number'?next.lowThreshold:1000, startingFloat: next.startingFloat, startingFloatDate: next.startingFloatDate, wallets:{ cash: round2(next.wallets.cash), maribank: round2(next.wallets.maribank) }};
-    if(metaIdRef.current){ await api("records.replace", {collection:'meta', id:metaIdRef.current, value:clean}); }
-    else { const r:any = await api("records.create", {collection:'meta', value:clean, idempotency_key:`meta-${uid()}`}); setMetaId(r.id); }
+    if(metaIdRef.current){ const r:any=await api("records.replace", {collection:'meta', id:metaIdRef.current, value:clean, expectedUpdatedAt:metaUpdatedAtRef.current}); setMetaUpdatedAt(Number(r.updatedAt||metaUpdatedAtRef.current)); }
+    else { const r:any = await api("records.create", {collection:'meta', value:clean, idempotency_key:`meta-${uid()}`}); setMetaId(r.id); setMetaUpdatedAt(Number(r.updatedAt||0)); }
     setMeta(clean);
   }
   async function createCustomerRow(c:Customer){
@@ -444,7 +450,7 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
       const m:any = await api("records.list", {collection:'meta', limit:10});
       if(!m.records?.length){
         const cleanMeta={...defaultMeta, wallets:{...defaultWallets}};
-        if(typeof navigator==='undefined' || navigator.onLine){ try{ const r:any=await api("records.create", {collection:'meta', value:cleanMeta, idempotency_key:`meta-seed-${uid()}`}); setMetaId(r.id); } catch{} }
+        if(typeof navigator==='undefined' || navigator.onLine){ try{ const r:any=await api("records.create", {collection:'meta', value:cleanMeta, idempotency_key:`meta-seed-${uid()}`}); setMetaId(r.id); setMetaUpdatedAt(Number(r.updatedAt||0)); } catch{} }
         setMeta(cleanMeta);
       }
       const c:any = await api("records.list", {collection:'customers', limit:100});
@@ -464,7 +470,7 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
 
   useEffect(()=>subscribePendingWrites((count,error)=>{ setPendingWrites(count); setSyncError(error); }),[]);
   useEffect(()=>{
-    const sync=()=>{setIsSyncing(true);void waitForCloudSync().then(()=>{clearSyncError();setSyncError('');const stamp=Date.now();setLastSyncedAt(stamp);try{localStorage.setItem('eics.last-cloud-sync',String(stamp));}catch{}}).catch(error=>setSyncError(error instanceof Error?error.message:String(error))).finally(()=>setIsSyncing(false));};
+    const sync=()=>{setIsSyncing(true);void waitForCloudSync().then(async()=>{clearSyncError();setSyncError('');const stamp=Date.now();setLastSyncedAt(stamp);try{localStorage.setItem('eics.last-cloud-sync',String(stamp));}catch{} await reloadRecords();}).catch(error=>setSyncError(error instanceof Error?error.message:String(error))).finally(()=>setIsSyncing(false));};
     const onOnline=()=>{ setIsOnline(true); setApiError(''); sync(); };
     const onOffline=()=>{setIsOnline(false);setIsSyncing(false);};
     window.addEventListener('online', onOnline); window.addEventListener('offline', onOffline);
@@ -775,7 +781,7 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
   }
   async function deleteCustomer(c:CustomerRecord){
     setSaving(true);
-    try{ await api("records.delete", {collection:'customers', id:c.id}); await reloadRecords(); setCustomerDetail(null); setConfirmDeleteCustomer(null); setSaveMsg('Customer deleted. Past transactions are kept and will show as Deleted Customer.'); } catch(e){ setSaveMsg(e instanceof Error?e.message:String(e)); }
+    try{ await api("records.delete", {collection:'customers', id:c.id, expectedUpdatedAt:c.updatedAt}); await reloadRecords(); setCustomerDetail(null); setConfirmDeleteCustomer(null); setSaveMsg('Customer deleted. Past transactions are kept and will show as Deleted Customer.'); } catch(e){ setSaveMsg(e instanceof Error?e.message:String(e)); }
     setSaving(false);
   }
   async function undoDelete(){
@@ -795,7 +801,7 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
       const isUnpaidUtang = !!(r.value.utang && r.value.utangStatus==='unpaid');
       const paidPortion = r.value.paidAmount||0;
       const next = isUnpaidUtang ? (paidPortion>0 ? reverseTransaction(meta.wallets, txPortion(r.value, paidPortion)) : {...meta.wallets}) : reverseTransaction(meta.wallets, r.value);
-      await api("records.delete", {collection:'transactions', id:r.id});
+      await api("records.delete", {collection:'transactions', id:r.id, expectedUpdatedAt:r.updatedAt});
       await saveMeta({...metaRef.current, wallets:next});
       await reloadRecords(); setDetail(null); setConfirmDelete(null);
       setUndoInfo({tx:r.value, walletsBefore});
@@ -832,9 +838,9 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
     setSaving(true);
     try{
       const sample = records.filter(r=>r.value.sample);
-      for(const r of sample){ await api("records.delete", {collection:'transactions', id:r.id}); }
+      for(const r of sample){ await api("records.delete", {collection:'transactions', id:r.id, expectedUpdatedAt:r.updatedAt}); }
       const sampleCust = customers.filter(c=>c.value.sample);
-      for(const c of sampleCust){ await api("records.delete", {collection:'customers', id:c.id}); }
+      for(const c of sampleCust){ await api("records.delete", {collection:'customers', id:c.id, expectedUpdatedAt:c.updatedAt}); }
       await saveMeta({...metaRef.current, wallets:{...defaultWallets}});
       await reloadRecords(); setConfirmClear(false); setSaveMsg('Sample data cleared. Your starting balances were restored.');
     } catch(e){ setSaveMsg(e instanceof Error?e.message:String(e)); }
@@ -935,6 +941,10 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
       showToast(`Backup restored: ${added} records added${skipped?`, ${skipped} existing kept`:''}.`);
     }catch(error){ showErrorToast(error instanceof Error?error.message:'Could not restore this backup.'); }
     finally{setBackupBusy(false); if(backupImportRef.current) backupImportRef.current.value='';}
+  }
+  async function resolveSyncConflict(conflict:SyncConflictRecord,choice:'use_remote'|'keep_local'){
+    try{await api('sync.conflicts.resolve',{id:conflict.id,choice});await reloadRecords();showToast(choice==='keep_local'?'Your offline version was applied.':'The cloud version was kept.');}
+    catch(error){showErrorToast(error instanceof Error?error.message:'Could not resolve this sync conflict.');}
   }
   async function copyCustomerStatement(customer:CustomerRecord){
     const phone=digitsOnly(customer.value.phone);
@@ -1163,6 +1173,7 @@ await api("records.replace", {collection:'customers', id:existing.id, value:upda
 
         {apiError && <div className="card p-3 mb-3 flex gap-2 bg-[#fff7ed]"><AlertTriangle className="text-[var(--orange)] shrink-0" size={20}/><p className="text-sm font-bold">{apiError}</p></div>}
         {syncError && <div role="alert" className="card p-3 mb-3 flex gap-2 bg-[#fff7ed]"><AlertTriangle className="text-[var(--orange)] shrink-0" size={20}/><p className="text-sm font-bold">A queued change could not sync: {syncError}. Keep this device’s data and contact support before clearing site storage.</p></div>}
+        {syncConflicts.length>0 && <section role="alert" className="card p-4 mb-3 border-2 border-amber-300 bg-[#fffbeb]"><h2 className="font-display font-bold text-lg">Review offline edits ({syncConflicts.length})</h2><p className="text-sm font-semibold mt-1">These records changed on another device before your offline edits synced. Choose which version to keep; the other copy will not be applied. For wallet/settings conflicts, compare both balances and reconcile transactions after choosing.</p><div className="mt-2 space-y-2">{syncConflicts.map(conflict=>{const remote=conflict.value.remoteValue;const local=conflict.value.value;const describe=(value:any)=>value?.wallets?`Main wallet ${peso(value.wallets.maribank||0)} · Cash ${peso(value.wallets.cash||0)}`:value?`${value.type||value.kind||'Record'}${value.date?` • ${value.date}`:''}${typeof value.amount==='number'?` • ${peso(value.amount)}`:''}`:'Record was deleted';return <div key={conflict.id} className="rounded-xl border border-amber-200 bg-white p-3"><p className="font-black text-sm">{conflict.value.collection} · {conflict.value.recordId}</p><p className="text-xs font-semibold text-[var(--muted)] mt-1">Cloud: {describe(remote)}{conflict.value.action==='delete'?' · your offline change was a delete':` · Your offline version: ${describe(local)}`}</p><div className="flex flex-wrap gap-2 mt-2"><button onClick={()=>void resolveSyncConflict(conflict,'use_remote')} className="min-h-[40px] rounded-xl border border-[var(--line)] px-3 text-xs font-black">Keep cloud version</button><button onClick={()=>void resolveSyncConflict(conflict,'keep_local')} className="min-h-[40px] rounded-xl bg-[var(--ink)] px-3 text-xs font-black text-white">Apply my offline change</button></div></div>})}</div></section>}
         {maribankLow && <div className="card p-4 mb-3 flex gap-3 items-start" style={{borderColor:'#fbbf24', background:'#fffbeb'}}><AlertTriangle className="text-[var(--amber)] shrink-0 mt-0.5" size={22}/><div className="flex-1"><p className="font-display font-bold">Main Wallet balance low — {peso(meta.wallets.maribank)}</p><p className="text-sm font-semibold text-[var(--muted)]">Need to top-up via External Provider before the next rush.</p></div><button onClick={()=>openNew('Top-Up')} className="shrink-0 min-h-[44px] px-4 rounded-xl bg-[#00a651] text-white font-black text-sm">Top-Up via External Provider</button></div>}
         {tab==='home' && (
           <main>
