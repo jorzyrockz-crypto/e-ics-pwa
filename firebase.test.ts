@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sdk = vi.hoisted(() => ({
   onSnapshot: vi.fn(), getDocs: vi.fn(), waitForPendingWrites: vi.fn(), runTransaction: vi.fn(),
-  doc: vi.fn(), getDocFromCache: vi.fn(), getDocsFromCache: vi.fn(), setDoc: vi.fn(),
+  doc: vi.fn(), getDocFromCache: vi.fn(), getDocsFromCache: vi.fn(), setDoc: vi.fn(), deleteDoc: vi.fn(),
 }));
 vi.mock('firebase/app', () => ({ initializeApp: () => ({}) }));
 vi.mock('firebase/auth', () => ({
@@ -13,7 +13,7 @@ vi.mock('firebase/firestore', () => ({
   persistentLocalCache: () => ({}), persistentMultipleTabManager: () => ({}),
   collection: (_db: unknown, ...parts: string[]) => ({ path: parts.join('/') }),
   doc: sdk.doc, getDoc: vi.fn(), getDocFromCache: sdk.getDocFromCache, getDocs: sdk.getDocs, getDocsFromCache: sdk.getDocsFromCache,
-  setDoc: sdk.setDoc, deleteDoc: vi.fn(), onSnapshot: sdk.onSnapshot,
+  setDoc: sdk.setDoc, deleteDoc: sdk.deleteDoc, onSnapshot: sdk.onSnapshot,
   waitForPendingWrites: sdk.waitForPendingWrites, runTransaction: sdk.runTransaction,
 }));
 
@@ -109,7 +109,7 @@ describe('payment and tip financial saves', () => {
   const metaPath = `${prefix}/data/meta/records/settings`;
   const transaction = { type: 'E-Load', amount: 100, selling: 100, fee: 3, tip: 0, tipWallet: 'cash' };
   const settings = { kind: 'meta', wallets: { cash: 1000, maribank: 500 } };
-  let store: Map<string, any>, writes: { ref: Ref; value: any }[], ids: number;
+  let store: Map<string, any>, writes: { ref: Ref; value?: any; deleted?: boolean }[], ids: number;
   const clone = <T,>(value: T): T => structuredClone(value);
   const read = (ref: Ref) => ({ ref, id: ref.id, exists: () => store.has(ref.path), data: () => clone(store.get(ref.path)) });
   const collectionRows = (ref: Ref) => ({ docs: [...store.keys()].filter(path => path.startsWith(`${ref.path}/`)).map(path => read({ path, id: path.split('/').pop()! })) });
@@ -134,9 +134,13 @@ describe('payment and tip financial saves', () => {
       const result = await callback({
         get: async (ref: Ref) => read(ref),
         set: (ref: Ref, value: any) => { staged.push({ ref, value }); },
+        delete: (ref: Ref) => { staged.push({ ref, deleted: true }); },
       });
       // Like the SDK, a throwing callback applies none of its staged writes.
-      for (const item of staged) store.set(item.ref.path, clone(item.value));
+      for (const item of staged) {
+        if (item.deleted) store.delete(item.ref.path);
+        else store.set(item.ref.path, clone(item.value));
+      }
       writes.push(...staged); return result;
     });
   });
@@ -184,6 +188,77 @@ describe('payment and tip financial saves', () => {
     const count = writes.length;
     await expect(firestoreRecords('records.save_transaction', args(false, 17, paid.record.updatedAt, paid.meta.updatedAt), owner)).rejects.toThrow(/changed or was removed/);
     expect(writes).toHaveLength(count);
+  });
+
+  it('persists a confirmed release and its outgoing debit atomically, without a customer receipt', async () => {
+    const payload = { ...args(), value: { ...transaction, type: 'Cash In', amount: 1000, selling: 0, fee: 15, utang: true, utangStatus: 'unpaid', paidAmount: 0, utangReleased: true },
+      meta: { ...args().meta, value: { ...settings, wallets: { cash: 1000, maribank: -500 } } } };
+    const result = await firestoreRecords('records.save_transaction', payload, owner);
+    expect(result.record.value).toMatchObject({ utangStatus: 'unpaid', paidAmount: 0, utangReleased: true });
+    expect(result.meta.value.wallets).toEqual({ cash: 1000, maribank: -500 });
+    expect(writes.map(item => item.ref.path)).toEqual([txPath, metaPath]);
+    expect(sdk.setDoc).not.toHaveBeenCalled();
+  });
+
+  it('deletes a transaction and reverses its balances together, never as two cloud writes', async () => {
+    store.set(txPath, { value: { ...transaction, utang: true, utangStatus: 'unpaid', utangReleased: true }, updatedAt: 7 });
+    const payload = { collection: 'transactions', id: 'payment-1', expectedUpdatedAt: 7,
+      meta: { id: 'settings', expectedUpdatedAt: 3, value: { ...settings, wallets: { cash: 1000, maribank: 600 } } } };
+    await firestoreRecords('records.delete_transaction', payload, owner);
+    expect(store.has(txPath)).toBe(false);
+    expect(store.get(metaPath).value.wallets).toEqual({ cash: 1000, maribank: 600 });
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).toMatchObject({ ref: { path: txPath }, deleted: true });
+    expect(sdk.deleteDoc).not.toHaveBeenCalled();
+    expect(sdk.setDoc).not.toHaveBeenCalled();
+  });
+
+  it.each(['wallet', 'record'])('keeps both the record and wallets unchanged when deleting conflicts on the %s revision', async changed => {
+    store.set(txPath, { value: transaction, updatedAt: 7 });
+    const before = clone([...store.entries()]);
+    await expect(firestoreRecords('records.delete_transaction', { collection: 'transactions', id: 'payment-1', expectedUpdatedAt: changed === 'record' ? 6 : 7,
+      meta: { id: 'settings', expectedUpdatedAt: changed === 'wallet' ? 2 : 3, value: settings } }, owner)).rejects.toThrow(/changed/);
+    expect([...store.entries()]).toEqual(before);
+    expect(writes).toEqual([]);
+  });
+
+  it('does not reverse a completed deletion again on retry, including after unrelated wallet activity', async () => {
+    const updatedSettings = { ...settings, wallets: { cash: 900, maribank: 800 } };
+    store.set(metaPath, { value: updatedSettings, updatedAt: 10 });
+    const result = await firestoreRecords('records.delete_transaction', { collection: 'transactions', id: 'payment-1', expectedUpdatedAt: 7,
+      meta: { id: 'settings', expectedUpdatedAt: 3, value: settings } }, owner);
+    expect(result.record.skipped).toBe(true);
+    expect(result.meta).toMatchObject({ updatedAt: 10, value: updatedSettings });
+    expect(store.get(metaPath)).toEqual({ value: updatedSettings, updatedAt: 10 });
+    expect(writes).toEqual([]);
+  });
+
+  it('preserves the release marker in new offline entries and queues their wallet proposal against the original balance revision', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    const payload = { ...args(), value: { ...transaction, utang: true, utangStatus: 'unpaid', paidAmount: 0, utangReleased: true },
+      meta: { ...args().meta, value: { ...settings, wallets: { cash: 1000, maribank: 400 } } } };
+    await firestoreRecords('records.save_transaction', payload, owner);
+    const operations = [...store.entries()].filter(([path]) => path.includes('/offline_mutations/')).map(([, value]) => value);
+    expect(store.get(txPath).value).toMatchObject({ utangReleased: true, utangStatus: 'unpaid', paidAmount: 0 });
+    expect(operations).toHaveLength(1);
+    expect(operations[0]).toMatchObject({ collection: 'meta', recordId: 'settings', expectedUpdatedAt: 3, value: { wallets: { cash: 1000, maribank: 400 } } });
+    expect(sdk.runTransaction).not.toHaveBeenCalled();
+  });
+
+  it('retains offline deletion and its reversal as proposals at the original revisions', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    const debt = { ...transaction, utang: true, utangStatus: 'unpaid', utangReleased: true };
+    store.set(txPath, { value: debt, updatedAt: 7 });
+    await firestoreRecords('records.delete_transaction', { collection: 'transactions', id: 'payment-1', expectedUpdatedAt: 7,
+      meta: { id: 'settings', expectedUpdatedAt: 3, value: { ...settings, wallets: { cash: 1000, maribank: 600 } } } }, owner);
+    const operations = [...store.entries()].filter(([path]) => path.includes('/offline_mutations/')).map(([path, data]) => ({ ...data, id: path.split('/').pop()! })) as OfflineMutation[];
+    expect(operations).toHaveLength(2);
+    expect(operations.find(item => item.collection === 'transactions')).toMatchObject({ action: 'delete', recordId: 'payment-1', expectedUpdatedAt: 7 });
+    expect(operations.find(item => item.collection === 'meta')).toMatchObject({ action: 'replace', recordId: 'settings', expectedUpdatedAt: 3 });
+    expect(overlayOfflineMutations([{ id: 'payment-1', value: debt, updatedAt: 7 }], operations, 'transactions')).toEqual([]);
+    expect(store.get(txPath)).toEqual({ value: debt, updatedAt: 7 });
+    expect(sdk.runTransaction).not.toHaveBeenCalled();
+    expect(sdk.deleteDoc).not.toHaveBeenCalled();
   });
 
   it('retains offline confirmation then tip as proposals at the original revisions', async () => {

@@ -13,6 +13,9 @@ export type TransactionMoney = {
   utang?: boolean;
   utangStatus?: 'unpaid' | 'paid';
   paidAmount?: number;
+  // True only after the owner records the completed send/release. Missing on
+  // older rows: retain their original pay-first baseline until explicitly reviewed.
+  utangReleased?: boolean;
 };
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -85,16 +88,56 @@ export function txPortion<T extends TransactionMoney>(tx: T, amount: number): T 
   };
 }
 
+// The customer receipt and the service payout are separate legs. This helper
+// describes collections only; it must not be used as the service's wallet debit.
+export function collectedTransaction<T extends TransactionMoney>(tx: T): T | null {
+  if (tx.type !== 'Top-Up' && tx.utang && tx.utangStatus !== 'paid') {
+    const paid = Math.min(tx.amount, Math.max(0, tx.paidAmount || 0));
+    // Do not silently erase an old stored tip's already-booked paid portion.
+    // New tips remain gated by canRecordTip/withRecordedTip until full payment.
+    return paid > 0 ? txPortion(tx, paid) : null;
+  }
+  return tx;
+}
+
+// Cumulative confirmed receipts, not the amount charged or the outgoing cost.
+export function collectedPayments(tx: TransactionMoney): Wallets {
+  const collected = collectedTransaction(tx);
+  return collected ? customerPayments(collected) : { cash: 0, maribank: 0 };
+}
+
+// paidAmount is principal only. Fees are collected proportionally, so a partial
+// payer must not be charged the already-collected part of the fee again.
+export function utangAmountDue(tx: TransactionMoney): number {
+  if (!tx.utang || tx.utangStatus === 'paid' || tx.type === 'Top-Up') return 0;
+  const collected = collectedTransaction(tx);
+  return Math.max(0, round2(customerTotal({ ...tx, tip: 0 }) - (collected ? customerTotal({ ...collected, tip: 0 }) : 0)));
+}
+
+export const needsUtangRelease = (tx: TransactionMoney): boolean => tx.type !== 'Top-Up' &&
+  Boolean(tx.utang) && tx.utangStatus !== 'paid' && tx.utangReleased !== true &&
+  Number.isFinite(tx.amount) && tx.amount > Math.max(0, tx.paidAmount || 0);
+
+export function withUtangRelease<T extends TransactionMoney>(tx: T): T {
+  if (!needsUtangRelease(tx)) throw new Error('This Utang has no unrecorded release to confirm. Reload and review the latest record.');
+  return { ...tx, utangReleased: true };
+}
+
 export function applyTransaction(wallets: Wallets, tx: TransactionMoney, sign = 1): Wallets {
-  const received = customerPayments(tx);
+  const collected = collectedTransaction(tx);
+  const received = collected ? customerPayments(collected) : { cash: 0, maribank: 0 };
   let cash = wallets.cash + sign * received.cash;
   let maribank = wallets.maribank + sign * received.maribank;
-  if (tx.type === 'E-Load') maribank -= sign * (tx.amount - eLoadDiscount(tx));
-  else if (tx.type === 'Cash In') maribank -= sign * tx.amount;
-  else if (tx.type === 'Cash Out') cash -= sign * tx.amount;
-  else if (tx.type === 'Top-Up') {
-    cash -= sign * (tx.amount + (tx.fee || 0));
-    maribank += sign * tx.amount;
+  // New, owner-confirmed Utang releases debit the entire outgoing service now,
+  // even when no customer money has arrived. Legacy rows keep their old paid-
+  // portion debit until the owner explicitly reconciles the missing release.
+  const payout = tx.type !== 'Top-Up' && tx.utang && tx.utangStatus !== 'paid' && tx.utangReleased !== true ? collected : tx;
+  if (payout?.type === 'E-Load') maribank -= sign * (payout.amount - eLoadDiscount(payout));
+  else if (payout?.type === 'Cash In') maribank -= sign * payout.amount;
+  else if (payout?.type === 'Cash Out') cash -= sign * payout.amount;
+  else if (payout?.type === 'Top-Up') {
+    cash -= sign * (payout.amount + (payout.fee || 0));
+    maribank += sign * payout.amount;
   }
   return { cash: round2(cash), maribank: round2(maribank) };
 }
@@ -103,19 +146,8 @@ export function reverseTransaction(wallets: Wallets, tx: TransactionMoney): Wall
   return applyTransaction(wallets, tx, -1);
 }
 
-export function transactionWalletEffect<T extends TransactionMoney>(tx: T): T | null {
-  if (tx.utang && tx.utangStatus !== 'paid') {
-    const paid = Math.min(tx.amount, Math.max(0, tx.paidAmount || 0));
-    return paid > 0 ? txPortion(tx, paid) : null;
-  }
-  return tx;
-}
-
 export function updateWalletsForEdit(wallets: Wallets, oldTx: TransactionMoney, newTx: TransactionMoney): Wallets {
-  let next = { ...wallets };
-  const oldEffect = transactionWalletEffect(oldTx);
-  if (oldEffect) next = reverseTransaction(next, oldEffect);
-  const newEffect = transactionWalletEffect(newTx);
-  if (newEffect) next = applyTransaction(next, newEffect);
-  return next;
+  // Difference of cumulative legs: collecting a released Utang changes receipts
+  // only, never sends its principal again. Edits, delete, and Undo share this math.
+  return applyTransaction(reverseTransaction(wallets, oldTx), newTx);
 }

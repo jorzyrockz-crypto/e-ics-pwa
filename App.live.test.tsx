@@ -69,6 +69,12 @@ async function confirmPayment(container: HTMLElement) {
   const receipt = within(container).getByRole('dialog', { name: 'Confirm payment received' });
   await act(async () => { fireEvent.click(within(receipt).getByRole('button', { name: 'Confirm payment received' })); });
 }
+async function confirmRelease(container: HTMLElement, mode: 'entry' | 'deduct' | 'already-recorded' = 'entry') {
+  const dialog = within(container).getByRole('dialog', { name: 'Confirm sent / released' });
+  const acknowledgment = mode === 'entry' ? within(dialog).getByRole('checkbox') : within(dialog).getByRole('radio', { name: mode === 'deduct' ? /missing deduction has NOT/ : /already deducted manually/ });
+  if (!(acknowledgment as HTMLInputElement).checked) fireEvent.click(acknowledgment);
+  await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: /^Confirm release/ })); });
+}
 async function recordTip(container: HTMLElement, amount: string, wallet?: 'cash' | 'maribank') {
   const tip = within(container).getByRole('dialog', { name: 'Extra / Tip' });
   fireEvent.change(within(tip).getByLabelText(/Extra \/ Tip/), { target: { value: amount } });
@@ -106,14 +112,16 @@ beforeEach(() => {
     const rows = cloud.rows[user.uid][name] || [];
     if (action === 'records.list') return { records: clone(rows) };
     const existing = rows.find(row => row.id === args.id);
-    if (action === 'records.save_transaction') {
+    if (action === 'records.save_transaction' || action === 'records.delete_transaction') {
+      const deleting = action === 'records.delete_transaction';
       const metadata = cloud.rows[user.uid].meta || [], currentMeta = metadata.find(row => row.id === args.meta?.id);
-      if (args.create && existing) return { record: { ...clone(existing), skipped: true }, meta: currentMeta ? clone(currentMeta) : undefined };
-      if (!args.create && (!existing || existing.updatedAt !== args.expectedUpdatedAt)) throw new Error('This record changed or was removed on another device. Reload records and review the latest version before saving.');
-      if (args.meta && (!currentMeta || currentMeta.updatedAt !== args.meta.expectedUpdatedAt)) throw new Error('Wallet balances changed on another device. No payment or tip changes were saved. Review the latest balances and try again.');
+      if ((!deleting && args.create && existing) || (deleting && !existing)) return { record: { ...clone(existing), skipped: true }, meta: currentMeta ? clone(currentMeta) : undefined };
+      if ((deleting || !args.create) && (!existing || existing.updatedAt !== args.expectedUpdatedAt)) throw new Error('This record changed or was removed on another device. Reload records and review the latest version before saving.');
+      if (args.meta && (!currentMeta || currentMeta.updatedAt !== args.meta.expectedUpdatedAt)) throw new Error('Wallet balances changed on another device. No transaction or wallet changes were saved. Review the latest balances and try again.');
       const record = { id: args.id, value: clone(args.value), updatedAt: ++cloud.version };
       const savedMeta = args.meta ? { id: args.meta.id, value: clone(args.meta.value), updatedAt: ++cloud.version } : undefined;
-      emit(name, [record, ...rows.filter(item => item.id !== record.id)], user.uid);
+      const remaining = rows.filter(item => item.id !== record.id);
+      emit(name, deleting ? remaining : [record, ...remaining], user.uid);
       if (savedMeta) emit('meta', [savedMeta, ...metadata.filter(item => item.id !== savedMeta.id)], user.uid);
       return { record: clone(record), meta: savedMeta ? clone(savedMeta) : undefined };
     }
@@ -136,6 +144,201 @@ beforeEach(() => {
 afterEach(() => {
   cleanup(); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks();
   localStorage.clear();
+});
+
+describe('promo name suggestions from saved sales', () => {
+  function savedSale(id = 'saved-promo', changes: Record<string, unknown> = {}): LiveRecord {
+    const row = transaction(129);
+    return { ...row, id, value: { ...row.value, eloadKind: 'promo', promoName: 'Go Family', promoDetails: '12GB + calls', promoValidity: '7 days', date: '2026-11-17', createdAt: Date.now() - 86400000, ...changes } };
+  }
+  function openPromo(container: HTMLElement) {
+    const form = openSale(container);
+    fireEvent.click(within(form).getByRole('button', { name: 'Promo / Bundle' }));
+    return form;
+  }
+  function promoInput(form: HTMLElement) {
+    return within(form).getByRole('combobox', { name: 'Promo or package name' }) as HTMLInputElement;
+  }
+  function focusPromo(form: HTMLElement, value = '') {
+    const input = promoInput(form);
+    act(() => { input.focus(); });
+    if (value) fireEvent.change(input, { target: { value } });
+    return input;
+  }
+
+  it('fills the latest saved product, recalculates the current fee, and waits for owner confirmation before writing', async () => {
+    const settings = meta(); settings.value.eloadPct = 5;
+    cloud.rows['owner-a'].meta = [settings];
+    cloud.rows['owner-a'].transactions = [
+      savedSale('older', { promoName: ' go   family ', amount: 99, promoDetails: 'Old contents', createdAt: Date.now() - 172800000 }),
+      savedSale('latest', { phone: '09185555555', customerName: 'Other customer', fee: 90, discount: 19, tip: 99, notes: 'Private old notes', utang: true, utangStatus: 'unpaid' }),
+    ];
+    const view = await mount(), form = openPromo(view.container); fillCustomer(form);
+    fireEvent.change(field(form, 'Notes'), { target: { value: 'My new sale' } });
+    fireEvent.change(within(form).getByLabelText('Custom load amount'), { target: { value: '777' } });
+    fireEvent.change(within(form).getByLabelText('Provider discount amount'), { target: { value: '4' } });
+    fireEvent.change(within(form).getByLabelText('Customer fee (editable)'), { target: { value: '42' } });
+    const calls = cloud.firestoreRecords.mock.calls.length;
+    const input = focusPromo(form, 'gO');
+    const list = within(form).getByRole('listbox', { name: 'Saved Globe promos' });
+    expect(within(list).getAllByRole('option')).toHaveLength(1);
+    fireEvent.click(within(list).getByRole('option', { name: /Go Family/ }));
+    expect(input.value).toBe('Go Family');
+    expect((within(form).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('12GB + calls');
+    expect((within(form).getByLabelText('Promo validity') as HTMLInputElement).value).toBe('7 days');
+    expect((within(form).getByLabelText('Custom load amount') as HTMLInputElement).value).toBe('');
+    expect((within(form).getByLabelText('Customer fee (editable)') as HTMLInputElement).value).toBe('6.45');
+    expect((within(form).getByLabelText('Provider discount amount') as HTMLInputElement).value).toBe('4');
+    expect(field(form, 'Notes').value).toBe('My new sale');
+    expect(form.querySelector<HTMLInputElement>('[data-customer-input]')!.value).toBe('Ada Test 09171234567');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱135.45');
+    expect((within(form).getByRole('radio', { name: /^Upfront payment/ }) as HTMLInputElement).checked).toBe(true);
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Transaction' })); });
+    expect(within(view.container).getByRole('dialog', { name: 'Confirm payment received' })).not.toBeNull();
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(2);
+    expect(cloud.rows['owner-a'].meta![0].value.wallets).toEqual({ cash: 10000, maribank: 5000 });
+    await confirmPayment(view.container);
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({
+      network: 'Globe', eloadKind: 'promo', promoName: 'Go Family', promoDetails: '12GB + calls', promoValidity: '7 days',
+      amount: 129, fee: 6.45, discount: 4, tip: 0, phone: '09171234567', customerName: 'Ada Test', notes: 'My new sale', utang: false,
+    });
+    expect(cloud.rows['owner-a'].meta![0].value.wallets).toEqual({ cash: 10135.45, maribank: 4875 });
+  });
+
+  it('consumes autocomplete arrows, Enter, held Enter, and the first Escape before global sheet shortcuts', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    const view = await mount(), form = openPromo(view.container); fillCustomer(form);
+    const input = focusPromo(form, 'Go'), calls = cloud.firestoreRecords.mock.calls.length;
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(input.value).toBe('Go Family');
+    expect(within(view.container).getByRole('dialog', { name: 'Add transaction' })).toBe(form);
+    expect(within(view.container).queryByRole('dialog', { name: 'Confirm payment received' })).toBeNull();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(within(form).queryByRole('listbox')).toBeNull();
+    expect(within(view.container).getByRole('dialog', { name: 'Add transaction' })).toBe(form);
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(within(view.container).queryByRole('dialog')).toBeNull();
+  });
+
+  it('scopes suggestions to the selected network and keeps the provider examples available', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale(), savedSale('smart', { network: 'Smart', promoDetails: 'Smart-only data' })];
+    const view = await mount(), form = openPromo(view.container);
+    let input = focusPromo(form, 'Go');
+    expect(within(form).getAllByRole('listbox')).toHaveLength(1);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.click(within(form).getByRole('button', { name: 'Smart' }));
+    input = focusPromo(form);
+    expect(input.value).toBe('Go');
+    expect(input.getAttribute('aria-activedescendant')).toBeNull();
+    const list = within(form).getByRole('listbox', { name: 'Saved Smart promos' });
+    expect(list.textContent).toContain('Smart-only data'); expect(list.textContent).not.toContain('12GB + calls');
+    fireEvent.click(within(list).getByRole('option'));
+    expect((within(form).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Smart-only data');
+    fireEvent.click(within(form).getByRole('button', { name: 'DITO' }));
+    focusPromo(form);
+    expect(within(form).queryByRole('listbox')).toBeNull();
+    fireEvent.change(within(form).getByLabelText('Suggested promo list'), { target: { value: 'dito-socials20' } });
+    expect(promoInput(form).value).toBe('Level-Up Socials 20');
+    expect((within(form).getByLabelText('Customer fee (editable)') as HTMLInputElement).value).toBe('0.6');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱20.60');
+  });
+
+  it('updates suggestions live without overwriting manual draft fields or writing anything', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    const view = await mount(), form = openPromo(view.container);
+    fireEvent.change(within(form).getByLabelText('Promo inclusions'), { target: { value: 'My draft inclusions' } });
+    fireEvent.change(within(form).getByLabelText('Promo validity'), { target: { value: 'My draft validity' } });
+    fireEvent.change(within(form).getByLabelText('Custom load amount'), { target: { value: '88' } });
+    fireEvent.change(within(form).getByLabelText('Customer fee (editable)'), { target: { value: '8' } });
+    const input = focusPromo(form, 'go'), calls = cloud.firestoreRecords.mock.calls.length;
+    await act(async () => { emit('transactions', [savedSale('saved-promo', { amount: 159, promoDetails: 'Updated data', promoValidity: '30 days' })]); });
+    expect(input.value).toBe('go');
+    expect((within(form).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('My draft inclusions');
+    expect((within(form).getByLabelText('Promo validity') as HTMLInputElement).value).toBe('My draft validity');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱96');
+    const list = within(form).getByRole('listbox'); expect(list.textContent).toContain('₱159');
+    fireEvent.click(within(list).getByRole('option'));
+    expect((within(form).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Updated data');
+    expect((within(form).getByLabelText('Promo validity') as HTMLInputElement).value).toBe('30 days');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱163.77');
+    await act(async () => { emit('transactions', []); });
+    expect(input.value).toBe('Go Family');
+    expect(within(form).queryByRole('listbox')).toBeNull();
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+  });
+
+  it('allows a new custom promo to be saved and suggested on the next sale', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    const view = await mount(), form = openPromo(view.container); fillCustomer(form);
+    focusPromo(form, 'Go Island 59');
+    expect(within(form).queryByRole('listbox')?.textContent).toBe('');
+    expect(form.textContent).toContain('No saved Globe promos match');
+    fireEvent.change(within(form).getByLabelText('Promo inclusions'), { target: { value: 'Island data' } });
+    fireEvent.change(within(form).getByLabelText('Promo validity'), { target: { value: '3 days' } });
+    fireEvent.change(within(form).getByLabelText('Custom load amount'), { target: { value: '59' } });
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Transaction' })); });
+    await confirmPayment(view.container);
+    fireEvent.click(within(within(view.container).getByRole('dialog', { name: 'Extra / Tip' })).getByRole('button', { name: 'No tip — finish' }));
+    const next = openPromo(view.container); focusPromo(next, 'island');
+    const list = within(next).getByRole('listbox');
+    expect(within(list).getAllByRole('option')).toHaveLength(1);
+    expect(list.textContent).toContain('Go Island 59'); expect(list.textContent).toContain('₱59');
+    fireEvent.click(within(list).getByRole('option'));
+    expect((within(next).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Island data');
+    expect((within(next).getByLabelText('Promo validity') as HTMLInputElement).value).toBe('3 days');
+  });
+
+  it('does not overwrite prefilled edit/repeat fields until a suggestion is explicitly chosen', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale('original', { date: '2026-11-18', fee: 42, promoDetails: 'Original contents' })];
+    const view = await mount(), detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Edit' }));
+    const edit = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    const input = focusPromo(edit);
+    await act(async () => { emit('transactions', [savedSale('original', { date: '2026-11-18', amount: 149, fee: 7, promoDetails: 'Remote contents' })]); });
+    expect(input.value).toBe('Go Family');
+    expect((within(edit).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Original contents');
+    expect((within(edit).getByLabelText('Customer fee (editable)') as HTMLInputElement).value).toBe('42');
+    fireEvent.click(within(edit).getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(within(transactionDetail(view.container)).getByRole('button', { name: 'Repeat' }));
+    const repeat = within(view.container).getByRole('dialog', { name: 'Add transaction' });
+    focusPromo(repeat);
+    expect((within(repeat).getByLabelText('Promo inclusions') as HTMLInputElement).value).toBe('Remote contents');
+    expect((within(repeat).getByLabelText('Customer fee (editable)') as HTMLInputElement).value).toBe('7');
+    expect(within(repeat).getByLabelText('Customer total').textContent).toBe('₱156');
+  });
+
+  it('uses the already-loaded offline records with no lookup request or selection writes', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    const view = await mount(), form = openPromo(view.container);
+    const calls = cloud.firestoreRecords.mock.calls.length;
+    focusPromo(form, 'family');
+    fireEvent.click(within(within(form).getByRole('listbox')).getByRole('option'));
+    expect(promoInput(form).value).toBe('Go Family');
+    expect(within(form).getByLabelText('Customer total').textContent).toBe('₱132.87');
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+    expect(cloud.syncUserRecords).not.toHaveBeenCalled();
+  });
+
+  it('clears promo history and open drafts when switching accounts', async () => {
+    cloud.rows['owner-a'].transactions = [savedSale()];
+    cloud.rows['owner-b'].transactions = [savedSale('other', { promoName: 'Other Owner Bundle', promoDetails: 'Other owner data' })];
+    const view = await mount(), oldSubscription = cloud.subscriptions[0];
+    focusPromo(openPromo(view.container), 'go');
+    await act(async () => { for (const observer of cloud.authObservers) observer({ uid: 'owner-b', displayName: 'Owner B' } as User); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(within(view.container).queryByRole('dialog')).toBeNull();
+    await act(async () => { oldSubscription.callbacks.onRecords('transactions', [savedSale()]); });
+    const form = openPromo(view.container), input = focusPromo(form);
+    expect(input.value).toBe('');
+    const list = within(form).getByRole('listbox');
+    expect(list.textContent).toContain('Other Owner Bundle'); expect(list.textContent).not.toContain('Go Family');
+  });
 });
 
 describe('clay customer avatars across the dashboard', () => {
@@ -452,9 +655,11 @@ describe('owner-confirmed payment followed by an optional tip', () => {
     fireEvent.click(within(form).getByRole('radio', { name: /^Utang \/ Pay Later/ }));
     fireEvent.click(within(form).getByRole('button', { name: 'Tomorrow' }));
     await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Transaction' })); });
+    expect(within(view.container).queryByRole('dialog', { name: 'Extra / Tip' })).toBeNull();
+    await confirmRelease(view.container);
     expect(within(view.container).queryByRole('dialog')).toBeNull();
-    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ utang: true, utangStatus: 'unpaid', paidAmount: 0, tip: 0, promiseDate: '2026-11-19' });
-    expect(cloud.rows['owner-a'].meta![0].value.wallets).toEqual({ cash: 10000, maribank: 5000 });
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ utang: true, utangStatus: 'unpaid', paidAmount: 0, tip: 0, promiseDate: '2026-11-19', utangReleased: true });
+    expect(cloud.rows['owner-a'].meta![0].value.wallets).toEqual({ cash: 10000, maribank: 4900 });
     const detail = transactionDetail(view.container);
     expect(within(detail).queryByRole('button', { name: /Record extra/ })).toBeNull();
     fireEvent.click(within(detail).getByRole('button', { name: 'Mark Paid' }));
@@ -763,5 +968,382 @@ describe('owner-confirmed payment followed by an optional tip', () => {
     expect(within(view.container).queryByRole('dialog')).toBeNull();
     expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ type: 'Top-Up', tip: 0, amount: 1000 });
     expect(cloud.rows['owner-a'].meta![0].value.wallets).toEqual({ cash: 8990, maribank: 6000 });
+  });
+});
+
+describe('sent / released Utang and independently confirmed receipts', () => {
+  const balances = () => cloud.rows['owner-a'].meta![0].value.wallets;
+  function debt(changes: Record<string, unknown> = {}) {
+    const row = transaction(1000);
+    return { ...row, value: { ...row.value, type: 'Cash In', network: 'Main Wallet', selling: 0, fee: 15, tip: 0, utang: true, utangStatus: 'unpaid', paidAmount: 0, ...changes } };
+  }
+  async function startDebt(container: HTMLElement, type: 'Cash In' | 'Cash Out' | 'E-Load' = 'Cash In', amount = 1000, fee = 15) {
+    const form = openSale(container); fillCustomer(form);
+    if (type !== 'E-Load') fireEvent.click(within(form).getByRole('button', { name: type }));
+    if (type === 'E-Load') fireEvent.change(within(form).getByLabelText('Custom load amount'), { target: { value: String(amount) } });
+    else fireEvent.change(field(form, 'Amount'), { target: { value: String(amount) } });
+    fireEvent.change(within(form).getByLabelText(type === 'E-Load' ? 'Customer fee (editable)' : 'Service fee (editable)'), { target: { value: String(fee) } });
+    fireEvent.click(within(form).getByRole('radio', { name: /^Utang \/ Pay Later/ }));
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Transaction' })); });
+    return within(container).getByRole('dialog', { name: 'Confirm sent / released' });
+  }
+  function review(container: HTMLElement) {
+    const detail = transactionDetail(container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Review sent / released' }));
+    return within(container).getByRole('dialog', { name: 'Confirm sent / released' });
+  }
+
+  it('deducts the sent ₱1,000 Cash In, receives no cash yet, then collects partial/full receipts without sending twice', async () => {
+    const view = await mount(), release = await startDebt(view.container);
+    expect(receiptValue(release, 'Cash on Hand change')).toBe('+₱0');
+    expect(receiptValue(release, 'Main Wallet change')).toBe('−₱1,000');
+    expect(within(release).getByRole('button', { name: /^Confirm release/ }).hasAttribute('disabled')).toBe(true);
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(0);
+    expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
+    await confirmRelease(view.container);
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ type: 'Cash In', amount: 1000, fee: 15, utang: true, utangStatus: 'unpaid', paidAmount: 0, utangReleased: true, utangReleaseMode: 'deduct', utangReleaseRecordedAt: Date.now(), tip: 0 });
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    expect(within(view.container).queryByRole('dialog', { name: 'Extra / Tip' })).toBeNull();
+    let detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Partial Payment' }));
+    fireEvent.change(within(detail).getByLabelText('Amount paid now'), { target: { value: '400' } });
+    fireEvent.click(within(detail).getByRole('button', { name: 'Save Partial Payment' }));
+    let receipt = within(view.container).getByRole('dialog', { name: 'Confirm payment received' });
+    expect(receiptValue(receipt, 'Payment to confirm (no tip)')).toBe('₱406');
+    expect(receipt.textContent).toContain('does not deduct the sent/released amount again');
+    await confirmPayment(view.container);
+    expect(balances()).toEqual({ cash: 10406, maribank: 4000 });
+    expect(within(view.container).queryByRole('dialog', { name: 'Extra / Tip' })).toBeNull();
+    detail = within(view.container).getByRole('dialog', { name: 'Transaction detail' });
+    fireEvent.click(within(detail).getByRole('button', { name: 'Mark Paid' }));
+    receipt = within(view.container).getByRole('dialog', { name: 'Confirm payment received' });
+    expect(receiptValue(receipt, 'Payment to confirm (no tip)')).toBe('₱609');
+    await confirmPayment(view.container);
+    expect(balances()).toEqual({ cash: 11015, maribank: 4000 });
+    await recordTip(view.container, '17');
+    expect(balances()).toEqual({ cash: 11032, maribank: 4000 });
+  });
+
+  it.each([
+    { type: 'E-Load' as const, amount: 100, fee: 3, releasedCash: 10000, releasedMain: 4900, paidCash: 10103, paidMain: 4900 },
+    { type: 'Cash Out' as const, amount: 500, fee: 10, releasedCash: 9500, releasedMain: 5000, paidCash: 9500, paidMain: 5510 },
+  ])('also separates the $type release from its later customer payment', async row => {
+    const view = await mount(); await startDebt(view.container, row.type, row.amount, row.fee); await confirmRelease(view.container);
+    expect(balances()).toEqual({ cash: row.releasedCash, maribank: row.releasedMain });
+    fireEvent.click(within(transactionDetail(view.container)).getByRole('button', { name: 'Mark Paid' }));
+    await confirmPayment(view.container);
+    expect(balances()).toEqual({ cash: row.paidCash, maribank: row.paidMain });
+  });
+
+  it('keeps a release unrecorded until acknowledged, blocks background shortcuts, and preserves the draft on Back/Escape', async () => {
+    const view = await mount(), release = await startDebt(view.container);
+    const calls = cloud.firestoreRecords.mock.calls.length;
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true }); fireEvent.keyDown(window, { key: '1' });
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(0);
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+    expect(within(view.container).getAllByRole('dialog')).toHaveLength(1);
+    fireEvent.click(within(release).getByRole('button', { name: 'Back — do not change records' }));
+    let form = within(view.container).getByRole('dialog', { name: 'Add transaction' });
+    expect(field(form, 'Amount').value).toBe('1000');
+    expect((within(form).getByLabelText('Service fee (editable)') as HTMLInputElement).value).toBe('15');
+    expect((within(form).getByRole('radio', { name: /^Utang \/ Pay Later/ }) as HTMLInputElement).checked).toBe(true);
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Transaction' })); });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    form = within(view.container).getByRole('dialog', { name: 'Add transaction' });
+    expect(field(form, 'Amount').value).toBe('1000');
+    expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
+  });
+
+  it('rejects a concurrent wallet change atomically and lets the same release retry against latest balances', async () => {
+    const view = await mount(); await startDebt(view.container);
+    const original = cloud.firestoreRecords.getMockImplementation()!;
+    cloud.firestoreRecords.mockImplementationOnce(async (...args) => {
+      const latest = meta('Test Store', 10500, 4500); latest.updatedAt = 50; emit('meta', [latest]);
+      return original(...args);
+    });
+    await confirmRelease(view.container);
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(0);
+    expect(balances()).toEqual({ cash: 10500, maribank: 4500 });
+    expect(within(view.container).getByRole('alert').textContent).toContain('Wallet balances changed');
+    await confirmRelease(view.container);
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(1);
+    expect(balances()).toEqual({ cash: 10500, maribank: 3500 });
+  });
+
+  it('reuses the release entry ID when a response fails after committing, without deducting twice', async () => {
+    const view = await mount(); await startDebt(view.container);
+    const original = cloud.firestoreRecords.getMockImplementation()!;
+    cloud.firestoreRecords.mockImplementationOnce(async (...args) => { await original(...args); throw new Error('Response interrupted after recording.'); });
+    await confirmRelease(view.container);
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(1);
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    await confirmRelease(view.container);
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(1);
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    const saves = cloud.firestoreRecords.mock.calls.filter(([action, args]) => action === 'records.save_transaction' && args.create);
+    expect(saves[0][1].id).toBe(saves[1][1].id);
+  });
+
+  it('does not migrate old records or balances merely on load, live updates, or opening/canceling a review', async () => {
+    const old = debt(); cloud.rows['owner-a'].transactions = [old];
+    const view = await mount(), calls = cloud.firestoreRecords.mock.calls.length;
+    const release = review(view.container);
+    expect(within(release).getByRole('button', { name: /^Confirm release/ }).hasAttribute('disabled')).toBe(true);
+    await act(async () => { emit('transactions', [old]); });
+    fireEvent.click(within(release).getByRole('button', { name: 'Back — do not change records' }));
+    expect(cloud.rows['owner-a'].transactions![0]).toEqual(old);
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+    expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
+  });
+
+  it('applies an older missing Cash In deduction once, preserves its debt, and never repeats it on edit or reload', async () => {
+    cloud.rows['owner-a'].transactions = [debt()];
+    let view = await mount(); review(view.container); await confirmRelease(view.container, 'deduct');
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ utangReleased: true, utangReleaseMode: 'deduct', utangStatus: 'unpaid', paidAmount: 0, tip: 0 });
+    let detail = within(view.container).getByRole('dialog', { name: 'Transaction detail' });
+    expect(within(detail).queryByRole('button', { name: 'Review sent / released' })).toBeNull();
+    fireEvent.click(within(detail).getByRole('button', { name: 'Edit' }));
+    const form = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    fireEvent.change(field(form, 'Notes'), { target: { value: 'A note after release' } });
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Changes' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    view.unmount(); view = await mount();
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    detail = transactionDetail(view.container); fireEvent.click(within(detail).getByRole('button', { name: 'Mark Paid' }));
+    await confirmPayment(view.container);
+    expect(balances()).toEqual({ cash: 11015, maribank: 4000 });
+  });
+
+  it('records an already-manually-deducted release without another wallet change, including on later payment', async () => {
+    cloud.rows['owner-a'].transactions = [debt()]; cloud.rows['owner-a'].meta = [meta('Test Store', 10000, 4000)];
+    const view = await mount(), release = review(view.container);
+    fireEvent.click(within(release).getByRole('radio', { name: /already deducted manually/ }));
+    expect(receiptValue(release, 'Main Wallet change')).toBe('+₱0');
+    await confirmRelease(view.container, 'already-recorded');
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ utangReleased: true, utangReleaseMode: 'already-recorded', utangStatus: 'unpaid', paidAmount: 0 });
+    const save = cloud.firestoreRecords.mock.calls.find(([action]) => action === 'records.save_transaction')!;
+    expect(save[1].meta).toBeUndefined();
+    const detail = within(view.container).getByRole('dialog', { name: 'Transaction detail' });
+    fireEvent.click(within(detail).getByRole('button', { name: 'Mark Paid' })); await confirmPayment(view.container);
+    expect(balances()).toEqual({ cash: 11015, maribank: 4000 });
+  });
+
+  it('uses the adopted manual-deduction baseline for later edits, delete, and Undo without removing the manual record', async () => {
+    cloud.rows['owner-a'].transactions = [debt()]; cloud.rows['owner-a'].meta = [meta('Test Store', 10000, 4000)];
+    const adjustment: LiveRecord = { id: 'manual-release', updatedAt: 1, value: { wallet: 'maribank', mode: 'deduct', amount: 1000, category: 'Other', note: 'Cash In already sent', date: '2026-11-17', time: '8:00 AM', createdAt: 1 } };
+    cloud.rows['owner-a'].wallet_adjustments = [clone(adjustment)];
+    const view = await mount(), release = review(view.container);
+    fireEvent.click(within(release).getByRole('radio', { name: /already deducted manually/ }));
+    expect(release.textContent).toContain('Existing manual adjustment records stay unchanged');
+    await confirmRelease(view.container, 'already-recorded');
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    fireEvent.click(within(within(view.container).getByRole('dialog', { name: 'Transaction detail' })).getByRole('button', { name: 'Edit' }));
+    const form = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    fireEvent.change(field(form, 'Amount'), { target: { value: '1200' } });
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Changes' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 3800 });
+    const detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Delete' }));
+    expect(detail.textContent).toContain('Deleting refunds its outgoing amount; do not also reverse that manual deduction.');
+    await act(async () => { fireEvent.click(within(detail).getByRole('button', { name: 'Yes, delete' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
+    await act(async () => { fireEvent.click(within(view.container.querySelector<HTMLElement>('[data-toast]')!).getByRole('button', { name: 'Undo' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 3800 });
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ amount: 1200, utangReleased: true, utangReleaseMode: 'already-recorded' });
+    expect(cloud.rows['owner-a'].wallet_adjustments).toEqual([adjustment]);
+  });
+
+  it('deducts only the unbooked remainder when reviewing an older partially paid Utang', async () => {
+    cloud.rows['owner-a'].transactions = [debt({ paidAmount: 400 })]; cloud.rows['owner-a'].meta = [meta('Test Store', 10406, 4600)];
+    const view = await mount(), release = review(view.container);
+    expect(receiptValue(release, 'Main Wallet change')).toBe('−₱600');
+    expect(receiptValue(release, 'Cash on Hand change')).toBe('+₱0');
+    await confirmRelease(view.container, 'deduct');
+    expect(balances()).toEqual({ cash: 10406, maribank: 4000 });
+    fireEvent.click(within(within(view.container).getByRole('dialog')).getByRole('button', { name: 'Mark Paid' }));
+    await confirmPayment(view.container); expect(balances()).toEqual({ cash: 11015, maribank: 4000 });
+  });
+
+  it('rejects a stale review when another device already recorded the release', async () => {
+    const old = debt(); cloud.rows['owner-a'].transactions = [old];
+    const view = await mount(); review(view.container);
+    await act(async () => {
+      emit('transactions', [{ ...old, updatedAt: 50, value: { ...old.value, utangReleased: true } }]);
+      const latest = meta('Test Store', 10000, 4000); latest.updatedAt = 50; emit('meta', [latest]);
+    });
+    await confirmRelease(view.container, 'deduct');
+    expect(within(view.container).getByRole('alert').textContent).toContain('changed or was removed');
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+  });
+
+  it('requires internet for an older-record correction instead of splitting it into offline proposals', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    cloud.rows['owner-a'].transactions = [debt()];
+    const view = await mount(); review(view.container);
+    const calls = cloud.firestoreRecords.mock.calls.length;
+    await confirmRelease(view.container, 'deduct');
+    expect(within(view.container).getByRole('alert').textContent).toContain('Reconnect before reviewing');
+    expect(cloud.firestoreRecords.mock.calls).toHaveLength(calls);
+    expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
+  });
+
+  it('preserves the release through amount edits, deletion, and Undo without erasing later wallet activity', async () => {
+    cloud.rows['owner-a'].transactions = [debt({ utangReleased: true, utangReleaseRecordedAt: 1 })]; cloud.rows['owner-a'].meta = [meta('Test Store', 10000, 4000)];
+    const view = await mount(), detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Edit' }));
+    const form = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    fireEvent.change(field(form, 'Amount'), { target: { value: '1200' } });
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Changes' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 3800 });
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ amount: 1200, utangReleased: true, utangReleaseRecordedAt: 1 });
+    const editedDetail = transactionDetail(view.container);
+    fireEvent.click(within(editedDetail).getByRole('button', { name: 'Delete' }));
+    await act(async () => { fireEvent.click(within(editedDetail).getByRole('button', { name: 'Yes, delete' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
+    await act(async () => { const latest = meta('Test Store', 9900, 5102); latest.updatedAt = 100; emit('meta', [latest]); });
+    await act(async () => { fireEvent.click(within(view.container.querySelector<HTMLElement>('[data-toast]')!).getByRole('button', { name: 'Undo' })); });
+    expect(balances()).toEqual({ cash: 9900, maribank: 3902 });
+    expect(cloud.rows['owner-a'].transactions![0].value.utangReleased).toBe(true);
+  });
+
+  it('uses the actual ledger cash balance for End Day after collecting yesterday’s released Utang', async () => {
+    cloud.rows['owner-a'].transactions = [debt({ date: '2026-11-17', utangReleased: true })];
+    const settings = meta('Test Store', 10000, 4000); settings.value.startingFloat = 10000; settings.value.startingFloatDate = '2026-11-18';
+    cloud.rows['owner-a'].meta = [settings];
+    const view = await mount(); fireEvent.click(within(transactionDetail(view.container)).getByRole('button', { name: 'Mark Paid' }));
+    await confirmPayment(view.container);
+    fireEvent.click(within(within(view.container).getByRole('dialog', { name: 'Extra / Tip' })).getByRole('button', { name: 'No tip — finish' }));
+    fireEvent.click(within(view.container).getAllByRole('button', { name: /^End Day$/ })[0]);
+    const endDay = within(view.container).getByRole('dialog', { name: 'End of Day — Close Day' });
+    expect([...endDay.querySelectorAll('p')].find(node => node.textContent === 'Expected Cash on Hand')?.nextElementSibling?.textContent).toBe('₱11,015');
+    expect(field(endDay, 'Cash Count — Actual Cash Counted').value).toBe('11015');
+    expect(endDay.textContent).toContain('Expected: ₱11,015 • Counted: ₱11,015');
+  });
+
+  it('does not infer an opening float from sale-dated history or older Utang receipts, including in the saved report', async () => {
+    cloud.rows['owner-a'].transactions = [debt({ date: '2026-11-17', utangReleased: true })];
+    cloud.rows['owner-a'].meta = [meta('Test Store', 10000, 4000)];
+    const view = await mount();
+    expect(view.container.textContent).toContain('Starting float today: Not recorded');
+    fireEvent.click(within(transactionDetail(view.container)).getByRole('button', { name: 'Mark Paid' }));
+    await confirmPayment(view.container);
+    fireEvent.click(within(within(view.container).getByRole('dialog', { name: 'Extra / Tip' })).getByRole('button', { name: 'No tip — finish' }));
+    fireEvent.click(within(view.container).getAllByRole('button', { name: /^End Day$/ })[0]);
+    const endDay = within(view.container).getByRole('dialog', { name: 'End of Day — Close Day' });
+    expect([...endDay.querySelectorAll('p')].find(node => node.textContent === 'Starting Float')?.nextElementSibling?.textContent).toBe('Not recorded');
+    expect(endDay.textContent).toContain('Opening float was not recorded for today; it is not estimated from sale-dated records.');
+    expect(field(endDay, 'Cash Count — Actual Cash Counted').value).toBe('11015');
+    await act(async () => { fireEvent.click(within(endDay).getByRole('button', { name: 'Close Day & Save Report' })); });
+    expect(cloud.rows['owner-a'].daily_reports![0].value).toMatchObject({ date: '2026-11-18', cash: 11015, actualCash: 11015, difference: 0, tomorrowFloat: 11015 });
+    expect(cloud.rows['owner-a'].daily_reports![0].value.startingFloat).toBeUndefined();
+    expect(balances()).toEqual({ cash: 11015, maribank: 4000 });
+    nav(view.container, 'Dashboard');
+    expect(view.container.textContent).toContain('Starting float today: Not recorded');
+    nav(view.container, 'Report');
+    expect(view.container.textContent).toContain('Float not recorded • Counted ₱11,015');
+  });
+
+  it.each([
+    ['2026-11-17', 0, '₱0'],
+    ['2026-11-17', 9000, '₱9,000'],
+    ['2026-11-16', 9000, 'Not recorded'],
+  ])('uses only an immediately previous close as an opening float (%s, %s)', async (date, tomorrowFloat, expected) => {
+    cloud.rows['owner-a'].daily_reports = [{ id: 'previous-close', value: { date, tomorrowFloat }, updatedAt: 1 }];
+    const settings = meta(); settings.value.startingFloat = 8000; settings.value.startingFloatDate = '2026-11-16';
+    cloud.rows['owner-a'].meta = [settings];
+    const view = await mount();
+    expect(view.container.textContent).toContain(`Starting float today: ${expected}`);
+    expect(cloud.firestoreRecords.mock.calls.filter(([action]) => action !== 'records.list')).toHaveLength(0);
+  });
+
+  it('confirms only the outstanding receipt when a released partial Utang is edited to upfront payment', async () => {
+    cloud.rows['owner-a'].transactions = [debt({ paidAmount: 400, utangReleased: true })]; cloud.rows['owner-a'].meta = [meta('Test Store', 10406, 4000)];
+    const view = await mount(), detail = transactionDetail(view.container);
+    expect(receiptValue(detail, 'Customer payments recorded')).toBe('₱406 cash');
+    expect(receiptValue(detail, 'Still due (principal + unpaid fee)')).toBe('₱609');
+    fireEvent.click(within(detail).getByRole('button', { name: 'Edit' }));
+    const form = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    fireEvent.click(within(form).getByRole('radio', { name: /^Upfront payment/ }));
+    expect(form.textContent).toContain('On this save: Cash on Hand +₱609 • Main Wallet +₱0');
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Changes' })); });
+    expect(receiptValue(within(view.container).getByRole('dialog'), 'Payment to confirm (no tip)')).toBe('₱609');
+    await confirmPayment(view.container);
+    expect(balances()).toEqual({ cash: 11015, maribank: 4000 });
+  });
+
+  it('asks for release confirmation when increasing an already-settled legacy Utang instead of deferring the added payout', async () => {
+    cloud.rows['owner-a'].transactions = [debt({ utangStatus: 'paid' })]; cloud.rows['owner-a'].meta = [meta('Test Store', 11015, 4000)];
+    const view = await mount(), detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Edit' }));
+    const form = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    fireEvent.change(field(form, 'Amount'), { target: { value: '1200' } });
+    fireEvent.change(within(form).getByLabelText('Service fee (editable)'), { target: { value: '18' } });
+    expect(form.textContent).toContain('On this save: Cash on Hand +₱0 • Main Wallet −₱200');
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Changes' })); });
+    expect(receiptValue(within(view.container).getByRole('dialog'), 'Main Wallet change')).toBe('−₱200');
+    await confirmRelease(view.container);
+    expect(balances()).toEqual({ cash: 11015, maribank: 3800 });
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ amount: 1200, paidAmount: 1000, utangStatus: 'unpaid', utangReleased: true });
+  });
+
+  it('keeps the record and its outgoing deduction together if a concurrent balance change rejects deletion', async () => {
+    cloud.rows['owner-a'].transactions = [debt({ utangReleased: true })]; cloud.rows['owner-a'].meta = [meta('Test Store', 10000, 4000)];
+    const view = await mount(), detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Delete' }));
+    const original = cloud.firestoreRecords.getMockImplementation()!;
+    cloud.firestoreRecords.mockImplementationOnce(async (...args) => {
+      const latest = meta('Test Store', 10100, 3900); latest.updatedAt = 50; emit('meta', [latest]);
+      return original(...args);
+    });
+    await act(async () => { fireEvent.click(within(detail).getByRole('button', { name: 'Yes, delete' })); });
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(1);
+    expect(balances()).toEqual({ cash: 10100, maribank: 3900 });
+    expect(view.container.textContent).toContain('Wallet balances changed');
+    await act(async () => { fireEvent.click(within(detail).getByRole('button', { name: 'Yes, delete' })); });
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(0);
+    expect(balances()).toEqual({ cash: 10100, maribank: 4900 });
+  });
+
+  it('makes Undo retry-safe if the restored record committed before its response was interrupted', async () => {
+    cloud.rows['owner-a'].transactions = [debt({ utangReleased: true })]; cloud.rows['owner-a'].meta = [meta('Test Store', 10000, 4000)];
+    const view = await mount(), detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Delete' }));
+    await act(async () => { fireEvent.click(within(detail).getByRole('button', { name: 'Yes, delete' })); });
+    const original = cloud.firestoreRecords.getMockImplementation()!;
+    cloud.firestoreRecords.mockImplementationOnce(async (...args) => { await original(...args); throw new Error('Response interrupted after restore.'); });
+    await act(async () => { fireEvent.click(within(view.container.querySelector<HTMLElement>('[data-toast]')!).getByRole('button', { name: 'Undo' })); });
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    await act(async () => { fireEvent.click(within(view.container).getByRole('button', { name: /^Undo$/ })); });
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(1);
+    expect(balances()).toEqual({ cash: 10000, maribank: 4000 });
+    const restores = cloud.firestoreRecords.mock.calls.filter(([action, args]) => action === 'records.save_transaction' && args.create);
+    expect(restores).toHaveLength(2);
+    expect(restores[0][1].id).toBe(restores[1][1].id);
+  });
+
+  it('separates recorded Cash In/Out fees from cash and counts unpaid outgoing funds in wallet summaries', async () => {
+    const sent = debt({ utangReleased: true });
+    const paid = { ...debt({ utang: false }), id: 'paid-in' };
+    const cashOut = { ...debt({ type: 'Cash Out', amount: 500, fee: 10, utang: false }), id: 'paid-out' };
+    cloud.rows['owner-a'].transactions = [sent, paid, cashOut]; cloud.rows['owner-a'].meta = [meta('Test Store', 10515, 3510)];
+    const view = await mount();
+    expect(view.container.textContent).toContain('Recorded sales, fees, and profit include unpaid Utang');
+    nav(view.container, 'Wallets');
+    const walletCards = [...view.container.querySelectorAll('article')];
+    expect(walletCards.find(node => node.textContent?.includes('Main Wallet'))?.textContent).toContain('Records dated today: −₱1,490');
+    expect(walletCards.find(node => node.textContent?.includes('Cash on Hand'))?.textContent).toContain('Records dated today: +₱515');
+    nav(view.container, 'Utang'); expect(view.container.textContent).toContain('Outstanding ₱1,015');
+  });
+
+  it('isolates pending release reviews and balances when the signed-in account changes', async () => {
+    const view = await mount(); await startDebt(view.container);
+    await act(async () => { for (const observer of cloud.authObservers) observer({ uid: 'owner-b', displayName: 'Owner B' } as User); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(within(view.container).queryByRole('dialog')).toBeNull();
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(0);
+    expect(cloud.rows['owner-b'].transactions).toHaveLength(0);
+    expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
   });
 });
