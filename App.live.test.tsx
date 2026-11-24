@@ -1145,7 +1145,7 @@ describe('sent / released Utang and independently confirmed receipts', () => {
 
   it.each([
     { type: 'E-Load' as const, amount: 100, fee: 3, releasedCash: 10000, releasedMain: 4900, paidCash: 10103, paidMain: 4900 },
-    { type: 'Cash Out' as const, amount: 500, fee: 10, releasedCash: 9500, releasedMain: 5000, paidCash: 9500, paidMain: 5510 },
+    { type: 'Cash Out' as const, amount: 500, fee: 10, releasedCash: 9500, releasedMain: 5000, paidCash: 10010, paidMain: 5000 },
   ])('also separates the $type release from its later customer payment', async row => {
     const view = await mount(); await startDebt(view.container, row.type, row.amount, row.fee); await confirmRelease(view.container);
     expect(balances()).toEqual({ cash: row.releasedCash, maribank: row.releasedMain });
@@ -1464,5 +1464,350 @@ describe('sent / released Utang and independently confirmed receipts', () => {
     expect(cloud.rows['owner-a'].transactions).toHaveLength(0);
     expect(cloud.rows['owner-b'].transactions).toHaveLength(0);
     expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
+  });
+});
+
+// Synthetic fixtures only: no uploaded customer records or production writes.
+describe('actual receiving wallet and explicit payment-wallet corrections', () => {
+  const balances = () => cloud.rows['owner-a'].meta![0].value.wallets;
+  const financialCalls = () => cloud.firestoreRecords.mock.calls.filter(([action]) => action === 'records.save_transaction');
+  function cashOutPayment(changes: Record<string, unknown> = {}): LiveRecord {
+    const row = transaction();
+    return { ...row, value: { ...row.value, type: 'Cash Out', network: 'Main Wallet', selling: 0, amount: 100, fee: 1.5, tip: 18.5, tipWallet: 'maribank', payment: 'Main Wallet', utang: true, utangStatus: 'paid', paidAmount: 100, utangReleased: true, utangReleaseMode: 'deduct', utangReleaseRecordedAt: 1, paymentConfirmedAt: 2, tipRecordedAt: 3, ...changes } };
+  }
+  function seedPayment(row = cashOutPayment()) {
+    cloud.rows['owner-a'].transactions = [row];
+    cloud.rows['owner-a'].meta = [meta('Test Store', 20, 5000)];
+    return row;
+  }
+  function correction(container: HTMLElement) {
+    fireEvent.click(within(transactionDetail(container)).getByRole('button', { name: 'Correct receiving wallet' }));
+    return within(container).getByRole('dialog', { name: 'Correct receiving wallet' });
+  }
+  async function applyCorrection(container: HTMLElement) {
+    const dialog = within(container).getByRole('dialog', { name: 'Correct receiving wallet' });
+    const acknowledged = within(dialog).getByRole('checkbox') as HTMLInputElement;
+    if (!acknowledged.checked) fireEvent.click(acknowledged);
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm wallet correction' })); });
+  }
+
+  it.each([
+    { type: 'E-Load', wallet: 'cash' },
+    { type: 'Cash In', wallet: 'cash' },
+    { type: 'Cash Out', wallet: 'maribank' },
+  ])('shows the $type upfront default and allows a receiving-wallet choice before any save', async ({ type, wallet }) => {
+    const view = await mount(), form = openSale(view.container); fillCustomer(form);
+    if (type !== 'E-Load') fireEvent.click(within(form).getByRole('button', { name: type }));
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Transaction' })); });
+    const receipt = within(view.container).getByRole('dialog', { name: 'Confirm payment received' });
+    const select = within(receipt).getByLabelText('Payment received in') as HTMLSelectElement;
+    expect(select.value).toBe(wallet);
+    fireEvent.change(select, { target: { value: wallet === 'cash' ? 'maribank' : 'cash' } });
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(0);
+    expect(balances()).toEqual({ cash: 10000, maribank: 5000 });
+    fireEvent.click(within(receipt).getByRole('button', { name: 'Back — not confirmed' }));
+    expect(within(view.container).getByRole('dialog', { name: 'Add transaction' })).not.toBeNull();
+    expect(financialCalls()).toHaveLength(0);
+  });
+
+  it('honors an upfront digital load payment and defaults its optional tip to that receiving wallet', async () => {
+    const view = await mount();
+    const receipt = await startUpfront(view.container);
+    fireEvent.change(within(receipt).getByLabelText('Payment received in'), { target: { value: 'maribank' } });
+    expect(receiptValue(receipt, 'Received in')).toBe('Main Wallet');
+    await confirmPayment(view.container);
+    expect(balances()).toEqual({ cash: 10000, maribank: 5003 });
+    const tip = within(view.container).getByRole('dialog', { name: 'Extra / Tip' });
+    expect((within(tip).getByLabelText('Extra received in') as HTMLSelectElement).value).toBe('maribank');
+    await recordTip(view.container, '17');
+    expect(balances()).toEqual({ cash: 10000, maribank: 5020 });
+    expect(cloud.rows['owner-a'].transactions![0].value).toMatchObject({ paymentAllocation: { cash: 0, maribank: 103 }, tipWallet: 'maribank', payment: 'Main Wallet' });
+  });
+
+  it('credits two cash-paid Utang collections to cash, including Cash Out, without paying either service again', async () => {
+    const first = cashOutPayment({ utangStatus: 'unpaid', paidAmount: 0, tip: 0, paymentConfirmedAt: undefined, tipRecordedAt: undefined, customerName: 'Cash Out buyer', phone: '09170000001' });
+    const second = { ...clone(first), id: 'second-debt', value: { ...clone(first.value), type: 'E-Load', network: 'Globe', selling: 100, customerName: 'Load buyer', phone: '09170000002', tipWallet: 'cash', createdAt: 2 } };
+    cloud.rows['owner-a'].transactions = [first, second];
+    cloud.rows['owner-a'].customers = [first, second].map(row => ({ ...clone(customer), id: `customer-${row.id}`, value: { ...clone(customer.value), name: row.value.customerName, phone: row.value.phone } }));
+    cloud.rows['owner-a'].meta = [meta('Test Store', -100, 4880)];
+    const view = await mount();
+    for (const name of ['Cash Out buyer', 'Load buyer']) {
+      nav(view.container, 'Transactions');
+      const row = [...view.container.querySelectorAll('.tx-table tbody tr')].find(tr => tr.textContent?.includes(name))!;
+      fireEvent.click(row);
+      fireEvent.click(within(within(view.container).getByRole('dialog')).getByRole('button', { name: 'Mark Paid' }));
+      const receipt = within(view.container).getByRole('dialog', { name: 'Confirm payment received' });
+      expect((within(receipt).getByLabelText('Payment received in') as HTMLSelectElement).value).toBe('cash');
+      expect(receiptValue(receipt, 'Payment to confirm (no tip)')).toBe('₱101.50');
+      await confirmPayment(view.container);
+      const tip = within(view.container).getByRole('dialog', { name: 'Extra / Tip' });
+      expect((within(tip).getByLabelText('Extra received in') as HTMLSelectElement).value).toBe('cash');
+      await recordTip(view.container, '18.5');
+    }
+    expect(balances()).toEqual({ cash: 140, maribank: 4880 });
+    expect(cloud.rows['owner-a'].transactions).toHaveLength(2);
+    expect(cloud.rows['owner-a'].transactions!.every(row => row.value.utangStatus === 'paid' && row.value.paidAmount === 100)).toBe(true);
+  });
+
+  it('preserves earlier partial destinations when a later collection is received elsewhere', async () => {
+    const partial = cashOutPayment({ utangStatus: 'unpaid', paidAmount: 40, fee: 3, tip: 0, paymentConfirmedAt: undefined });
+    cloud.rows['owner-a'].transactions = [partial];
+    cloud.rows['owner-a'].meta = [meta('Test Store', 9900, 5041.2)];
+    const view = await mount();
+    fireEvent.click(within(transactionDetail(view.container)).getByRole('button', { name: 'Mark Paid' }));
+    await confirmPayment(view.container);
+    expect(balances()).toEqual({ cash: 9961.8, maribank: 5041.2 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentAllocation).toEqual({ cash: 61.8, maribank: 41.2 });
+    await recordTip(view.container, '17');
+    expect(balances()).toEqual({ cash: 9978.8, maribank: 5041.2 });
+    const detail = transactionDetail(view.container);
+    expect(receiptValue(detail, 'Regular payment')).toBe('Cash + Main Wallet');
+    expect(receiptValue(detail, 'Customer payments recorded')).toBe('₱78.80 cash + ₱41.20 via Main Wallet');
+  });
+
+  it.each([
+    { oldType: 'Cash Out', newType: 'E-Load', oldFee: 1.5, expectedReceipt: '₱62.40', expectedAllocation: { cash: 62.4, maribank: 40.6 } },
+    { oldType: 'E-Load', newType: 'Cash Out', oldFee: 3, expectedReceipt: '₱60.80', expectedAllocation: { cash: 102, maribank: 0 } },
+  ])('previews only the remaining collection when a partial $oldType is edited to upfront $newType', async row => {
+    seedPayment(cashOutPayment({ type: row.oldType, network: row.oldType === 'E-Load' ? 'Globe' : 'Main Wallet', selling: row.oldType === 'E-Load' ? 100 : 0, fee: row.oldFee, utangStatus: 'unpaid', paidAmount: 40, tip: 0 }));
+    const view = await mount();
+    fireEvent.click(within(transactionDetail(view.container)).getByRole('button', { name: 'Edit' }));
+    const form = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    fireEvent.click(within(form).getByRole('button', { name: new RegExp(`^${row.newType}$`) }));
+    fireEvent.click(within(form).getByRole('radio', { name: /^Upfront payment/ }));
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Changes' })); });
+    const receipt = within(view.container).getByRole('dialog', { name: 'Confirm payment received' });
+    expect(receiptValue(receipt, 'Principal paid now')).toBe('₱60');
+    expect(receiptValue(receipt, 'Payment to confirm (no tip)')).toBe(row.expectedReceipt);
+    expect((within(receipt).getByLabelText('Payment received in') as HTMLSelectElement).value).toBe('cash');
+    await confirmPayment(view.container);
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentAllocation).toEqual(row.expectedAllocation);
+  });
+
+  it('does not reroute a fully collected legacy Utang when closing its zero remaining principal', async () => {
+    const legacy = cashOutPayment({ utangStatus: 'unpaid', paidAmount: 100, tip: 0, paymentConfirmedAt: undefined });
+    seedPayment(legacy);
+    const view = await mount();
+    fireEvent.click(within(transactionDetail(view.container)).getByRole('button', { name: 'Mark Paid' }));
+    const receipt = within(view.container).getByRole('dialog', { name: 'Confirm payment received' });
+    expect((within(receipt).getByLabelText('Payment received in') as HTMLSelectElement).disabled).toBe(true);
+    await confirmPayment(view.container);
+    expect(balances()).toEqual({ cash: 20, maribank: 5000 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentAllocation).toEqual({ cash: 0, maribank: 101.5 });
+  });
+
+  it.each(['Cancel', 'Escape', 'Close'])('keeps legacy wallets and records unchanged when a correction is abandoned with %s', async method => {
+    seedPayment(); const view = await mount(), before = clone(cloud.rows['owner-a']);
+    const dialog = correction(view.container);
+    expect(receiptValue(dialog, 'Cash on Hand change')).toBe('+₱120');
+    expect(receiptValue(dialog, 'Main Wallet change')).toBe('−₱120');
+    expect(within(dialog).getByRole('button', { name: 'Confirm wallet correction' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true }); fireEvent.keyDown(window, { key: '1' }); fireEvent.keyDown(window, { key: 'h' });
+    expect(within(view.container).getAllByRole('dialog')).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    if (method === 'Escape') fireEvent.keyDown(window, { key: 'Escape' });
+    else fireEvent.click(within(dialog).getByRole('button', { name: method === 'Cancel' ? 'Cancel — keep recorded wallets' : 'Close' }));
+    expect(within(view.container).getByRole('dialog', { name: 'Transaction detail' })).not.toBeNull();
+    expect(cloud.rows['owner-a']).toEqual(before);
+    expect(financialCalls()).toHaveLength(0);
+  });
+
+  it('requires explicit acknowledgment and moves exactly the recorded 120 including its tip, with an audit entry', async () => {
+    const old = seedPayment(); const view = await mount(), dialog = correction(view.container);
+    expect(receiptValue(dialog, 'Currently recorded receipts')).toBe('₱120 via Main Wallet');
+    expect(receiptValue(dialog, 'Total already collected (including tip)')).toBe('₱120');
+    expect(receiptValue(dialog, 'Cash after correction')).toBe('₱140');
+    expect(receiptValue(dialog, 'Main after correction')).toBe('₱4,880');
+    expect(cloud.rows['owner-a'].transactions![0]).toEqual(old);
+    await applyCorrection(view.container);
+    expect(balances()).toEqual({ cash: 140, maribank: 4880 });
+    const row = cloud.rows['owner-a'].transactions![0];
+    expect(row.id).toBe(old.id);
+    expect(row.value).toMatchObject({ ...old.value, tipWallet: 'cash', payment: 'Cash', paymentAllocation: { cash: 101.5, maribank: 0 } });
+    expect(row.value.paymentWalletCorrections).toEqual([{ from: { cash: 0, maribank: 120 }, to: { cash: 120, maribank: 0 }, recordedAt: Date.now() }]);
+    expect(financialCalls()).toHaveLength(1);
+    expect(financialCalls()[0][1]).toMatchObject({ id: old.id, create: false, expectedUpdatedAt: 1, requireOnline: true, meta: { expectedUpdatedAt: 1 } });
+    const detail = within(view.container).getByRole('dialog', { name: 'Transaction detail' });
+    expect(receiptValue(detail, 'Customer payments recorded')).toBe('₱120 cash');
+    expect(within(detail).queryByRole('button', { name: 'Mark Paid' })).toBeNull();
+    fireEvent.click(within(detail).getByRole('button', { name: 'Correct receiving wallet' }));
+    const repeat = within(view.container).getByRole('dialog', { name: 'Correct receiving wallet' });
+    expect(within(repeat).getByRole('button', { name: 'Confirm wallet correction' }).hasAttribute('disabled')).toBe(true);
+    expect(receiptValue(repeat, 'Cash on Hand change')).toBe('+₱0');
+    expect(financialCalls()).toHaveLength(1);
+  });
+
+  it('requires a fresh acknowledgment when the destination changes and can reverse a correction', async () => {
+    seedPayment(); const view = await mount(); correction(view.container); await applyCorrection(view.container);
+    fireEvent.click(within(within(view.container).getByRole('dialog')).getByRole('button', { name: 'Correct receiving wallet' }));
+    const dialog = within(view.container).getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Actual receiving wallet'), { target: { value: 'maribank' } });
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    fireEvent.change(within(dialog).getByLabelText('Actual receiving wallet'), { target: { value: 'cash' } });
+    expect((within(dialog).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+    fireEvent.change(within(dialog).getByLabelText('Actual receiving wallet'), { target: { value: 'maribank' } });
+    expect(receiptValue(dialog, 'Cash on Hand change')).toBe('−₱120');
+    await applyCorrection(view.container);
+    expect(balances()).toEqual({ cash: 20, maribank: 5000 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentWalletCorrections).toHaveLength(2);
+  });
+
+  it('moves only the wrong leg if the recorded tip was already received in cash', async () => {
+    seedPayment(cashOutPayment({ tipWallet: 'cash' }));
+    const view = await mount(), dialog = correction(view.container);
+    expect(receiptValue(dialog, 'Cash on Hand change')).toBe('+₱101.50');
+    expect(receiptValue(dialog, 'Main Wallet change')).toBe('−₱101.50');
+    await applyCorrection(view.container);
+    expect(balances()).toEqual({ cash: 121.5, maribank: 4898.5 });
+  });
+
+  it('preserves a corrected receipt through ordinary note edits, delete, and Undo', async () => {
+    seedPayment(); const view = await mount(); correction(view.container); await applyCorrection(view.container);
+    fireEvent.click(within(within(view.container).getByRole('dialog')).getByRole('button', { name: 'Edit' }));
+    const form = within(view.container).getByRole('dialog', { name: 'Edit transaction' });
+    fireEvent.change(field(form, 'Notes'), { target: { value: 'Only a note after correcting the wallet' } });
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: 'Save Changes' })); });
+    expect(balances()).toEqual({ cash: 140, maribank: 4880 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentAllocation).toEqual({ cash: 101.5, maribank: 0 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentWalletCorrections).toHaveLength(1);
+    const detail = transactionDetail(view.container);
+    fireEvent.click(within(detail).getByRole('button', { name: 'Delete' }));
+    await act(async () => { fireEvent.click(within(detail).getByRole('button', { name: 'Yes, delete' })); });
+    expect(balances()).toEqual({ cash: 120, maribank: 4880 });
+    await act(async () => { fireEvent.click(within(view.container.querySelector<HTMLElement>('[data-toast]')!).getByRole('button', { name: 'Undo' })); });
+    expect(balances()).toEqual({ cash: 140, maribank: 4880 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentAllocation).toEqual({ cash: 101.5, maribank: 0 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentWalletCorrections).toHaveLength(1);
+  });
+
+  it('keeps both wallets unchanged if the reviewed payment changes on another device', async () => {
+    const old = seedPayment(); const view = await mount(), dialog = correction(view.container);
+    await act(async () => { emit('transactions', [{ ...old, updatedAt: 50, value: { ...old.value, notes: 'Changed elsewhere' } }]); });
+    await applyCorrection(view.container);
+    expect(within(dialog).getByRole('alert').textContent).toContain('changed or was removed');
+    expect(balances()).toEqual({ cash: 20, maribank: 5000 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentWalletCorrections).toBeUndefined();
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Reload latest records' })); });
+    const detail = within(view.container).getByRole('dialog', { name: 'Transaction detail' });
+    expect(receiptValue(detail, 'Notes')).toBe('Changed elsewhere');
+    fireEvent.click(within(detail).getByRole('button', { name: 'Correct receiving wallet' }));
+    await applyCorrection(view.container);
+    expect(balances()).toEqual({ cash: 140, maribank: 4880 });
+  });
+
+  it('rejects a concurrent wallet change atomically and retries the correction using latest balances', async () => {
+    seedPayment(); const view = await mount(); correction(view.container);
+    const original = cloud.firestoreRecords.getMockImplementation()!;
+    cloud.firestoreRecords.mockImplementationOnce(async (...args) => {
+      const latest = meta('Test Store', 5000, 7000); latest.updatedAt = 50; emit('meta', [latest]);
+      return original(...args);
+    });
+    await applyCorrection(view.container);
+    expect(within(view.container).getByRole('alert').textContent).toContain('Wallet balances changed');
+    expect(balances()).toEqual({ cash: 5000, maribank: 7000 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentAllocation).toBeUndefined();
+    await applyCorrection(view.container);
+    expect(balances()).toEqual({ cash: 5120, maribank: 6880 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentWalletCorrections).toHaveLength(1);
+  });
+
+  it('does not repeat a completed correction if its response was interrupted', async () => {
+    seedPayment(); const view = await mount(); correction(view.container);
+    const original = cloud.firestoreRecords.getMockImplementation()!;
+    cloud.firestoreRecords.mockImplementationOnce(async (...args) => { await original(...args); throw new Error('Interrupted response'); });
+    await applyCorrection(view.container);
+    expect(balances()).toEqual({ cash: 140, maribank: 4880 });
+    await applyCorrection(view.container);
+    expect(within(view.container).getByRole('alert').textContent).toContain('changed or was removed');
+    expect(balances()).toEqual({ cash: 140, maribank: 4880 });
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentWalletCorrections).toHaveLength(1);
+  });
+
+  it('requires internet for a correction and never queues half of the wallet movement offline', async () => {
+    seedPayment(); const view = await mount(), dialog = correction(view.container);
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const calls = financialCalls().length;
+    await applyCorrection(view.container);
+    expect(within(dialog).getByRole('alert').textContent).toContain('Reconnect before correcting');
+    expect(financialCalls()).toHaveLength(calls);
+    expect(balances()).toEqual({ cash: 20, maribank: 5000 });
+  });
+
+  it('prevents double clicks and dismissal while the correction write is in flight', async () => {
+    seedPayment(); const view = await mount(), dialog = correction(view.container);
+    const original = cloud.firestoreRecords.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    cloud.firestoreRecords.mockImplementationOnce(async (...args) => { await gate; return original(...args); });
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    const button = within(dialog).getByRole('button', { name: 'Confirm wallet correction' });
+    await act(async () => { fireEvent.click(button); fireEvent.click(button); });
+    expect(within(dialog).getByRole('button', { name: 'Correcting…' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.keyDown(window, { key: 'Escape' }); fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(within(view.container).getByRole('dialog', { name: 'Correct receiving wallet' })).not.toBeNull();
+    await act(async () => { release(); });
+    expect(financialCalls()).toHaveLength(1);
+    expect(balances()).toEqual({ cash: 140, maribank: 4880 });
+  });
+
+  it('clears a correction draft when switching accounts without applying it to either account', async () => {
+    seedPayment(); const view = await mount(), dialog = correction(view.container);
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    await act(async () => { for (const observer of cloud.authObservers) observer({ uid: 'owner-b', displayName: 'Owner B' } as User); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(within(view.container).queryByRole('dialog')).toBeNull();
+    expect(financialCalls()).toHaveLength(0);
+    expect(balances()).toEqual({ cash: 20, maribank: 5000 });
+    expect(cloud.rows['owner-b'].meta![0].value.wallets).toEqual({ cash: 200, maribank: 300 });
+  });
+
+  it.each([
+    { type: 'Cash Out', utangStatus: 'unpaid', paidAmount: 0, tip: 0 },
+    { type: 'Top-Up', utang: false, tip: 0 },
+  ])('does not offer a receipt correction for $type with no collected customer payment', async changes => {
+    seedPayment(cashOutPayment(changes));
+    const view = await mount(), detail = transactionDetail(view.container);
+    expect(within(detail).queryByRole('button', { name: 'Correct receiving wallet' })).toBeNull();
+  });
+
+  it.each([
+    'invalid history',
+    [null, {}, { from: { cash: 0, maribank: 120 }, to: { cash: 120, maribank: 0 }, recordedAt: Infinity }, { from: { cash: 0, maribank: 120 }, to: { cash: 20, maribank: 0 }, recordedAt: 1 }],
+  ])('ignores malformed imported correction history without changing stored records or balances: %j', async history => {
+    const old = seedPayment(cashOutPayment({ paymentWalletCorrections: history }));
+    const view = await mount(), dialog = correction(view.container);
+    expect(receiptValue(dialog, 'Cash on Hand change')).toBe('+₱120');
+    expect(financialCalls()).toHaveLength(0);
+    expect(cloud.rows['owner-a'].transactions![0]).toEqual(old);
+    expect(balances()).toEqual({ cash: 20, maribank: 5000 });
+    await applyCorrection(view.container);
+    expect(cloud.rows['owner-a'].transactions![0].value.paymentWalletCorrections).toHaveLength(1);
+    expect(balances()).toEqual({ cash: 140, maribank: 4880 });
+  });
+
+  it('exports actual wallet allocations and correction timestamps in CSV and the full backup', async () => {
+    seedPayment();
+    cloud.rows['owner-a'].wallet_adjustments = [{ id: 'old-adjustment', value: { wallet: 'cash', mode: 'add', amount: 10, category: 'Balance correction', note: '', date: '2026-11-17', time: '8:00 AM', createdAt: 1 } }];
+    const view = await mount(); correction(view.container); await applyCorrection(view.container);
+    fireEvent.click(within(within(view.container).getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    const downloads: Blob[] = [];
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { if (blob instanceof Blob) downloads.push(blob); return 'blob:test-export'; });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    nav(view.container, 'Settings');
+    fireEvent.click(within(view.container).getByRole('button', { name: 'Export CSV — All Transactions' }));
+    const csv = await downloads[0].text();
+    const lines = csv.split('\n').map(line => line.slice(1, -1).split('","'));
+    const headers = lines[0], row = lines[1];
+    expect(row).toHaveLength(headers.length);
+    expect(lines[2]).toHaveLength(headers.length);
+    expect(lines[2][1]).toBe('Wallet Addition');
+    expect(row[headers.indexOf('Cash receipts recorded')]).toBe('120');
+    expect(row[headers.indexOf('Main Wallet receipts recorded')]).toBe('0');
+    expect(row[headers.indexOf('Payment wallet corrected at')]).toBe(new Date().toISOString());
+    fireEvent.click(within(view.container).getByRole('button', { name: 'Download full backup' }));
+    const backup = JSON.parse(await downloads[1].text());
+    expect(backup.collections.transactions[0].value.paymentAllocation).toEqual({ cash: 101.5, maribank: 0 });
+    expect(backup.collections.transactions[0].value.paymentWalletCorrections).toHaveLength(1);
+    expect(backup.settings.wallets).toEqual({ cash: 140, maribank: 4880 });
   });
 });

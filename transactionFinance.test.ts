@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyTransaction, canRecordTip, collectedPayments, customerPayments, customerTotal, defaultTipWallet, isValidTip, needsUtangRelease, normalizeTip, round2,
+  applyTransaction, canRecordTip, collectedPayments, customerPayments, customerTotal, defaultReceivingWallet, defaultTipWallet, isValidTip, needsUtangRelease, normalizePaymentAllocation, normalizeTip, round2,
   reverseTransaction, collectedTransaction, txPortion, txProfit, txTip, txTipWallet,
-  updateWalletsForEdit, utangAmountDue, utangPaymentPortion, withRecordedTip, withUtangPayment, withUtangRelease, type TransactionMoney, type TxType,
+  updateWalletsForEdit, utangAmountDue, utangPaymentPortion, withPaymentWalletCorrection, withReceivedPayment, withRecordedTip, withUtangPayment, withUtangRelease, type TransactionMoney, type TxType,
 } from './transactionFinance';
 
 const sale = (overrides: Partial<TransactionMoney> = {}): TransactionMoney => ({
@@ -269,10 +269,10 @@ describe('release-first Utang accounting', () => {
     const debt = cashIn({ type: 'Cash Out', amount: 500, fee: 10 });
     let balance = applyTransaction(wallets, debt);
     expect(balance).toEqual({ cash: 9500, maribank: 5000 });
-    const partial = withUtangPayment(debt, 200);
+    const partial = withUtangPayment(debt, 200, 'maribank');
     balance = updateWalletsForEdit(balance, debt, partial);
     expect(balance).toEqual({ cash: 9500, maribank: 5204 });
-    const full = withUtangPayment(partial, 300);
+    const full = withUtangPayment(partial, 300, 'maribank');
     balance = updateWalletsForEdit(balance, partial, full);
     expect(balance).toEqual({ cash: 9500, maribank: 5510 });
     expect(updateWalletsForEdit(balance, full, withRecordedTip(full, 17, 'cash'))).toEqual({ cash: 9517, maribank: 5510 });
@@ -390,5 +390,193 @@ describe('release-first Utang accounting', () => {
     const restored = JSON.parse(JSON.stringify(debt));
     expect(applyTransaction(wallets, restored)).toEqual(applyTransaction(wallets, debt));
     expect(withUtangPayment(restored, 1000).utangReleased).toBe(true);
+  });
+});
+
+
+describe('explicit customer receiving wallets', () => {
+  const cashOutDebt = (overrides: Partial<TransactionMoney> = {}) => sale({ type: 'Cash Out', selling: 0, fee: 1.5, utang: true, utangStatus: 'unpaid', paidAmount: 0, utangReleased: true, ...overrides });
+
+  it.each(['E-Load', 'Cash In', 'Cash Out'] as const)('defaults new %s Utang collections to cash without changing upfront defaults', type => {
+    expect(defaultReceivingWallet({ type, utang: true })).toBe('cash');
+    expect(defaultReceivingWallet({ type, utang: false })).toBe(type === 'Cash Out' ? 'maribank' : 'cash');
+  });
+
+  it('keeps the original digital baseline for already-paid legacy Cash Out, including note edits', () => {
+    const old = cashOutDebt({ utangStatus: 'paid', paidAmount: 100, tip: 18.5 });
+    expect(collectedPayments(old)).toEqual({ cash: 0, maribank: 120 });
+    const noteEdit = { ...old, notes: 'Only a note' };
+    expect(updateWalletsForEdit(startingWallets, old, noteEdit)).toEqual(startingWallets);
+    expect(old.paymentAllocation).toBeUndefined();
+  });
+
+  it('collects a Cash Out Utang and tip as physical cash without releasing its cash twice', () => {
+    const debt = cashOutDebt();
+    const sent = applyTransaction(startingWallets, debt);
+    expect(sent).toEqual({ cash: 900, maribank: 500 });
+    const paid = withUtangPayment(debt, 100);
+    expect(paid.paymentAllocation).toEqual({ cash: 101.5, maribank: 0 });
+    expect(paid.tipWallet).toBe('cash');
+    const tipped = withRecordedTip(paid, 18.5, txTipWallet(paid));
+    expect(updateWalletsForEdit(sent, debt, tipped)).toEqual({ cash: 1020, maribank: 500 });
+    expect(txProfit(tipped)).toBe(20);
+  });
+
+  it.each(['E-Load', 'Cash In', 'Cash Out'] as const)('supports an explicit digital collection and matching tip default on %s Utang', type => {
+    const debt = cashOutDebt({ type, selling: type === 'E-Load' ? 100 : 0 });
+    const paid = withUtangPayment(debt, 100, 'maribank');
+    expect(collectedPayments(paid)).toEqual({ cash: 0, maribank: 101.5 });
+    expect(paid.tipWallet).toBe('maribank');
+    expect(withRecordedTip(paid, 18.5, 'cash').paymentAllocation).toEqual(paid.paymentAllocation);
+  });
+
+  it('can override the upfront receiving wallet without changing the outgoing service', () => {
+    const tx = withReceivedPayment(sale({ type: 'Cash Out', selling: 0 }), 'cash');
+    expect(collectedPayments(tx)).toEqual({ cash: 103, maribank: 0 });
+    expect(applyTransaction(startingWallets, tx)).toEqual({ cash: 1003, maribank: 500 });
+    const digitalLoad = withReceivedPayment(sale({ discount: 5 }), 'maribank');
+    expect(applyTransaction(startingWallets, digitalLoad)).toEqual({ cash: 1000, maribank: 508 });
+  });
+
+  it('retains earlier legacy digital partial receipts when the final collection arrives in cash', () => {
+    const oldPartial = cashOutDebt({ paidAmount: 40, fee: 3 });
+    expect(collectedPayments(oldPartial)).toEqual({ cash: 0, maribank: 41.2 });
+    const paid = withUtangPayment(oldPartial, 60, 'cash');
+    expect(collectedPayments(paid)).toEqual({ cash: 61.8, maribank: 41.2 });
+    expect(updateWalletsForEdit(startingWallets, oldPartial, paid)).toEqual({ cash: 1061.8, maribank: 500 });
+  });
+
+  it('preserves mixed receiving wallets across installments and exact cumulative fee rounding', () => {
+    let debt = cashOutDebt({ fee: 0.05 });
+    let balance = applyTransaction(startingWallets, debt);
+    const steps = [
+      { amount: 33.33, wallet: 'cash' as const, receipts: { cash: 33.35, maribank: 0 } },
+      { amount: 33.33, wallet: 'maribank' as const, receipts: { cash: 33.35, maribank: 33.34 } },
+      { amount: 33.34, wallet: 'cash' as const, receipts: { cash: 66.71, maribank: 33.34 } },
+    ];
+    for (const step of steps) {
+      const next = withUtangPayment(debt, step.amount, step.wallet);
+      expect(collectedPayments(next)).toEqual(step.receipts);
+      balance = updateWalletsForEdit(balance, debt, next); debt = next;
+    }
+    expect(balance).toEqual({ cash: 966.71, maribank: 533.34 });
+    expect(utangAmountDue(debt)).toBe(0);
+    expect(reverseTransaction(balance, debt)).toEqual(startingWallets);
+  });
+
+  it('keeps a previous partial allocation when an edited debt becomes upfront', () => {
+    const partial = withUtangPayment(cashOutDebt(), 40, 'maribank');
+    const settled = withReceivedPayment({ ...partial, utang: false, utangStatus: undefined }, 'cash', partial);
+    expect(collectedPayments(settled)).toEqual({ cash: 60.9, maribank: 40.6 });
+    expect(updateWalletsForEdit(startingWallets, partial, settled)).toEqual({ cash: 1060.9, maribank: 500 });
+  });
+
+  it('does not move legacy receipts when confirming a zero remaining principal', () => {
+    const legacy = cashOutDebt({ paidAmount: 100 });
+    const closed = withUtangPayment(legacy, 0, 'cash');
+    expect(collectedPayments(closed)).toEqual({ cash: 0, maribank: 101.5 });
+    expect(updateWalletsForEdit(startingWallets, legacy, closed)).toEqual(startingWallets);
+  });
+
+  it('moves the exact already-collected 120 between wallets without another payment or payout', () => {
+    const old = cashOutDebt({ utangStatus: 'paid', paidAmount: 100, tip: 18.5, tipWallet: 'maribank' });
+    const corrected = withPaymentWalletCorrection(old, 'cash');
+    expect(collectedPayments(corrected)).toEqual({ cash: 120, maribank: 0 });
+    expect(updateWalletsForEdit({ cash: 20, maribank: 5000 }, old, corrected)).toEqual({ cash: 140, maribank: 4880 });
+    expect(corrected).toMatchObject({ amount: 100, selling: 0, fee: 1.5, tip: 18.5, paidAmount: 100, utangStatus: 'paid', utangReleased: true });
+    expect(customerTotal(corrected)).toBe(customerTotal(old));
+    expect(txProfit(corrected)).toBe(txProfit(old));
+    expect(() => withUtangPayment(corrected, 100)).toThrow(/already paid/);
+    expect(old.paymentAllocation).toBeUndefined();
+  });
+
+  it('corrects paid legacy transactions with no release marker without changing their outgoing baseline', () => {
+    const old = cashOutDebt({ utangStatus: 'paid', paidAmount: 100, utangReleased: undefined, tip: 18.5 });
+    const corrected = withPaymentWalletCorrection(old, 'cash');
+    expect(updateWalletsForEdit(startingWallets, old, corrected)).toEqual({ cash: 1120, maribank: 380 });
+    expect(corrected.utangReleased).toBeUndefined();
+    expect(needsUtangRelease(corrected)).toBe(false);
+  });
+
+  it('moves only already-collected partial receipts, including a legacy booked partial tip', () => {
+    const partial = cashOutDebt({ paidAmount: 40, fee: 3, tip: 17 });
+    const corrected = withPaymentWalletCorrection(partial, 'cash');
+    expect(collectedPayments(partial)).toEqual({ cash: 0, maribank: 48 });
+    expect(collectedPayments(corrected)).toEqual({ cash: 48, maribank: 0 });
+    expect(updateWalletsForEdit(startingWallets, partial, corrected)).toEqual({ cash: 1048, maribank: 452 });
+    expect(utangAmountDue(corrected)).toBe(61.8);
+    expect(canRecordTip(corrected)).toBe(false);
+  });
+
+  it('does not move an existing tip when a remaining principal payment chooses another wallet', () => {
+    const partial = cashOutDebt({ paidAmount: 40, tip: 17, tipWallet: 'maribank' });
+    const paid = withUtangPayment(partial, 60, 'cash');
+    expect(paid.tipWallet).toBe('maribank');
+    expect(paid.tip).toBe(17);
+    expect(collectedPayments(paid)).toEqual({ cash: 60.9, maribank: 57.6 });
+  });
+
+  it('makes correction idempotent and reversible without rebuilding wallet history', () => {
+    const old = cashOutDebt({ utangStatus: 'paid', tip: 18.5 });
+    const corrected = withPaymentWalletCorrection(old, 'cash');
+    const balance = updateWalletsForEdit(startingWallets, old, corrected);
+    expect(updateWalletsForEdit(balance, corrected, withPaymentWalletCorrection(corrected, 'cash'))).toEqual(balance);
+    expect(updateWalletsForEdit(balance, corrected, withPaymentWalletCorrection(corrected, 'maribank'))).toEqual(startingWallets);
+    const noteEdit = { ...corrected, notes: 'A note edit' };
+    expect(updateWalletsForEdit(balance, corrected, noteEdit)).toEqual(balance);
+  });
+
+  it('preserves routing through backup round trips, money edits, delete, and Undo with a later sale', () => {
+    const first = withUtangPayment(cashOutDebt(), 40, 'cash');
+    const full = withUtangPayment(first, 60, 'maribank');
+    const restored: TransactionMoney = JSON.parse(JSON.stringify(full));
+    expect(collectedPayments(restored)).toEqual({ cash: 40.6, maribank: 60.9 });
+    const edited = { ...restored, fee: 3 };
+    expect(collectedPayments(edited)).toEqual({ cash: 41.2, maribank: 61.8 });
+    const after = applyTransaction(startingWallets, edited);
+    const later = sale({ amount: 50, selling: 50, fee: 1 });
+    let balance = reverseTransaction(after, edited);
+    balance = applyTransaction(balance, later);
+    balance = applyTransaction(balance, edited);
+    expect(balance).toEqual(applyTransaction(after, later));
+    expect(reverseTransaction(applyTransaction(startingWallets, edited), edited)).toEqual(startingWallets);
+  });
+
+  it('rebases an explicit price reduction across existing receipts instead of inventing another receipt', () => {
+    const paid = withReceivedPayment(sale(), 'cash');
+    const reduced = withReceivedPayment({ ...paid, amount: 50, selling: 50 }, 'maribank', paid);
+    expect(collectedPayments(reduced)).toEqual({ cash: 53, maribank: 0 });
+    expect(updateWalletsForEdit(startingWallets, paid, reduced)).toEqual({ cash: 950, maribank: 550 });
+  });
+
+  it('validates allocation and receiving wallet input without changing legacy fallback routes', () => {
+    for (const invalid of [null, [], {}, { cash: '103', maribank: 0 }, { cash: -1, maribank: 1 }, { cash: Infinity, maribank: 0 }, { cash: NaN, maribank: 0 }, { cash: 0, maribank: 0 }, { cash: Number.MAX_SAFE_INTEGER, maribank: 1 }]) {
+      expect(normalizePaymentAllocation(invalid)).toBeUndefined();
+      expect(customerPayments(cashOutDebt({ utang: false, paymentAllocation: invalid as never }))).toEqual({ cash: 0, maribank: 101.5 });
+    }
+    expect(() => withUtangPayment(cashOutDebt(), 100, 'other' as never)).toThrow(/Choose Cash/);
+    expect(() => withReceivedPayment(sale(), 'other' as never)).toThrow(/Choose Cash/);
+    expect(() => withPaymentWalletCorrection(sale(), 'other' as never)).toThrow(/Choose Cash/);
+    expect(() => withPaymentWalletCorrection(cashOutDebt(), 'cash')).toThrow(/no recorded customer payment/);
+    expect(() => withPaymentWalletCorrection(sale({ type: 'Top-Up' }), 'cash')).toThrow(/no recorded customer payment/);
+    expect(() => withReceivedPayment(sale({ type: 'Top-Up' }), 'cash')).toThrow(/top-ups/);
+  });
+
+  it('never shifts prior installment cents into the newest wallet across varied fee amounts', () => {
+    for (const fee of [0, 0.01, 0.05, 0.87, 1.49, 3, 15]) {
+      let debt = cashOutDebt({ fee });
+      let balance = applyTransaction(startingWallets, debt);
+      for (const [index, principal] of [0.01, 5.55, 27.77, 33.33, 33.34].entries()) {
+        const wallet = index % 2 ? 'maribank' : 'cash', other = wallet === 'cash' ? 'maribank' : 'cash';
+        const next = withUtangPayment(debt, principal, wallet);
+        const updated = updateWalletsForEdit(balance, debt, next);
+        expect(updated[other]).toBe(balance[other]);
+        expect(updated[wallet]).toBeGreaterThan(balance[wallet]);
+        balance = updated; debt = next;
+      }
+      const received = collectedPayments(debt);
+      expect(round2(received.cash + received.maribank)).toBe(round2(100 + fee));
+      expect(reverseTransaction(balance, debt)).toEqual(startingWallets);
+    }
   });
 });

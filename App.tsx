@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { applyTransaction, canRecordTip, collectedPayments, collectedTransaction, customerPayments, customerTotal, defaultTipWallet, eLoadDiscount, isValidTip, needsUtangRelease, normalizeTip, reverseTransaction, round2, txProfit, txTip, txTipWallet, updateWalletsForEdit, utangAmountDue, utangPaymentPortion, withRecordedTip, withUtangPayment, withUtangRelease, type TransactionMoney, type TxType, type Wallets } from './transactionFinance';
+import { applyTransaction, canRecordTip, collectedPayments, collectedTransaction, customerPayments, customerTotal, defaultReceivingWallet, defaultTipWallet, eLoadDiscount, isValidTip, needsUtangRelease, normalizePaymentAllocation, normalizeTip, reverseTransaction, round2, txProfit, txTip, txTipWallet, updateWalletsForEdit, utangAmountDue, utangPaymentPortion, withPaymentWalletCorrection, withReceivedPayment, withRecordedTip, withUtangPayment, withUtangRelease, type TransactionMoney, type TxType, type Wallets } from './transactionFinance';
 import { firestoreRecords, auth, observeAuth, signInWithGoogle, logOut, subscribePendingWrites, subscribeToUserRecords, syncUserRecords, clearSyncError, type User as FirebaseUser } from './firebase';
 import { mergeDraftFields, recordCollectionLimits, type LiveRecord, type RecordCollection } from './liveRecords';
 import CustomerAvatar from './app/CustomerAvatar';
@@ -11,7 +11,8 @@ import { collectSavedPromos } from './app/savedPromos';
 import { LogOut, LoaderCircle, Share2, Copy } from 'lucide-react';
 import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown } from 'lucide-react';
 
-type Tx = TransactionMoney & { kind?:string; network:string; eloadKind?:'regular'|'promo'; promoName?:string; promoDetails?:string; promoValidity?:string; provider:string; phone:string; customerName?:string; payment:string; notes:string; date:string; time:string; createdAt:number; sample?:boolean; promiseDate?:string; paymentConfirmedAt?:number; tipRecordedAt?:number; utangReleaseRecordedAt?:number; utangReleaseMode?:'deduct'|'already-recorded'; history?:{oldAmount:number;newAmount:number;time:string;date:string}[] };
+type PaymentWalletCorrection = {from:Wallets;to:Wallets;recordedAt:number};
+type Tx = TransactionMoney & { kind?:string; network:string; eloadKind?:'regular'|'promo'; promoName?:string; promoDetails?:string; promoValidity?:string; provider:string; phone:string; customerName?:string; payment:string; notes:string; date:string; time:string; createdAt:number; sample?:boolean; promiseDate?:string; paymentConfirmedAt?:number; tipRecordedAt?:number; utangReleaseRecordedAt?:number; utangReleaseMode?:'deduct'|'already-recorded'; paymentWalletCorrections?:PaymentWalletCorrection[]; history?:{oldAmount:number;newAmount:number;time:string;date:string}[] };
 type WalletAdjustment = { wallet:keyof Wallets; mode:'add'|'deduct'; amount:number; category:string; note:string; date:string; time:string; createdAt:number };
 type WalletAdjustmentRecord = { id:string; value:WalletAdjustment; updatedAt?:number };
 type Meta = { kind:string; businessName:string; eloadPct:number; cashInPct:number; cashOutPct:number; palawanFee:number; wallets:Wallets; lastClosed:string; lowThreshold:number; startingFloat?:number; startingFloatDate?:string };
@@ -32,6 +33,8 @@ const peso = (n:number)=> '₱' + (isNaN(n)?0:n).toLocaleString('en-PH',{minimum
 const walletLabel = (key:keyof Wallets)=> key==='cash' ? 'Cash on Hand' : 'Main Wallet';
 const paymentsLabel = (payments:Wallets)=>{ return (Object.entries(payments) as [keyof Wallets,number][]).filter(([,amount])=>amount!==0).map(([key,amount])=>`${peso(amount)} ${key==='cash'?'cash':'via Main Wallet'}`).join(' + ') || peso(0); };
 const customerPaymentLabel = (tx:TransactionMoney)=>paymentsLabel(customerPayments(tx));
+const hasRecordedPayment = (tx:TransactionMoney)=>{ const received=collectedPayments(tx); return tx.type!=='Top-Up' && isValidTip(received.cash) && isValidTip(received.maribank) && isValidTip(round2(received.cash+received.maribank)) && round2(received.cash+received.maribank)>0; };
+const paymentMethodLabel = (tx:TransactionMoney)=>{ const received=collectedPayments({...tx,tip:0}); return received.cash>0&&received.maribank>0?'Cash + Main Wallet':received.maribank>0?'Main Wallet':received.cash>0?'Cash':'Not received yet'; };
 const signedPeso = (amount:number)=> `${amount<0?'−':'+'}${peso(Math.abs(amount))}`;
 const todayKey = ()=>{ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const currentTimeLabel = ()=>new Date().toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit'});
@@ -190,6 +193,15 @@ const walletDefs:{key:keyof Wallets; label:string; color:string; hint:string}[]=
   {key:'maribank', label:'Main Wallet', color:'var(--wallet-ink)', hint:'Main wallet — load, Cash In & Cash Out'},
   {key:'cash', label:'Cash on Hand', color:'var(--green)', hint:'Bills & coins in the till'},
 ];
+function normalizePaymentWalletCorrections(value:unknown):PaymentWalletCorrection[]|undefined{
+  if(!Array.isArray(value)) return undefined;
+  const entries:PaymentWalletCorrection[]=value.flatMap(entry=>{
+    if(!entry||typeof entry.recordedAt!=='number'||entry.recordedAt<=0||!Number.isFinite(new Date(entry.recordedAt).getTime())) return [];
+    const from=normalizePaymentAllocation(entry.from),to=normalizePaymentAllocation(entry.to);
+    return from&&to&&round2(from.cash+from.maribank)===round2(to.cash+to.maribank)?[{from,to,recordedAt:entry.recordedAt}]:[];
+  });
+  return entries.length?entries:undefined;
+}
 function normalizeTx(v:any):Tx|null{
   if(!v || !v.type) return null;
   let type = v.type as string;
@@ -197,7 +209,7 @@ function normalizeTx(v:any):Tx|null{
   if(!['E-Load','Cash In','Cash Out','Top-Up'].includes(type)) return null;
   const provider = type==='Top-Up' ? 'External Provider' : 'Main Wallet';
   const network = type==='Top-Up' ? 'External Provider' : type==='E-Load' ? (v.network||'Globe') : 'Main Wallet';
-  return {...v, type:type as TxType, provider, network, tip:type==='Top-Up'?0:normalizeTip(v.tip), tipWallet:v.tipWallet==='cash'||v.tipWallet==='maribank'?v.tipWallet:defaultTipWallet(type as TxType)};
+  return {...v, type:type as TxType, provider, network, paymentAllocation:type==='Top-Up'?undefined:normalizePaymentAllocation(v.paymentAllocation), paymentWalletCorrections:normalizePaymentWalletCorrections(v.paymentWalletCorrections), tip:type==='Top-Up'?0:normalizeTip(v.tip), tipWallet:v.tipWallet==='cash'||v.tipWallet==='maribank'?v.tipWallet:defaultTipWallet(type as TxType)};
 }
 function normalizeCustomer(v:any):Customer|null{
   if(!v || (!v.name && !v.phone)) return null;
@@ -273,6 +285,11 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   const paymentPlanName=useId();
   const [pendingPayment,setPendingPayment]=useState<PendingPayment|null>(null);
   const [paymentError,setPaymentError]=useState('');
+  const [paymentWallet,setPaymentWallet]=useState<keyof Wallets>('cash');
+  const [pendingCorrection,setPendingCorrection]=useState<TxRecord|null>(null);
+  const [correctionWallet,setCorrectionWallet]=useState<keyof Wallets>('cash');
+  const [correctionAcknowledged,setCorrectionAcknowledged]=useState(false);
+  const [correctionError,setCorrectionError]=useState('');
   const [pendingRelease,setPendingRelease]=useState<PendingRelease|null>(null);
   const [releaseMode,setReleaseMode]=useState<''|'deduct'|'already-recorded'>('');
   const [releaseError,setReleaseError]=useState('');
@@ -398,13 +415,19 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   // Entry/edit forms cannot create or change tips. Existing paid tips remain
   // intact; new tips have their own modal after owner-confirmed full payment.
   const existingFormTip=fType==='Top-Up'||!editing?0:txTip(editing.value);
-  const formMoney:TransactionMoney = {type:fType,amount:fAmount,fee:fFee,selling:fType==='E-Load'?fAmount:0,discount:fDiscount,tip:existingFormTip,tipWallet:editing?txTipWallet(editing.value):defaultTipWallet(fType),utang:isUtang&&fType!=='Top-Up',utangStatus:fUnpaidUtang?'unpaid':'paid',paidAmount:formPaidPrincipal,utangReleased:!editing||!editing.value.utang||editing.value.utangStatus==='paid'||editing.value.utangReleased===true};
+  const formMoney:TransactionMoney = {paymentAllocation:editing?.value.paymentAllocation,type:fType,amount:fAmount,fee:fFee,selling:fType==='E-Load'?fAmount:0,discount:fDiscount,tip:existingFormTip,tipWallet:editing?txTipWallet(editing.value):defaultTipWallet(fType),utang:isUtang&&fType!=='Top-Up',utangStatus:fUnpaidUtang?'unpaid':'paid',paidAmount:formPaidPrincipal,utangReleased:!editing||!editing.value.utang||editing.value.utangStatus==='paid'||editing.value.utangReleased===true};
   const pendingCustomer=pendingPayment?.kind==='upfront'?pendingPayment.tx:pendingPayment?.record.value;
-  const previouslyReceived=pendingPayment?.kind==='upfront'&&pendingPayment.previous?.value.type===pendingPayment.tx.type?collectedTransaction(pendingPayment.previous.value):null;
-  const pendingReceipt=pendingPayment?.kind==='upfront'?{...pendingPayment.tx,amount:round2(pendingPayment.tx.amount-(previouslyReceived?.amount||0)),selling:pendingPayment.tx.type==='E-Load'?round2(pendingPayment.tx.selling-(previouslyReceived?.selling||0)):0,fee:round2(pendingPayment.tx.fee-(previouslyReceived?.fee||0)),tip:0}:pendingPayment?utangPaymentPortion(pendingPayment.record.value,pendingPayment.principal):null;
+  // A service-type edit must not make earlier customer receipts disappear from
+  // the confirmation preview. Top-ups have no customer receipt to subtract.
+  const previouslyReceived=pendingPayment?.kind==='upfront'&&pendingPayment.previous&&pendingPayment.previous.value.type!=='Top-Up'?collectedTransaction(pendingPayment.previous.value):null;
+  const pendingReceipt=pendingPayment?.kind==='upfront'?{...pendingPayment.tx,amount:round2(pendingPayment.tx.amount-(previouslyReceived?.amount||0)),selling:pendingPayment.tx.type==='E-Load'?round2(pendingPayment.tx.selling-(previouslyReceived?.amount||0)):0,fee:round2(pendingPayment.tx.fee-(previouslyReceived?.fee||0)),tip:0}:pendingPayment?utangPaymentPortion(pendingPayment.record.value,pendingPayment.principal):null;
   const pendingFullPayment=pendingPayment?.kind==='upfront'||Boolean(pendingPayment&&pendingPayment.principal>=utangRemaining(pendingPayment.record.value));
   const previewTip=normalizeTip(Number(tipInput));
   const tipPreview=tipPrompt?{...tipPrompt.record.value,tip:previewTip,tipWallet}:null;
+  const correctionReceived=pendingCorrection?collectedPayments(pendingCorrection.value):{cash:0,maribank:0};
+  const correctionCandidate=pendingCorrection?withPaymentWalletCorrection(pendingCorrection.value,correctionWallet):null;
+  const correctionMove=pendingCorrection&&correctionCandidate?updateWalletsForEdit({cash:0,maribank:0},pendingCorrection.value,correctionCandidate):{cash:0,maribank:0};
+  const correctionChanges=correctionMove.cash!==0||correctionMove.maribank!==0;
   const formWalletMove = editing?updateWalletsForEdit({cash:0,maribank:0},editing.value,formMoney):applyTransaction({cash:0,maribank:0},formMoney);
   const releaseRecord=pendingRelease?.kind==='entry'?pendingRelease.entry.tx:pendingRelease?.record.value;
   const releasePrevious=pendingRelease?.kind==='entry'?pendingRelease.entry.previous?.value:pendingRelease?.record.value;
@@ -883,15 +906,47 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
     setFNotes(tx.type==='Top-Up'?'Top-Up via External Provider':''); setFDate(todayKey()); setFTime(currentTimeLabel());
     setIsUtang(false); setFPromiseDate(''); setShowNameField(false);setNamePromptSkipped(false);setNameMsg('');
   }
-  async function savePaymentRecord(previous:TxRecord|null,tx:Tx,id=previous?.id||uid()):Promise<TxRecord>{
+  async function savePaymentRecord(previous:TxRecord|null,tx:Tx,id=previous?.id||uid(),requireOnline=false):Promise<TxRecord>{
     const base=captureMeta();
+    if(tx.type!=='Top-Up'&&hasRecordedPayment(tx)) tx={...tx,payment:paymentMethodLabel(tx)};
     const wallets=previous?updateWalletsForEdit(base.value.wallets,previous.value,tx):applyTransaction(base.value.wallets,tx);
     const changesWallets=wallets.cash!==base.value.wallets.cash||wallets.maribank!==base.value.wallets.maribank;
     if(changesWallets&&!base.id) throw new Error('Load the wallet balances before confirming this payment.');
-    const result:any=await api('records.save_transaction',{collection:'transactions',id,create:!previous,value:tx,expectedUpdatedAt:previous?.updatedAt,meta:changesWallets?{id:base.id,value:{...base.value,wallets},expectedUpdatedAt:base.updatedAt}:undefined});
+    const result:any=await api('records.save_transaction',{collection:'transactions',id,create:!previous,value:tx,expectedUpdatedAt:previous?.updatedAt,...(requireOnline?{requireOnline:true}:{}),meta:changesWallets?{id:base.id,value:{...base.value,wallets},expectedUpdatedAt:base.updatedAt}:undefined});
     const savedMeta=result.meta;
     if(savedMeta&&(!metaIdRef.current||(savedMeta.id===metaIdRef.current&&Number(savedMeta.updatedAt||0)>=metaUpdatedAtRef.current))) applyRecordRowsRef.current('meta',[savedMeta]);
     return result.record;
+  }
+  function reviewPaymentWallet(record:TxRecord){
+    if(paymentWriteInFlight.current||!hasRecordedPayment(record.value)) return;
+    setCorrectionWallet(defaultReceivingWallet(record.value)); setCorrectionAcknowledged(false); setCorrectionError(''); setPendingCorrection(record);
+  }
+  function cancelPaymentWalletCorrection(){
+    if(paymentWriteInFlight.current) return;
+    setPendingCorrection(null); setCorrectionError(''); setCorrectionAcknowledged(false);
+  }
+  async function reloadPaymentWalletCorrection(){
+    await runPaymentWrite(async()=>{
+      await reloadRecords();
+      // Never silently replace the reviewed record. Return to its latest detail
+      // so the owner can reopen and review a fresh correction deliberately.
+      setPendingCorrection(null);setCorrectionError('');setCorrectionAcknowledged(false);
+      showToast('Latest records loaded. Review the payment again before correcting its wallet.');
+    },setCorrectionError);
+  }
+  async function confirmPaymentWalletCorrection(){
+    if(!pendingCorrection||!correctionAcknowledged||!correctionChanges) return;
+    const record=pendingCorrection,wallet=correctionWallet;
+    await runPaymentWrite(async()=>{
+      setCorrectionError('');
+      if(!previewMode&&!navigator.onLine) throw new Error('Reconnect before correcting a payment wallet so the record and both balances can be checked together.');
+      const corrected=withPaymentWalletCorrection(record.value,wallet);
+      const from=collectedPayments(record.value),to=collectedPayments(corrected);
+      const updated:Tx={...corrected,paymentWalletCorrections:[...(record.value.paymentWalletCorrections||[]),{from,to,recordedAt:Date.now()}]};
+      await savePaymentRecord(record,updated,record.id,true);
+      await reloadRecords();setPendingCorrection(null);setCorrectionAcknowledged(false);
+      showToast('Receiving wallet corrected. No new payment, profit, or service release was recorded.');
+    },setCorrectionError);
   }
   async function persistTransactionEntry(entry:TransactionEntry,promptForTip=false){
     const {tx,previous}=entry;
@@ -938,14 +993,14 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   function markUtangPaid(record:TxRecord){
     if(paymentWriteInFlight.current) return;
     if(!record.value.utang||record.value.utangStatus==='paid'){showErrorToast('This Utang is already paid.');return;}
-    setPaymentError('');setPendingPayment({kind:'utang',record,principal:utangRemaining(record.value)});
+    setPaymentError('');setPaymentWallet(defaultReceivingWallet(record.value));setPendingPayment({kind:'utang',record,principal:utangRemaining(record.value)});
   }
   function savePartialPayment(record:TxRecord){
     if(paymentWriteInFlight.current) return;
     const remaining=utangRemaining(record.value),paid=round2(partialAmount);
     if(!Number.isFinite(paid)||paid<=0){showErrorToast('Enter an amount greater than zero.');return;}
     if(paid>remaining){showErrorToast(`Partial payment cannot be more than the remaining ${peso(remaining)}.`);return;}
-    setPaymentError('');setPendingPayment({kind:'utang',record,principal:paid});
+    setPaymentError('');setPaymentWallet(defaultReceivingWallet(record.value));setPendingPayment({kind:'utang',record,principal:paid});
   }
   async function confirmReceivedPayment(){
     if(!pendingPayment) return;
@@ -953,9 +1008,9 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
     await runPaymentWrite(async()=>{
       setPaymentError('');
       if(request.kind==='upfront'){
-        await persistTransactionEntry({...request,tx:{...request.tx,paymentConfirmedAt:Date.now()}},true);
+        await persistTransactionEntry({...request,tx:{...withReceivedPayment(request.tx,paymentWallet,request.previous?.value||null),paymentConfirmedAt:Date.now()}},true);
       }else{
-        const updated:Tx=withUtangPayment(request.record.value,request.principal);
+        const updated:Tx=withUtangPayment(request.record.value,request.principal,paymentWallet);
         const fullyPaid=updated.utangStatus==='paid';
         if(fullyPaid) updated.paymentConfirmedAt=Date.now();
         // Only receipts change for an already-released Utang. The
@@ -987,7 +1042,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
     },setTipError);
   }
   async function saveTransaction(keepOpen=false,forceDuplicate=false){
-    if(paymentWriteInFlight.current||pendingPayment||tipPrompt||pendingRelease) return;
+    if(paymentWriteInFlight.current||pendingPayment||tipPrompt||pendingRelease||pendingCorrection) return;
     if(!Number.isFinite(fAmount)||round2(fAmount)<=0){showErrorToast('Enter an amount greater than zero.');return;}
     if(!Number.isFinite(fFee)||fFee<0){showErrorToast('Enter a valid fee of zero or more.');return;}
     if(fType==='Top-Up'&&editing&&txTip(editing.value)>0){showErrorToast('Remove the recorded tip from Transaction detail before changing this sale to a provider top-up.');return;}
@@ -1007,14 +1062,14 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
     const history=editing&&editing.value.amount!==fAmount?[...(editing.value.history||[]),{oldAmount:editing.value.amount,newAmount:fAmount,time:fTime,date:fDate}]:editing?.value.history;
     const nextPaidAmount=isUtangTx?formPaidPrincipal:editing?.value.paidAmount??0;
     const status=isUtangTx?(nextPaidAmount>=fAmount&&nextPaidAmount>0?'paid':'unpaid'):undefined;
-    const tx:Tx={type:fType,network:fType==='Top-Up'?'External Provider':fType==='E-Load'?fNetwork:'Main Wallet',provider:fType==='Top-Up'?'External Provider':'Main Wallet',amount:fAmount,fee:fFee,tip:existingFormTip,tipWallet:fType==='Top-Up'?undefined:editing?txTipWallet(editing.value):defaultTipWallet(fType),selling:fType==='E-Load'?fAmount:0,discount:fType==='E-Load'?round2(fDiscount):0,eloadKind:fType==='E-Load'?fEloadKind:undefined,promoName:fType==='E-Load'&&fEloadKind==='promo'?fPromoName.trim():undefined,promoDetails:fType==='E-Load'&&fEloadKind==='promo'?fPromoDetails.trim():undefined,promoValidity:fType==='E-Load'&&fEloadKind==='promo'?fPromoValidity.trim():undefined,phone,customerName:phone?custName:'',payment:fType==='Cash Out'?'Main Wallet':'Cash',notes:fNotes,date:fDate,time:fTime,createdAt:editing?editing.value.createdAt:Date.now(),sample:editing?editing.value.sample:false,utang:isUtangTx,utangStatus:status,promiseDate:isUtangTx?fPromiseDate||undefined:editing?.value.promiseDate,paidAmount:nextPaidAmount,history,paymentConfirmedAt:status==='unpaid'?undefined:editing?.value.paymentConfirmedAt,tipRecordedAt:editing?.value.tipRecordedAt,utangReleased:editing?.value.utangReleased,utangReleaseRecordedAt:editing?.value.utangReleaseRecordedAt,utangReleaseMode:editing?.value.utangReleaseMode};
+    const tx:Tx={paymentAllocation:fType==='Top-Up'?undefined:editing?.value.paymentAllocation,paymentWalletCorrections:editing?.value.paymentWalletCorrections,type:fType,network:fType==='Top-Up'?'External Provider':fType==='E-Load'?fNetwork:'Main Wallet',provider:fType==='Top-Up'?'External Provider':'Main Wallet',amount:fAmount,fee:fFee,tip:existingFormTip,tipWallet:fType==='Top-Up'?undefined:editing?txTipWallet(editing.value):defaultTipWallet(fType),selling:fType==='E-Load'?fAmount:0,discount:fType==='E-Load'?round2(fDiscount):0,eloadKind:fType==='E-Load'?fEloadKind:undefined,promoName:fType==='E-Load'&&fEloadKind==='promo'?fPromoName.trim():undefined,promoDetails:fType==='E-Load'&&fEloadKind==='promo'?fPromoDetails.trim():undefined,promoValidity:fType==='E-Load'&&fEloadKind==='promo'?fPromoValidity.trim():undefined,phone,customerName:phone?custName:'',payment:fType==='Cash Out'?'Main Wallet':'Cash',notes:fNotes,date:fDate,time:fTime,createdAt:editing?editing.value.createdAt:Date.now(),sample:editing?editing.value.sample:false,utang:isUtangTx,utangStatus:status,promiseDate:isUtangTx?fPromiseDate||undefined:editing?.value.promiseDate,paidAmount:nextPaidAmount,history,paymentConfirmedAt:status==='unpaid'?undefined:editing?.value.paymentConfirmedAt,tipRecordedAt:editing?.value.tipRecordedAt,utangReleased:editing?.value.utangReleased,utangReleaseRecordedAt:editing?.value.utangReleaseRecordedAt,utangReleaseMode:editing?.value.utangReleaseMode};
     if(txTip(tx)>0&&!canRecordTip(tx)){showErrorToast('Remove the recorded tip from Transaction detail before reopening this payment as unpaid Utang.');return;}
     const entry:TransactionEntry={id:editing?.id||`tx-${uid()}`,tx,previous:editing,keepOpen};
     if(needsUtangRelease(tx)&&(!editing||!editing.value.utang||editing.value.utangStatus==='paid')){
       setReleaseError('');setReleaseMode('');setPendingRelease({kind:'entry',entry});return;
     }
     if(canRecordTip(tx)&&(!editing||!canRecordTip(editing.value))){
-      setPaymentError('');setPendingPayment({kind:'upfront',...entry});return;
+      setPaymentError('');setPaymentWallet(defaultReceivingWallet(editing?.value.utang?editing.value:tx));setPendingPayment({kind:'upfront',...entry});return;
     }
     await runPaymentWrite(()=>persistTransactionEntry(entry),message=>{
       if(message.includes('changed or was removed on another device')) showToast(message,'error','Reload latest',()=>{void reloadRecords();setShowTx(false);});
@@ -1117,10 +1172,18 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
     setSaving(false);
   }
   function exportAllCSV(){
-    const rows:string[][] = [['Date','Type','Network','Load Kind','Promo Name','Promo Inclusions','Promo Validity','Customer','Number','Amount','Fee','Profit','Notes','Status','Promise to Pay','Paid Amount','Remaining','Extra / Tip','Extra received in','Provider discount','Utang released','Release review action','Release recorded at','Customer payments recorded','Still due including fee'].map(String) as any];
-    records.forEach(r=>{ const v=r.value; rows.push([v.date, v.type, v.network||'', v.eloadKind||'', v.promoName||'', v.promoDetails||'', v.promoValidity||'', v.customerName||'', v.phone, String(v.amount), String(v.fee||0), String(txProfit(v)), v.notes||'', v.utang ? (v.utangStatus==='paid'?'Paid (Utang)':utangPromiseLabel(v)) : 'Paid', v.promiseDate||'', String(v.paidAmount||0), String(v.utang?utangRemaining(v):0), String(txTip(v)), txTip(v)>0?walletLabel(txTipWallet(v)):'',String(eLoadDiscount(v)),v.utang?(v.utangReleased===true?'Yes':needsUtangRelease(v)?'Needs review':'Settled (legacy)'):'',v.utangReleaseMode||'',v.utangReleaseRecordedAt?new Date(v.utangReleaseRecordedAt).toISOString():'',String(round2(collectedPayments(v).cash+collectedPayments(v).maribank)),String(utangAmountDue(v))]); });
-    walletAdjustments.forEach(a=>{const v=a.value; rows.push([v.date,v.mode==='deduct'?'Wallet Deduction':'Wallet Addition',v.wallet,'','','','','','',String(v.mode==='deduct'?-v.amount:v.amount),'','',`${v.category}${v.note?` — ${v.note}`:''}`,'Recorded','','','','','','','','','','','']);});
-    downloadCSV('eload-records.csv', rows as any);
+    const headers=['Date','Type','Network','Load Kind','Promo Name','Promo Inclusions','Promo Validity','Customer','Number','Amount','Fee','Profit','Notes','Status','Promise to Pay','Paid Amount','Remaining','Extra / Tip','Extra received in','Provider discount','Utang released','Release review action','Release recorded at','Customer payments recorded','Still due including fee','Cash receipts recorded','Main Wallet receipts recorded','Full payment confirmed at','Payment wallet corrected at'];
+    const rows:string[][]=[headers];
+    records.forEach(({value:v})=>{
+      const received=collectedPayments(v),lastCorrection=v.paymentWalletCorrections?.slice(-1)[0];
+      rows.push([v.date,v.type,v.network||'',v.eloadKind||'',v.promoName||'',v.promoDetails||'',v.promoValidity||'',v.customerName||'',v.phone,String(v.amount),String(v.fee||0),String(txProfit(v)),v.notes||'',v.utang?(v.utangStatus==='paid'?'Paid (Utang)':utangPromiseLabel(v)):'Paid',v.promiseDate||'',String(v.paidAmount||0),String(v.utang?utangRemaining(v):0),String(txTip(v)),txTip(v)>0?walletLabel(txTipWallet(v)):'',String(eLoadDiscount(v)),v.utang?(v.utangReleased===true?'Yes':needsUtangRelease(v)?'Needs review':'Settled (legacy)'):'',v.utangReleaseMode||'',v.utangReleaseRecordedAt?new Date(v.utangReleaseRecordedAt).toISOString():'',String(round2(received.cash+received.maribank)),String(utangAmountDue(v)),String(received.cash),String(received.maribank),v.paymentConfirmedAt?new Date(v.paymentConfirmedAt).toISOString():'',lastCorrection?new Date(lastCorrection.recordedAt).toISOString():'']);
+    });
+    walletAdjustments.forEach(({value:v})=>{
+      const row=[v.date,v.mode==='deduct'?'Wallet Deduction':'Wallet Addition',v.wallet,'','','','','','',String(v.mode==='deduct'?-v.amount:v.amount),'','',`${v.category}${v.note?` — ${v.note}`:''}`,'Recorded'];
+      while(row.length<headers.length) row.push('');
+      rows.push(row);
+    });
+    downloadCSV('eload-records.csv',rows);
     showToast('CSV exported.');
   }
   async function importStatementSales(file:File){
@@ -1239,11 +1302,11 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
       const isCustomerInput = !!(active && active.getAttribute && active.getAttribute('data-customer-input')==='true');
       const isTextTyping = !!(active && ((active.tagName==='TEXTAREA') || (active.tagName==='INPUT' && (active as HTMLInputElement).type==='text') || active.tagName==='SELECT' || active.isContentEditable));
       const isButton = !!(active && active.tagName==='BUTTON');
-      const anySheet = showTx || detail || customerDetail || showCustomerForm || showWalletAction || showEOD || addNameTarget || showHelp || showServices || pendingPayment || tipPrompt || pendingRelease;
+      const anySheet = showTx || detail || customerDetail || showCustomerForm || showWalletAction || showEOD || addNameTarget || showHelp || showServices || pendingPayment || tipPrompt || pendingRelease || pendingCorrection;
       const key = e.key;
       const lower = key.toLowerCase();
-      if(pendingPayment||tipPrompt||pendingRelease){
-        if(key==='Escape'){e.preventDefault();if(!saving){if(pendingRelease) cancelReleaseConfirmation();else if(tipPrompt) closeTipModal();else cancelPaymentConfirmation();}}
+      if(pendingPayment||tipPrompt||pendingRelease||pendingCorrection){
+        if(key==='Escape'){e.preventDefault();if(!saving){if(pendingCorrection) cancelPaymentWalletCorrection();else if(pendingRelease) cancelReleaseConfirmation();else if(tipPrompt) closeTipModal();else cancelPaymentConfirmation();}}
         // Let native buttons and the tip form handle Enter. Do not trigger
         // background saves, navigation, shortcuts, or the service chooser.
         return;
@@ -1379,7 +1442,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
     };
     window.addEventListener('keydown', onKeyDown);
     return ()=> window.removeEventListener('keydown', onKeyDown);
-  }, [pendingPayment,tipPrompt,pendingRelease,saving,showTx, detail, customerDetail, showCustomerForm, showWalletAction, showEOD, addNameTarget, confirmDelete, confirmDeleteCustomer, confirmClear, showHelp, shortcutsOn, tab, filtered, sortedCustomers, selectedTxId, selectedCustomerId, fType, fAmount, last7, selectedDay, meta, showServices, dashboardRecent, recentIndex, expectedCash, startingFloat]);
+  }, [pendingPayment,tipPrompt,pendingRelease,pendingCorrection,saving,showTx, detail, customerDetail, showCustomerForm, showWalletAction, showEOD, addNameTarget, confirmDelete, confirmDeleteCustomer, confirmClear, showHelp, shortcutsOn, tab, filtered, sortedCustomers, selectedTxId, selectedCustomerId, fType, fAmount, last7, selectedDay, meta, showServices, dashboardRecent, recentIndex, expectedCash, startingFloat]);
 
   const reminderPreview = useMemo(()=>utangReminder ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(utangReminderSvg(utangReminder.value,meta.businessName,utangReminderTheme,utangReminderAll ? records.filter(r=>r.value.utang && r.value.utangStatus!=='paid' && digitsOnly(r.value.phone||'')===digitsOnly(utangReminder.value.phone||'')) : null))}` : '',[utangReminder,meta.businessName,records,utangReminderTheme]);
 
@@ -1678,6 +1741,19 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
 
       {showServices && <ServicesModal highlight={servicesHighlight} onHighlight={setServicesHighlight} onClose={()=>setShowServices(false)} onSelect={(t)=>{ setShowServices(false); openNew(t); }} />}
 
+      {pendingCorrection && correctionCandidate && <Sheet title="Correct receiving wallet" onClose={cancelPaymentWalletCorrection} closeDisabled={saving}>
+        <p className="text-sm font-bold text-[var(--muted)]">Move customer money already recorded in the wrong wallet. This is not another collection: the paid amount, debt, fee, profit, sale date, and sent / released service stay unchanged.</p>
+        <div className="mt-3 rounded-2xl bg-[var(--surface2)] p-4"><p className="font-extrabold">{displayNamePhone(pendingCorrection.value.customerName,pendingCorrection.value.phone)}</p><p className="mt-1 text-sm font-bold text-[var(--muted)]">{pendingCorrection.value.type} • {dateLabel(pendingCorrection.value.date)}</p><dl className="mt-3 space-y-2 text-sm font-bold"><Row k="Currently recorded receipts" v={paymentsLabel(correctionReceived)}/><Row k="Total already collected (including tip)" v={peso(round2(correctionReceived.cash+correctionReceived.maribank))}/></dl></div>
+        <label htmlFor={`${paymentPlanName}-corrected-wallet`} className="label mt-4 block">Actual receiving wallet</label><select id={`${paymentPlanName}-corrected-wallet`} value={correctionWallet} disabled={saving} onChange={event=>{setCorrectionWallet(event.target.value as keyof Wallets);setCorrectionAcknowledged(false);setCorrectionError('');}} className="field mt-1"><option value="cash">Cash on Hand</option><option value="maribank">Main Wallet</option></select>
+        <p className="mt-2 text-xs font-bold text-[var(--muted)]">This moves ALL receipts already collected for this transaction, including its collected extra / tip. If earlier partial payments belong in different wallets, do not consolidate them here. To move only a tip, use Edit recorded tip instead.</p>
+        <dl aria-label="Correction wallet changes" className="mt-4 space-y-2 rounded-2xl bg-[var(--green-soft)] p-3 text-sm font-bold"><Row k="Cash on Hand change" v={signedPeso(correctionMove.cash)}/><Row k="Main Wallet change" v={signedPeso(correctionMove.maribank)}/><Row k="Cash after correction" v={peso(round2(meta.wallets.cash+correctionMove.cash))}/><Row k="Main after correction" v={peso(round2(meta.wallets.maribank+correctionMove.maribank))}/></dl>
+        {!correctionChanges && <p className="mt-3 text-sm font-bold text-[var(--muted)]">These receipts are already recorded in the selected wallet. Nothing needs moving.</p>}
+        <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-[var(--line)] p-3"><input type="checkbox" checked={correctionAcknowledged} disabled={saving||!correctionChanges} onChange={event=>setCorrectionAcknowledged(event.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--green-solid)]"/><span className="text-sm font-bold">I verified these receipts arrived in {walletLabel(correctionWallet)} and have NOT already corrected this wallet mistake manually.</span></label>
+        <p className="mt-3 text-xs font-bold text-[var(--muted)]">Requires an internet connection and a clear offline financial queue. This changes only the receiving wallet; it does not rebuild old balances or resolve an earlier cash-count mismatch.</p>
+        {correctionError && <div className="mt-3"><p role="alert" className="text-sm font-bold text-[var(--red)]">{correctionError}</p><button type="button" disabled={saving} onClick={()=>void reloadPaymentWalletCorrection()} className="mt-2 min-h-[44px] rounded-xl border border-[var(--line)] px-3 text-sm font-black">Reload latest records</button></div>}
+        <div className="sheet-save-bar mt-5 grid gap-2" style={{position:'static'}}><button type="button" disabled={saving||!correctionAcknowledged||!correctionChanges} onClick={()=>void confirmPaymentWalletCorrection()} className="big-btn w-full bg-[var(--green-solid)] text-white">{saving?'Correcting…':'Confirm wallet correction'}</button><button type="button" disabled={saving} onClick={cancelPaymentWalletCorrection} className="big-btn w-full border border-[var(--line)]">Cancel — keep recorded wallets</button></div>
+      </Sheet>}
+
       {pendingRelease && releaseRecord && <Sheet title="Confirm sent / released" onClose={cancelReleaseConfirmation} closeDisabled={saving}>
         <p className="text-sm font-bold text-[var(--muted)]">Record a service you already completed outside this app. This does not send money or deliver load. Customer payment remains Utang; no unpaid principal or fee is added to the receiving wallet.</p>
         <div className="mt-3 rounded-2xl bg-[var(--surface2)] p-4"><p className="font-extrabold">{displayNamePhone(releaseRecord.customerName,releaseRecord.phone)}</p><p className="mt-1 text-sm font-bold">{releaseRecord.type} • {peso(releaseRecord.amount)}{releaseRecord.type==='E-Load'?` • provider discount ${peso(eLoadDiscount(releaseRecord))}`:''}</p><p className="mt-2 text-sm font-bold">Still due including unpaid fee: {peso(utangAmountDue(releaseRecord))} • principal {peso(utangRemaining(releaseRecord))}</p></div>
@@ -1692,7 +1768,9 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
 
       {pendingPayment && !tipPrompt && pendingReceipt && pendingCustomer && <Sheet title="Confirm payment received" onClose={cancelPaymentConfirmation} closeDisabled={saving}>
         <p className="font-bold text-sm text-[var(--muted)]">Only confirm after you, the owner, have verified the customer payment. This records money already received; it does not charge the customer.</p>
-        <div className="rounded-2xl bg-[var(--surface2)] p-4 mt-3"><p className="font-extrabold">{displayNamePhone(pendingCustomer.customerName,pendingCustomer.phone)}</p><p className="text-xs font-bold text-[var(--muted)] mt-1">{pendingPayment.kind==='utang'?'Utang payment':pendingCustomer.utang?'Utang — fully settled':'Upfront payment'} • {pendingCustomer.type}</p><dl className="space-y-2 text-sm font-bold mt-3"><Row k={pendingPayment.kind==='utang'||previouslyReceived?'Principal paid now':'Principal'} v={peso(pendingReceipt.amount)}/><Row k="Regular fee" v={peso(pendingReceipt.fee)}/><Row k="Payment to confirm (no tip)" v={peso(customerTotal(pendingReceipt))}/><Row k="Received in" v={walletLabel(defaultTipWallet(pendingReceipt.type))}/></dl></div>
+        <div className="rounded-2xl bg-[var(--surface2)] p-4 mt-3"><p className="font-extrabold">{displayNamePhone(pendingCustomer.customerName,pendingCustomer.phone)}</p><p className="text-xs font-bold text-[var(--muted)] mt-1">{pendingPayment.kind==='utang'?'Utang payment':pendingCustomer.utang?'Utang — fully settled':'Upfront payment'} • {pendingCustomer.type}</p><dl className="space-y-2 text-sm font-bold mt-3"><Row k={pendingPayment.kind==='utang'||previouslyReceived?'Principal paid now':'Principal'} v={peso(pendingReceipt.amount)}/><Row k="Regular fee" v={peso(pendingReceipt.fee)}/><Row k="Payment to confirm (no tip)" v={peso(customerTotal(pendingReceipt))}/><Row k="Received in" v={walletLabel(paymentWallet)}/></dl></div>
+        <label htmlFor={`${paymentPlanName}-received-wallet`} className="label block mt-4">Payment received in</label><select id={`${paymentPlanName}-received-wallet`} value={paymentWallet} disabled={saving||customerTotal(pendingReceipt)===0} onChange={event=>{setPaymentWallet(event.target.value as keyof Wallets);setPaymentError('');}} className="field mt-1"><option value="cash">Cash on Hand</option><option value="maribank">Main Wallet</option></select>
+        <p className="text-xs font-bold text-[var(--muted)] mt-2">Choose where this payment actually arrived. Cash In, E-Load, and Utang collections default to cash; upfront Cash Out defaults to Main Wallet. Earlier partial payments keep their recorded wallets. An optional new tip defaults to this selection and can be changed separately.</p>
         {pendingCustomer.utangReleased===true && <p className="mt-3 rounded-xl bg-[var(--surface2)] p-3 text-sm font-bold">The outgoing amount was already recorded. This confirmation adds only the customer payment received; it does not deduct the sent/released amount again.</p>}
         {needsUtangRelease(pendingCustomer) && <p className="mt-3 rounded-xl border border-[var(--line)] p-3 text-sm font-bold">Older Utang: confirming payment also books its still-unrecorded outgoing portion. If you already deducted that amount manually, go back and Review sent / released first to avoid another deduction.</p>}
         {pendingPayment.kind==='utang' && <p className="text-sm font-bold mt-3">Remaining principal after this payment: {peso(Math.max(0,round2(utangRemaining(pendingPayment.record.value)-pendingPayment.principal)))}</p>}
@@ -1716,7 +1794,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         </form>
       </Sheet>}
 
-      {showTx && !pendingPayment && !tipPrompt && !pendingRelease && <Sheet onClose={()=>setShowTx(false)} title={editing?'Edit transaction': fType==='Top-Up'?'Top-Up via External Provider':'Add transaction'}>
+      {showTx && !pendingPayment && !tipPrompt && !pendingRelease && !pendingCorrection && <Sheet onClose={()=>setShowTx(false)} title={editing?'Edit transaction': fType==='Top-Up'?'Top-Up via External Provider':'Add transaction'}>
         <div data-arrow-group="transaction-type" className="flex flex-wrap gap-2">{(['E-Load','Cash In','Cash Out','Top-Up'] as const).map(t=> <button key={t} onClick={()=>{setFType(t); if(t!=='E-Load') setFDiscount(0); if(t==='Top-Up'){setFAmount(1000); setFFee(meta.palawanFee); setFNotes('Top-Up via External Provider');} else if(t==='E-Load'){setFAmount(100); setFFee(autoFee(t,100));} else {setFAmount(100); setFFee(autoFee(t,100));}}} className={`flex-1 min-h-[48px] rounded-xl font-black text-[13px] px-2 ${fType===t? t==='Top-Up'?'bg-[var(--green-solid)] text-white':'bg-[var(--strong)] text-[var(--on-strong)]':'bg-[var(--surface2)] border border-[var(--line)]'}`}>{t==='Top-Up'?'Top-Up via External Provider':t}</button>)}</div>
         {fType==='Top-Up' && <div className="rounded-2xl p-3 mt-3 font-bold text-sm" style={{background:'var(--green-soft)', color:'var(--green)'}}>Top-Up via External Provider — Cash on Hand → Main Wallet. External Provider is only a top-up source, not a customer wallet.</div>}
         <CustomerSuggest query={fCustomerQuery} onQuery={handleCustomerQuery} customers={customers} stats={customerStats} recentPhones={recentCustomerPhones} frequent={frequentCustomers} label={fType==='Top-Up'?'Customer (optional) — name or number':'Customer — type name or number'} required={fType!=='Top-Up'} onPick={(c)=>setCustomerFromRecord(c)} onSaveNew={async(parsed)=>{ const realName=isRealName(parsed.name, parsed.phone)?parsed.name:''; const created:any=await createCustomerRow({name:realName, phone:parsed.phone, notes:'', createdAt:Date.now(), totalTransactions:0, totalAmount:0}); await reloadRecords(); const rec=customers.find(x=>x.id===created.id) || {id:created.id, value:{name:realName, phone:parsed.phone, notes:'', createdAt:Date.now(), totalTransactions:0, totalAmount:0}}; setCustomerFromRecord(rec as CustomerRecord); }} />
@@ -1769,7 +1847,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
           <div className="rounded-2xl bg-[var(--green-soft)] p-3 mt-3 font-bold text-sm space-y-1" aria-label="Payment summary">
             <p>Regular fee: <b>{peso(fFee)}</b>{existingFormTip>0 && <> • Recorded tip: <b>{peso(existingFormTip)}</b></>}</p>
             <p>Customer pays total: <b><output aria-label="Customer total">{peso(customerTotal(formMoney))}</output></b></p>
-            <p>{customerPaymentLabel(formMoney)}</p>
+            <p>{fUnpaidUtang?'Later Utang collections default to Cash on Hand. Choose the actual receiving wallet when payment arrives.':customerPaymentLabel(formMoney)}</p>
             <p>{fType==='E-Load'?`You send ${peso(fAmount)} load${fEloadKind==='promo'?' / promo':''}.`:fType==='Cash In'?`You send ${peso(fAmount)} FULL via Main Wallet.`:`You give ${peso(fAmount)} FULL cash.`}</p>
             {fType==='E-Load' && <p className="text-xs text-[var(--muted)]">Provider discount {peso(fDiscount)} • Actual wallet cost {peso(fAmount-fDiscount)}</p>}
             <p>Total profit: <b><output aria-label="Total profit">{peso(txProfit(formMoney))}</output></b> (fee{fType==='E-Load'?' + discount':''}{existingFormTip>0?' + recorded tip':''})</p>
@@ -1785,14 +1863,14 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         <p className="text-xs font-bold text-[var(--muted)] text-center mt-2">{fType==='Top-Up'?'Main Wallet and Cash on Hand update automatically.':fUnpaidUtang?'Confirm the completed send/release to save this Utang. Customer payment and any tip are recorded later.':'Next: confirm the customer payment received, then record an optional tip.'} New name + number saves as a customer automatically.</p>
       </Sheet>}
 
-      {detail && !pendingPayment && !tipPrompt && !pendingRelease && <Sheet onClose={()=>setDetail(null)} title="Transaction detail">
+      {detail && !pendingPayment && !tipPrompt && !pendingRelease && !pendingCorrection && <Sheet onClose={()=>setDetail(null)} title="Transaction detail">
         <div className="rounded-2xl bg-[var(--surface2)] p-4"><p className="font-display font-extrabold text-3xl">{peso(detail.value.amount)}</p><p className="font-bold text-[var(--muted)]">{detail.value.type==='Top-Up'?'Top-Up via External Provider':detail.value.type} • {detail.value.type==='Top-Up'?'External Provider → Main Wallet':`${detail.value.network} • via Main Wallet`} • {dateLabel(detail.value.date)} at {detail.value.time}</p><p className="font-black text-[var(--green)] mt-1">{detail.value.type==='Top-Up' ? `External Provider fee: ${peso(detail.value.fee||0)}` : detail.value.type==='E-Load' ? `Customer fee ${peso(detail.value.fee||0)} + provider discount ${peso(eLoadDiscount(detail.value))} + extra / tip ${peso(txTip(detail.value))} = ${peso(txProfit(detail.value))} total profit` : `Regular fee ${peso(detail.value.fee||0)} + extra / tip ${peso(txTip(detail.value))} = ${peso(txProfit(detail.value))} total profit`}</p>{detail.value.utang && <><p className="font-black text-[13px] mt-1"><span className={`px-2 py-1 rounded-full ${detail.value.utangStatus==='paid'?'bg-[var(--green-soft)] text-[var(--green)]': utangPromiseStatus(detail.value)==='overdue'?'bg-[var(--red-soft)] text-[var(--red)]': utangPromiseStatus(detail.value)==='due-today'?'bg-[var(--amber-soft)] text-[var(--amber)]':'bg-[var(--amber-soft)] text-[var(--amber)]'}`}>Utang — {utangPromiseLabel(detail.value)}</span></p><p className="text-sm font-bold mt-2">Promise to Pay: {utangPromiseDateLabel(detail.value)}{detail.value.promiseDate ? ` • ${fullDate(detail.value.promiseDate)}` : ''}</p>{detail.value.utangStatus!=='paid' && <p className="text-sm font-bold">Total {peso(detail.value.amount)} • Paid {peso(detail.value.paidAmount||0)} • Remaining {peso(utangRemaining(detail.value))}</p>}</>}{detail.value.history && detail.value.history.length>0 && <div className="mt-3 rounded-xl bg-[var(--surface)] p-3 border border-[var(--line)]"><p className="text-xs font-black uppercase tracking-wide text-[var(--muted)]">Edit history</p>{detail.value.history.map((h,i)=><p key={i} className="text-sm font-bold mt-1">Edited: {peso(h.oldAmount)} → {peso(h.newAmount)}, {h.date} {h.time}</p>)}</div>}</div>
         {(() => { const cust = customerByPhone.get(digitsOnly(detail.value.phone||'')); const showDeleted = !cust && isRealName(detail.value.customerName, detail.value.phone) && !!detail.value.phone; const hasName = cust ? isRealName(cust.value.name, detail.value.phone) : isRealName(detail.value.customerName, detail.value.phone); return <div className="rounded-2xl border border-[var(--line)] p-3 mt-3 flex items-center gap-3"><CustomerAvatar name={cust?.value.name || detail.value.customerName} phone={detail.value.phone} /><div className="flex-1 min-w-0"><p className="font-extrabold truncate">{showDeleted?'Deleted Customer': displayNameOnly(cust?.value.name || detail.value.customerName, detail.value.phone) || 'No customer'}</p><p className="text-xs font-bold text-[var(--muted)]">{hasName && detail.value.phone?formatPhone(detail.value.phone):''}{cust?.value.notes?`${hasName?' • ':''}${cust.value.notes}`:''}</p></div>{!hasName && !showDeleted && detail.value.phone && <button onClick={()=>openAddName(detail.value.phone)} className="min-h-[40px] px-3 rounded-full bg-[var(--orange-soft)] border border-[var(--orange-border)] text-[var(--orange)] font-black text-xs shrink-0">+ Add Name</button>}{cust && <button onClick={()=>{ setDetail(null); setCustomerDetail(cust); }} className="min-h-[44px] px-3 rounded-xl bg-[var(--strong)] text-[var(--on-strong)] font-black text-xs shrink-0">View Customer</button>}</div> })()}
         {needsUtangRelease(detail.value) && <section className="mt-4 rounded-2xl border border-[var(--line)] bg-[var(--surface2)] p-3"><h3 className="font-extrabold">Review sent / released amount</h3><p className="mt-1 text-sm font-bold text-[var(--muted)]">This older Utang did not record the entire outgoing amount before payment. If you already delivered the service, review whether the missing deduction still needs applying or was already included in a manual balance correction.</p><button type="button" disabled={saving} onClick={()=>reviewUtangRelease(detail)} className="big-btn mt-3 w-full border border-[var(--line)]">Review sent / released</button></section>}
         {detail.value.utang && detail.value.utangReleased===true && <p className="mt-4 rounded-2xl bg-[var(--green-soft)] p-3 text-sm font-bold">Sent / released amount recorded{detail.value.utangReleaseMode==='already-recorded'?' against an existing manual deduction / balance correction':''}. Customer payments do not deduct that outgoing amount again.</p>}
         <dl className="mt-4 space-y-2 text-sm font-bold">
           <Row k="Provider" v={detail.value.type==='Top-Up'?'External Provider (top-up source)':'Main Wallet (main app)'}/>
-          <Row k="Regular payment" v={detail.value.payment}/><Row k="Phone" v={detail.value.phone?formatPhone(detail.value.phone):'—'}/><Row k="Notes" v={detail.value.notes||'—'}/>
+          <Row k="Regular payment" v={detail.value.type==='Top-Up'?detail.value.payment:paymentMethodLabel(detail.value)}/><Row k="Phone" v={detail.value.phone?formatPhone(detail.value.phone):'—'}/><Row k="Notes" v={detail.value.notes||'—'}/>
           {detail.value.utang && <><Row k="Promise to Pay" v={detail.value.promiseDate ? fullDate(detail.value.promiseDate) : 'No date yet'}/><Row k="Utang Status" v={`${utangPromiseLabel(detail.value)} • Paid ${peso(detail.value.paidAmount||0)} • Remaining ${peso(utangRemaining(detail.value))}`}/></>}
           {detail.value.paymentConfirmedAt && <Row k="Full payment confirmed" v={new Date(detail.value.paymentConfirmedAt).toLocaleString('en-PH')}/>}
           <Row k="Regular fee" v={peso(detail.value.fee||0)}/>
@@ -1805,6 +1883,8 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         </dl>
         <div className="flex gap-2 mt-4 flex-wrap"><button onClick={()=>toggleFavoriteForTx(detail)} className="min-h-[44px] px-3 rounded-xl border border-[var(--line)] font-black text-sm flex items-center gap-1.5"><Star size={16} fill={favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'currentColor':'none'}/> {favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'Favorited':'Add to Favorites'}</button><button onClick={()=>repeatTx(detail)} className="min-h-[44px] px-3 rounded-xl border border-[var(--line)] font-black text-sm">Repeat</button>{detail.value.utang && detail.value.utangStatus!=='paid' && <button onClick={()=>{setUtangReminderAll(false); setUtangReminder(detail); setDetail(null);}} className="min-h-[44px] px-3 rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-sm flex items-center gap-1.5"><Share2 size={16}/> Share reminder</button>}{detail.value.utang && detail.value.utangStatus!=='paid' && <button onClick={()=>markUtangPaid(detail)} className="min-h-[44px] px-3 rounded-xl bg-[var(--green-solid)] text-white font-black text-sm">Mark Paid</button>}</div>
         {detail.value.utang && detail.value.utangStatus!=='paid' && <div className="rounded-2xl border border-[var(--line)] p-3 mt-4"><p className="font-extrabold text-sm">Partial Payment — “tomorrow partial”</p><p className="text-xs font-bold text-[var(--muted)] mt-0.5">Remaining principal {peso(utangRemaining(detail.value))}. Enter principal only; the confirmation adds its share of the fee. Promise date stays unless you Edit it.</p>{!showPartial ? <button onClick={()=>{setPartialAmount(utangRemaining(detail.value)); setShowPartial(true);}} className="min-h-[44px] px-4 rounded-xl bg-[var(--purple-solid)] text-white font-black text-sm mt-3">Partial Payment</button> : <div onKeyDown={(e)=>{ if(e.key==='Enter' && !((e.target as HTMLElement).tagName==='BUTTON')){ e.preventDefault(); savePartialPayment(detail); } }}><label className="label block mt-3">Amount paid now</label><input type="number" value={partialAmount} onChange={e=>setPartialAmount(Number(e.target.value))} className="field mt-1" inputMode="decimal" aria-label="Amount paid now"/><p className="text-sm font-bold mt-2">Remaining after this payment: {peso(Math.max(0, round2(utangRemaining(detail.value)-(partialAmount||0))))}</p><div className="flex gap-2 mt-3 flex-wrap"><button disabled={saving} onClick={()=>savePartialPayment(detail)} className="min-h-[44px] px-4 rounded-xl bg-[var(--green-solid)] text-white font-black text-sm flex-1">{saving?'Saving…':'Save Partial Payment'}</button><button onClick={()=>markUtangPaid(detail)} disabled={saving} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Mark Paid Fully</button><button onClick={()=>setShowPartial(false)} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Cancel</button></div></div>}</div>}
+        {hasRecordedPayment(detail.value) && <button type="button" disabled={saving} onClick={()=>reviewPaymentWallet(detail)} className="big-btn w-full mt-3 border border-[var(--line)]"><ArrowLeftRight size={18}/>Correct receiving wallet</button>}
+        {detail.value.paymentWalletCorrections && detail.value.paymentWalletCorrections.length>0 && <section className="mt-3 rounded-2xl bg-[var(--surface2)] p-3"><h3 className="text-sm font-extrabold">Receiving wallet corrections</h3>{detail.value.paymentWalletCorrections.map((entry,index)=><p key={index} className="mt-2 text-xs font-bold text-[var(--muted)]">{new Date(entry.recordedAt).toLocaleString('en-PH')} • {paymentsLabel(entry.from)} → {paymentsLabel(entry.to)}. Total receipts unchanged.</p>)}</section>}
         {canRecordTip(detail.value) && <button type="button" onClick={()=>openTipModal(detail,true)} className="big-btn w-full mt-3 bg-[var(--green-soft)] text-[var(--green)] border border-[var(--line)]"><HandCoins size={18}/>{txTip(detail.value)>0?'Edit recorded tip':'Record extra / tip'}</button>}
         <div className="grid grid-cols-2 gap-2 mt-3"><button onClick={()=>{const r=detail; setDetail(null); openEdit(r);}} className="big-btn bg-[var(--strong)] text-[var(--on-strong)]"><Pencil size={18}/> Edit</button><button onClick={()=>setConfirmDelete(detail)} className="big-btn border-2 border-[var(--red-border)] text-[var(--red)]"><Trash2 size={18}/> Delete</button></div>
         {confirmDelete && <div className="mt-4 rounded-2xl border border-[var(--red-border)] p-3"><p className="font-bold text-sm">Delete this transaction? Wallets will be reversed.</p>{detail.value.utangReleaseMode==='already-recorded' && <p className="mt-2 text-sm font-bold text-[var(--muted)]">This release was reconciled against an earlier manual deduction. Deleting refunds its outgoing amount; do not also reverse that manual deduction.</p>}<div className="flex gap-2 mt-2"><button onClick={()=>deleteTransaction(confirmDelete)} className="min-h-[44px] px-4 rounded-xl bg-[var(--red-solid)] text-white font-black text-sm">Yes, delete</button><button onClick={()=>setConfirmDelete(null)} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Cancel</button></div></div>}

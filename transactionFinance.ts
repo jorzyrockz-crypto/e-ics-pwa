@@ -1,7 +1,7 @@
 export type TxType = 'E-Load' | 'Cash In' | 'Cash Out' | 'Top-Up';
 export type Wallets = { cash: number; maribank: number };
 
-// Optional tip fields keep older transactions and backups compatible.
+// Optional receipt/tip fields keep older transactions and backups compatible.
 export type TransactionMoney = {
   type: TxType;
   amount: number;
@@ -10,6 +10,11 @@ export type TransactionMoney = {
   discount?: number;
   tip?: number;
   tipWallet?: keyof Wallets;
+  // Allocation of confirmed principal + fee, excluding the separately routed tip.
+  // Stored in currency units at collection. Proportional allocation also keeps
+  // ordinary amount/fee edits reversible, without moving all earlier partial
+  // collections to the wallet selected for the newest payment.
+  paymentAllocation?: Wallets;
   utang?: boolean;
   utangStatus?: 'unpaid' | 'paid';
   paidAmount?: number;
@@ -20,10 +25,33 @@ export type TransactionMoney = {
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;
 export const defaultTipWallet = (type: TxType): keyof Wallets => type === 'Cash Out' ? 'maribank' : 'cash';
+// Defaults for a NEW confirmation only. Do not apply this to legacy receipts:
+// older Cash Out Utang collections were booked to Main Wallet, not cash.
+export const defaultReceivingWallet = (tx: Pick<TransactionMoney, 'type' | 'utang'>): keyof Wallets => tx.utang ? 'cash' : defaultTipWallet(tx.type);
 export const isValidTip = (value: number): boolean => Number.isFinite(value) && value >= 0 && Number.isSafeInteger(Math.round(value * 100));
 export const normalizeTip = (value: unknown): number => typeof value === 'number' && value > 0 && isValidTip(value) ? round2(value) : 0;
 export const txTip = (tx: TransactionMoney): number => tx.type === 'Top-Up' ? 0 : normalizeTip(tx.tip);
 export const txTipWallet = (tx: TransactionMoney): keyof Wallets => tx.tipWallet === 'cash' || tx.tipWallet === 'maribank' ? tx.tipWallet : defaultTipWallet(tx.type);
+
+export function normalizePaymentAllocation(value: unknown): Wallets | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { cash, maribank } = value as Partial<Wallets>;
+  if (typeof cash !== 'number' || typeof maribank !== 'number' || !isValidTip(cash) || !isValidTip(maribank)) return undefined;
+  const allocation = { cash: round2(cash), maribank: round2(maribank) };
+  const total = round2(allocation.cash + allocation.maribank);
+  return total > 0 && isValidTip(total) ? allocation : undefined;
+}
+
+function assertWallet(wallet: keyof Wallets) {
+  if (wallet !== 'cash' && wallet !== 'maribank') throw new Error('Choose Cash on Hand or Main Wallet for this payment.');
+}
+function allocateReceipt(total: number, allocation: Wallets | undefined, fallback: keyof Wallets): Wallets {
+  if (!allocation) return { cash: fallback === 'cash' ? total : 0, maribank: fallback === 'maribank' ? total : 0 };
+  const amount = round2(total);
+  const cash = round2(amount * (allocation.cash / (allocation.cash + allocation.maribank)));
+  // Derive the other leg from the same total so centavos never disappear.
+  return { cash, maribank: round2(amount - cash) };
+}
 
 // A tip is money already received, never part of an unpaid customer's debt.
 // Legacy upfront sales are already recorded as paid; Utang needs an explicit
@@ -32,10 +60,11 @@ export const canRecordTip = (tx: TransactionMoney): boolean => tx.type !== 'Top-
 export function withRecordedTip<T extends TransactionMoney>(tx: T, amount: number, wallet: keyof Wallets): T {
   if (!canRecordTip(tx)) throw new Error('Confirm full customer payment before recording a tip.');
   if (!isValidTip(amount)) throw new Error('Extra / Tip must be zero or a positive amount within the supported range.');
+  assertWallet(wallet);
   return { ...tx, tip: normalizeTip(amount), tipWallet: wallet };
 }
 
-export function withUtangPayment<T extends TransactionMoney>(tx: T, principal: number): T {
+export function withUtangPayment<T extends TransactionMoney>(tx: T, principal: number, wallet: keyof Wallets = defaultReceivingWallet(tx)): T {
   if (!tx.utang || tx.utangStatus === 'paid') throw new Error('This Utang is already paid or is not an unpaid Utang.');
   const total = round2(tx.amount);
   const alreadyPaid = round2(Math.min(total, Math.max(0, tx.paidAmount || 0)));
@@ -45,7 +74,7 @@ export function withUtangPayment<T extends TransactionMoney>(tx: T, principal: n
   // Confirming those records closes the Utang without collecting money again.
   if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(alreadyPaid) || !Number.isFinite(principal) || paidNow < 0 || (paidNow === 0 && remaining > 0) || paidNow > remaining) throw new Error('Payment must be greater than zero and cannot exceed the remaining Utang.');
   const paidAmount = round2(alreadyPaid + paidNow);
-  return { ...tx, paidAmount, utangStatus: paidAmount >= total ? 'paid' : 'unpaid' };
+  return withReceivedPayment({ ...tx, paidAmount, utangStatus: paidAmount >= total ? 'paid' : 'unpaid' }, wallet, tx);
 }
 
 // Use the difference between cumulative paid portions, not independent rounded
@@ -60,12 +89,13 @@ export function utangPaymentPortion<T extends TransactionMoney>(tx: T, principal
 export const eLoadDiscount = (tx: TransactionMoney) => tx.type === 'E-Load' ? Math.min(Math.max(0, round2(tx.discount || 0)), tx.amount) : 0;
 export const txProfit = (tx: TransactionMoney) => tx.type === 'Top-Up' ? -round2(tx.fee || 0) : round2((tx.fee || 0) + eLoadDiscount(tx) + txTip(tx));
 
-// Principal + regular fee keep their existing payment route. Only the extra
-// follows tipWallet, including cash tips on an otherwise digital Cash Out.
+// Missing allocation retains the historical service-based receipt route. Only
+// an explicit collection or correction records a different receiving wallet.
+// Tips remain independently routable, including a cash tip on digital Cash Out.
 export function customerPayments(tx: TransactionMoney): Wallets {
-  const payments: Wallets = { cash: 0, maribank: 0 };
-  if (tx.type === 'Top-Up') return payments;
-  payments[defaultTipWallet(tx.type)] = (tx.type === 'E-Load' ? tx.selling || tx.amount : tx.amount) + (tx.fee || 0);
+  if (tx.type === 'Top-Up') return { cash: 0, maribank: 0 };
+  const total = (tx.type === 'E-Load' ? tx.selling || tx.amount : tx.amount) + (tx.fee || 0);
+  const payments = allocateReceipt(total, normalizePaymentAllocation(tx.paymentAllocation), defaultTipWallet(tx.type));
   payments[txTipWallet(tx)] += txTip(tx);
   return { cash: round2(payments.cash), maribank: round2(payments.maribank) };
 }
@@ -104,6 +134,34 @@ export function collectedTransaction<T extends TransactionMoney>(tx: T): T | nul
 export function collectedPayments(tx: TransactionMoney): Wallets {
   const collected = collectedTransaction(tx);
   return collected ? customerPayments(collected) : { cash: 0, maribank: 0 };
+}
+
+// Book ONLY the new principal + fee to the selected wallet. Earlier partial
+// receipts retain their destinations, even if this payment arrives elsewhere.
+export function withReceivedPayment<T extends TransactionMoney>(tx: T, wallet: keyof Wallets, previous: TransactionMoney | null = null): T {
+  assertWallet(wallet);
+  if (tx.type === 'Top-Up') throw new Error('Provider top-ups do not have customer payment receipts.');
+  const before = previous ? collectedPayments({ ...previous, tip: 0 }) : { cash: 0, maribank: 0 };
+  const after = collectedPayments({ ...tx, tip: 0 });
+  const total = round2(after.cash + after.maribank);
+  const added = round2(total - before.cash - before.maribank);
+  if (!isValidTip(total) || !isValidTip(before.cash) || !isValidTip(before.maribank)) throw new Error('The customer payment total is invalid. Review the amount and fee.');
+  const allocation = added >= 0
+    ? { ...before, [wallet]: round2(before[wallet] + added) }
+    : allocateReceipt(total, normalizePaymentAllocation(before), wallet);
+  return { ...tx, paymentAllocation: normalizePaymentAllocation(allocation), tipWallet: txTip(tx) > 0 ? txTipWallet(tx) : wallet };
+}
+
+// Explicit owner correction: move money ALREADY collected, including its tip,
+// without changing the debt, profit, service release, or total receipts.
+export function withPaymentWalletCorrection<T extends TransactionMoney>(tx: T, wallet: keyof Wallets): T {
+  assertWallet(wallet);
+  const received = collectedPayments(tx);
+  const receivedTotal = round2(received.cash + received.maribank);
+  if (tx.type === 'Top-Up' || !isValidTip(received.cash) || !isValidTip(received.maribank) || !isValidTip(receivedTotal) || receivedTotal <= 0) throw new Error('There is no recorded customer payment to move.');
+  const base = collectedPayments({ ...tx, tip: 0 });
+  const total = round2(base.cash + base.maribank);
+  return { ...tx, paymentAllocation: normalizePaymentAllocation({ cash: wallet === 'cash' ? total : 0, maribank: wallet === 'maribank' ? total : 0 }), tipWallet: wallet };
 }
 
 // paidAmount is principal only. Fees are collected proportionally, so a partial
