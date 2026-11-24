@@ -157,25 +157,50 @@ button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .sidebar-nav-btn:not(.active):hover{background:var(--surface2);color:var(--ink)}
 
 /* Dashboard columns — one HTML, layout via CSS */
-.dashboard-grid{display:flex;flex-direction:column;gap:12px}
-.dash-col{display:flex;flex-direction:column;gap:12px;min-width:0}
+.dashboard-grid{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
+.dash-col{display:flex;flex-direction:column;gap:16px;min-width:0}
 .dash-col > *{margin-top:0!important}
 .favorites-scroll{display:flex;flex-wrap:wrap;gap:8px}
-.quick-actions-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.quick-actions-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .quick-actions-grid > button{width:100%}
 
+/* Claymorphism styles for Revamped Dashboard */
+.clay-kpi-card{position:relative;overflow:hidden;border-radius:22px;padding:16px 18px;border:1px solid var(--line);background:var(--surface);box-shadow:0 4px 16px rgba(18,38,26,.04),inset 0 1px 0 rgba(255,255,255,.9);transition:transform .15s ease,box-shadow .15s ease}
+.clay-kpi-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(18,38,26,.08)}
+.clay-action-btn{display:flex;align-items:center;justify-content:center;gap:10px;min-height:52px;padding:12px 16px;border-radius:18px;font-weight:900;font-size:14px;cursor:pointer;transition:transform .12s ease,filter .12s ease,box-shadow .12s ease;user-select:none;border:1px solid transparent}
+.clay-action-btn:active{transform:scale(.97)}
+.clay-action-btn--eload{background:linear-gradient(135deg,#10b981 0%,#047857 100%);color:#fff;box-shadow:0 6px 16px rgba(4,120,87,.25),inset 0 2px 2px rgba(255,255,255,.35),inset 0 -2px 4px rgba(0,0,0,.15);border-color:#34d399}
+.clay-action-btn--cashin{background:linear-gradient(135deg,#3b82f6 0%,#1d4ed8 100%);color:#fff;box-shadow:0 6px 16px rgba(29,78,216,.25),inset 0 2px 2px rgba(255,255,255,.35),inset 0 -2px 4px rgba(0,0,0,.15);border-color:#60a5fa}
+.clay-action-btn--cashout{background:linear-gradient(135deg,#8b5cf6 0%,#6d28d9 100%);color:#fff;box-shadow:0 6px 16px rgba(109,40,217,.25),inset 0 2px 2px rgba(255,255,255,.35),inset 0 -2px 4px rgba(0,0,0,.15);border-color:#a78bfa}
+.clay-action-btn--topup{background:linear-gradient(135deg,#059669 0%,#064e3b 100%);color:#fff;box-shadow:0 6px 16px rgba(6,78,59,.25),inset 0 2px 2px rgba(255,255,255,.35),inset 0 -2px 4px rgba(0,0,0,.15);border-color:#6ee7b7}
+
 /* Transactions: one HTML table, card styling on small screens */
-.tx-table-wrap{border:1px solid var(--line);border-radius:22px;background:var(--surface);overflow:hidden;overflow-x:clip}
+.tx-table-wrap{border:1px solid var(--line);border-radius:22px;background:var(--surface);overflow-x:auto;-webkit-overflow-scrolling:touch}
 .tx-table{width:100%;border-collapse:collapse}
-.tx-table thead th{text-align:left;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:12px 14px;border-bottom:1px solid var(--line);background:var(--surface2);white-space:nowrap}
+.tx-table thead th{text-align:left;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--line);background:var(--surface2);white-space:nowrap}
 .tx-table tbody tr{border-bottom:1px solid var(--line);cursor:pointer}
 .tx-table tbody tr:last-child{border-bottom:0}
-.tx-table td{padding:12px 14px;vertical-align:middle;font-weight:700;font-size:14px}
-.tx-table .tx-cell-customer{min-width:0}
-.tx-table .tx-row-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-.tx-mini-btn{min-height:36px;padding:6px 10px;border-radius:999px;background:var(--surface2);border:1px solid var(--line);font-size:11px;font-weight:900;white-space:nowrap}
-.tx-type-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:900;white-space:nowrap}
-.tx-status-pill{display:inline-flex;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:900;white-space:nowrap}
+.tx-table td{padding:10px 12px;vertical-align:middle;font-weight:700;font-size:13.5px}
+.tx-table .tx-cell-customer{min-width:0;overflow:hidden}
+.tx-table .tx-row-actions{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.tx-mini-btn{min-height:30px;padding:3px 9px;border-radius:999px;background:var(--surface2);border:1px solid var(--line);font-size:11px;font-weight:900;white-space:nowrap;cursor:pointer}
+.tx-mini-btn:hover{background:var(--surface)}
+.tx-type-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:900;white-space:nowrap}
+.tx-status-pill{display:inline-flex;padding:3px 7px;border-radius:999px;font-size:10px;font-weight:900;white-space:nowrap}
+
+/* Table columns on screens >= 768px */
+@media (min-width:768px){
+  .tx-table{table-layout:fixed;min-width:840px}
+  .tx-col-date{width:95px}
+  .tx-col-customer{width:25%;min-width:170px}
+  .tx-col-type{width:15%;min-width:125px}
+  .tx-col-amount{width:10%;min-width:75px;text-align:right}
+  .tx-col-fee{width:11%;min-width:85px;text-align:right}
+  .tx-col-profit{width:9%;min-width:75px;text-align:right}
+  .tx-col-status{width:11%;min-width:85px}
+  .tx-col-actions{width:19%;min-width:125px;text-align:right}
+  .tx-table .tx-time-val{display:block}
+}
 
 /* Top Suki cards expand to available width in landscape/narrow dashboard columns. */
 .top-suki-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px}
@@ -238,23 +263,42 @@ button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
   .quick-actions-grid{grid-template-columns:1fr 1fr}
   .favorites-scroll{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
   .favorites-scroll > *{flex:0 0 auto;scroll-snap-align:start}
-  /* Transactions as cards: hide table head, each row = card */
+  /* Transactions as compact cards: hide table head, 2-column multi-row grid */
   .tx-table-wrap{border:0;background:transparent;overflow:visible}
-  .tx-table{display:block}
+  .tx-table{display:block;width:100%;min-width:0}
   .tx-table thead{display:none}
-  .tx-table tbody{display:flex;flex-direction:column;gap:10px}
-  .tx-table tbody tr{display:grid;grid-template-columns:1fr auto;gap:6px 10px;padding:14px;border:1px solid var(--line);border-radius:20px;background:var(--surface);box-shadow:var(--card-shadow)}
+  .tx-table tbody{display:flex;flex-direction:column;gap:8px}
+  .tx-table tbody tr{
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    row-gap:4px;
+    column-gap:8px;
+    padding:9px 12px;
+    border:1px solid var(--line);
+    border-radius:16px;
+    background:var(--surface);
+    box-shadow:var(--card-shadow);
+    align-items:center;
+  }
   .tx-table td{padding:0;border:0}
-  .tx-table td[data-label="date"]{grid-column:1/-1;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-  .tx-table td[data-label="customer"]{grid-column:1/-1}
-  .tx-table td[data-label="type"]{grid-column:1}
-  .tx-table td[data-label="amount"]{grid-column:2;text-align:right}
-  .tx-table td[data-label="fee"]{grid-column:1}
-  .tx-table td[data-label="profit"]{grid-column:2;text-align:right}
-  .tx-table td[data-label="status"]{grid-column:1/-1}
-  .tx-table td[data-label="actions"]{grid-column:1/-1}
-  .tx-table .tx-row-actions{justify-content:flex-start}
-  .tx-mini-btn{min-height:44px;padding:8px 12px}
+  /* Row 1: Customer info (left) & Large Amount (right) */
+  .tx-table td[data-label="customer"]{grid-column:1;grid-row:1;min-width:0}
+  .tx-table td[data-label="amount"]{grid-column:2;grid-row:1;text-align:right;align-self:center}
+  .tx-table td[data-label="amount"] span{font-size:16px;font-weight:900}
+  /* Row 2: Date & time inline (left) & Profit (right) */
+  .tx-table td[data-label="date"]{grid-column:1;grid-row:2;font-size:11px;color:var(--muted);font-weight:700;display:flex;align-items:center;gap:4px}
+  .tx-table td[data-label="date"] span{display:inline}
+  .tx-table td[data-label="date"] span.tx-date-val::after{content:" · "}
+  .tx-table td[data-label="profit"]{grid-column:2;grid-row:2;text-align:right;font-size:12px;font-weight:900;align-self:center}
+  /* Row 3: Type badge (left) & Fee / Extra (right) */
+  .tx-table td[data-label="type"]{grid-column:1;grid-row:3;display:flex;align-items:center;gap:4px;min-width:0}
+  .tx-table td[data-label="fee"]{grid-column:2;grid-row:3;text-align:right;font-size:11px;color:var(--muted);font-weight:700;align-self:center}
+  .tx-table td[data-label="fee"] span{display:inline}
+  /* Row 4: Status pill (left) & Action buttons (right) */
+  .tx-table td[data-label="status"]{grid-column:1;grid-row:4;display:flex;align-items:center}
+  .tx-table td[data-label="actions"]{grid-column:2;grid-row:4;text-align:right}
+  .tx-table .tx-row-actions{display:flex;gap:4px;justify-content:flex-end}
+  .tx-table .tx-mini-btn{min-height:28px!important;padding:2px 8px!important;font-size:11px!important;border-radius:999px}
   /* Toast full-width */
   .toast-wrap{padding-inline:8px}
   .toast-wrap > div{max-width:none!important;width:100%;border-radius:18px}
@@ -283,11 +327,12 @@ button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
   .report-grid .report-full{grid-column:1/-1}
   .report-stats{grid-template-columns:repeat(4,1fr)}
   .tx-table-wrap{overflow-x:auto}
-  .tx-table{ min-width:640px}
+  .tx-table{min-width:720px}
   .mobile-bottom-nav{display:none}
   .top-nav{display:flex}
   /* Tablet kiosk interaction: prioritize fingers over mouse/keyboard-sized controls. */
-  button,.sidebar-nav-btn,.chip,.tx-mini-btn{min-height:56px}
+  button:not(.tx-mini-btn),.sidebar-nav-btn,.chip{min-height:56px}
+  .tx-table .tx-mini-btn{min-height:30px!important;padding:3px 9px!important;font-size:11px!important}
   .top-nav button{min-height:56px;padding-inline:18px;font-size:15px}
   .field{min-height:60px;padding:16px;font-size:18px}
   .mobile-header-wallet button{min-height:48px;padding-inline:14px;font-size:14px}
@@ -301,7 +346,8 @@ button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 
 /* Coarse-pointer hardware (including a touch tablet in a wider window) gets kiosk-sized hit targets too. */
 @media (pointer:coarse){
-  button,.sidebar-nav-btn,.chip,.tx-mini-btn{min-height:48px}
+  button:not(.tx-mini-btn),.sidebar-nav-btn,.chip{min-height:48px}
+  .tx-table .tx-mini-btn{min-height:30px!important;padding:3px 9px!important;font-size:11px!important}
   .field{min-height:56px}
   button{-webkit-tap-highlight-color:rgba(14,159,95,.16);touch-action:manipulation}
 }
@@ -316,15 +362,9 @@ button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
   .top-nav{display:none!important}
   .fab-desktop{bottom:24px!important;right:28px!important}
   /* Dashboard defaults to a roomy two-column layout; expand on wide displays. */
-  .dashboard-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
-  .dash-col-right{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
-  .dash-col-right > div:first-child{grid-row:span 2}
-  .dash-col-right > *{min-width:0}
-  .dash-col-right .card{min-width:0}
-  .dash-col-right > section:last-child{grid-column:1/-1}
-  .dash-col-middle [class~="lg:grid-cols-4"]{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .dash-summary-grid{grid-template-columns:1fr 1fr!important}
-  .quick-actions-grid{grid-template-columns:1fr 1fr}
+  .dashboard-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,0.95fr);gap:20px;align-items:start}
+  .dash-col-left,.dash-col-right{min-width:0}
+  .quick-actions-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
   .favorites-scroll{flex-wrap:wrap}
   /* Hover + pointer */
   button:hover{filter:brightness(.98)}
@@ -371,26 +411,12 @@ button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
    sizing uses one column when the sidebar leaves little room, then adds columns
    only when a full card width fits. */
 @media (min-width:1024px) and (max-width:1539px){
-  .dashboard-grid{display:block;column-count:auto;column-width:420px;column-gap:16px;column-fill:balance}
-  .dash-col-left,.dash-col-middle,.dash-col-right{display:contents}
-  .dash-col-right > div:first-child{display:contents}
-  .dash-col-left > *,
-  .dash-col-middle > *,
-  .dash-col-right > div:first-child > *,
-  .dash-col-right > section{display:inline-block;vertical-align:top;width:100%;min-width:0;margin:0 0 16px!important;break-inside:avoid}
-  /* Keep the four key figures compact as a 2×2 tile group rather than letting
-     the masonry item styling turn each statistic into a full-width block. */
-  .dash-col-left > .dash-summary-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px;margin:0 0 16px!important}
+  .dashboard-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,0.95fr);gap:20px;align-items:start}
 }
 
 @media (min-width:1540px){
   .app-main{max-width:1500px}
-  .dashboard-grid{width:100%;min-width:0;grid-template-columns:minmax(0,.95fr) minmax(0,1.35fr) minmax(0,.95fr)}
-  .dash-col-right{display:flex;grid-column:auto;min-width:0;width:100%}
-  .dash-col-right > div:first-child{grid-row:auto}
-  .dash-col-right > section:last-child{grid-column:auto}
-  .dash-col-right > *{min-width:0;max-width:100%}
-  .dash-col-middle [class~="lg:grid-cols-4"]{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .dashboard-grid{width:100%;min-width:0;grid-template-columns:minmax(0,1.08fr) minmax(0,0.92fr);gap:24px}
   [data-recent-list] .dashboard-tx-row{flex-wrap:wrap;gap:8px;padding-inline:10px}
   [data-recent-list] .dashboard-tx-row > span:nth-of-type(2){flex:1 1 calc(100% - 56px);min-width:0}
 }

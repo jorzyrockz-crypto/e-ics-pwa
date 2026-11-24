@@ -1,5 +1,5 @@
 export type TxType = 'E-Load' | 'Cash In' | 'Cash Out' | 'Top-Up';
-export type Wallets = { cash: number; maribank: number };
+export type Wallets = { cash: number; maribank: number; profit?: number };
 
 // Optional receipt/tip fields keep older transactions and backups compatible.
 export type TransactionMoney = {
@@ -42,7 +42,7 @@ export function normalizePaymentAllocation(value: unknown): Wallets | undefined 
   return total > 0 && isValidTip(total) ? allocation : undefined;
 }
 
-function assertWallet(wallet: keyof Wallets) {
+function assertWallet(wallet: keyof Wallets): asserts wallet is 'cash' | 'maribank' {
   if (wallet !== 'cash' && wallet !== 'maribank') throw new Error('Choose Cash on Hand or Main Wallet for this payment.');
 }
 function allocateReceipt(total: number, allocation: Wallets | undefined, fallback: keyof Wallets): Wallets {
@@ -197,7 +197,11 @@ export function applyTransaction(wallets: Wallets, tx: TransactionMoney, sign = 
     cash -= sign * (payout.amount + (payout.fee || 0));
     maribank += sign * payout.amount;
   }
-  return { cash: round2(cash), maribank: round2(maribank) };
+  return {
+    cash: round2(cash),
+    maribank: round2(maribank),
+    ...(typeof wallets.profit === 'number' && wallets.profit > 0 ? { profit: wallets.profit } : {}),
+  };
 }
 
 export function reverseTransaction(wallets: Wallets, tx: TransactionMoney): Wallets {

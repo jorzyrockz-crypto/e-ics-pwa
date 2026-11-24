@@ -579,4 +579,31 @@ describe('explicit customer receiving wallets', () => {
       expect(reverseTransaction(balance, debt)).toEqual(startingWallets);
     }
   });
+
+  describe('Profit Wallet preservation and isolation', () => {
+    it('omits profit key when profit is undefined or zero', () => {
+      const tx = sale({ amount: 100, fee: 5 });
+      const next = applyTransaction({ cash: 500, maribank: 500 }, tx);
+      expect(next).toEqual({ cash: 605, maribank: 400 });
+      expect('profit' in next).toBe(false);
+    });
+
+    it('preserves existing profit balance unchanged during transactions', () => {
+      const tx = sale({ amount: 100, fee: 5 });
+      const next = applyTransaction({ cash: 500, maribank: 500, profit: 250 }, tx);
+      expect(next).toEqual({ cash: 605, maribank: 400, profit: 250 });
+      expect(next.profit).toBe(250);
+
+      const reversed = reverseTransaction(next, tx);
+      expect(reversed).toEqual({ cash: 500, maribank: 500, profit: 250 });
+    });
+
+    it('preserves profit during transaction edits', () => {
+      const tx1 = sale({ amount: 100, fee: 5 });
+      const tx2 = sale({ amount: 100, fee: 10 });
+      const current = applyTransaction({ cash: 500, maribank: 500, profit: 300 }, tx1);
+      const updated = updateWalletsForEdit(current, tx1, tx2);
+      expect(updated).toEqual({ cash: 610, maribank: 400, profit: 300 });
+    });
+  });
 });

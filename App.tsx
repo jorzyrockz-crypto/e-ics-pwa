@@ -9,7 +9,7 @@ import { useAppearance, type AppearanceControls } from './app/appearance';
 import { useWalletBanner } from './app/useWalletBanner';
 import { collectSavedPromos } from './app/savedPromos';
 import { LogOut, LoaderCircle, Share2, Copy } from 'lucide-react';
-import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown } from 'lucide-react';
+import { Smartphone, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus, Search, Settings as SettingsIcon, BarChart3, Home, ArrowLeftRight, TrendingUp, AlertTriangle, X, Pencil, Trash2, ChevronRight, CalendarDays, Banknote, Zap, Phone, CheckCircle2, Download, RefreshCw, Users, UserPlus, Crown, User, Star, WifiOff, Undo2, FileDown, HandCoins, ChevronDown, LayoutGrid, List, Info, Receipt, Store, Percent, Database, ShieldCheck, Save, Coins, ArrowRight, AlertCircle, Clock, BarChart2 } from 'lucide-react';
 
 type PaymentWalletCorrection = {from:Wallets;to:Wallets;recordedAt:number};
 type Tx = TransactionMoney & { kind?:string; network:string; eloadKind?:'regular'|'promo'; promoName?:string; promoDetails?:string; promoValidity?:string; provider:string; phone:string; customerName?:string; payment:string; notes:string; date:string; time:string; createdAt:number; sample?:boolean; promiseDate?:string; paymentConfirmedAt?:number; tipRecordedAt?:number; utangReleaseRecordedAt?:number; utangReleaseMode?:'deduct'|'already-recorded'; paymentWalletCorrections?:PaymentWalletCorrection[]; history?:{oldAmount:number;newAmount:number;time:string;date:string}[] };
@@ -30,7 +30,7 @@ type DailyReportRecord = { id:string; value:DailyReport };
 type SyncConflictRecord = {id:string;value:{kind:'conflict';collection:string;recordId:string;action:'replace'|'delete';value?:any;remoteValue?:any;remoteUpdatedAt:number;conflictAt:number}};
 
 const peso = (n:number)=> '₱' + (isNaN(n)?0:n).toLocaleString('en-PH',{minimumFractionDigits: n%1?2:0, maximumFractionDigits:2});
-const walletLabel = (key:keyof Wallets)=> key==='cash' ? 'Cash on Hand' : 'Main Wallet';
+const walletLabel = (key:keyof Wallets)=> key==='cash' ? 'Cash on Hand' : key==='profit' ? 'Profit Wallet' : 'Main Wallet';
 const paymentsLabel = (payments:Wallets)=>{ return (Object.entries(payments) as [keyof Wallets,number][]).filter(([,amount])=>amount!==0).map(([key,amount])=>`${peso(amount)} ${key==='cash'?'cash':'via Main Wallet'}`).join(' + ') || peso(0); };
 const customerPaymentLabel = (tx:TransactionMoney)=>paymentsLabel(customerPayments(tx));
 const hasRecordedPayment = (tx:TransactionMoney)=>{ const received=collectedPayments(tx); return tx.type!=='Top-Up' && isValidTip(received.cash) && isValidTip(received.maribank) && isValidTip(round2(received.cash+received.maribank)) && round2(received.cash+received.maribank)>0; };
@@ -50,41 +50,100 @@ const utangPromiseDateLabel = (t:Tx)=> t.promiseDate ? dateLabel(t.promiseDate) 
 const uid = ()=> Math.random().toString(36).slice(2,10)+Date.now().toString(36);
 type PromoOffer={id:string; network:string; name:string; amount:number; details:string; validity:string};
 const promoOffers:PromoOffer[]=[
-  // Globe prepaid (current Go+ lineup; exact inclusions can vary by registration channel).
+  // Globe & TM (MariBank / Shopee Buy Load offerings)
+  {id:'globe-tm-allnetsurf20',network:'Globe',name:'TM All-Net Surf 20',amount:20,details:'1GB all-net data, unli all-net texts',validity:'1 day'},
+  {id:'globe-tm-allnetsurf30',network:'Globe',name:'TM All-Net Surf 30',amount:30,details:'2GB all-net data, unli all-net texts',validity:'2 days'},
+  {id:'globe-go50',network:'Globe',name:'Go50',amount:50,details:'5GB all sites data + unli all-net texts',validity:'3 days'},
+  {id:'globe-gosurf50',network:'Globe',name:'GoSURF50',amount:50,details:'5GB total: 2GB all sites + 3GB app data + unli all-net texts',validity:'3 days'},
+  {id:'globe-tm-easysurf50',network:'Globe',name:'TM EasySURF 50',amount:50,details:'5GB total: 2GB all-access + 3GB FunALIW/TikTok + unli texts',validity:'3 days'},
+  {id:'globe-go90',network:'Globe',name:'Go90',amount:90,details:'8GB all sites data + unli all-net texts',validity:'7 days'},
   {id:'globe-go99',network:'Globe',name:'Go+99',amount:99,details:'20GB total: 8GB all sites + 4GB 5G + 8GB choice apps; unli all-net texts',validity:'7 days'},
+  {id:'globe-goextra99',network:'Globe',name:'GoEXTRA99',amount:99,details:'8GB all sites data + unli all-net calls & texts (MariBank / digital exclusive)',validity:'7 days'},
+  {id:'globe-surf4all99',network:'Globe',name:'SURF4ALL 99',amount:99,details:'9GB shareable data for up to 4 users; all networks',validity:'7 days'},
+  {id:'globe-tm-easysurf99',network:'Globe',name:'TM EasySURF 99',amount:99,details:'9GB total: 3GB all-access + 6GB apps + unli all-net texts',validity:'7 days'},
+  {id:'globe-starlink99',network:'Globe',name:'Globe Starlink 99',amount:99,details:'2GB satellite data + 100 satellite texts to all networks; requires Starlink connection',validity:'30 days'},
   {id:'globe-go109',network:'Globe',name:'Go+109',amount:109,details:'22GB total: 10GB all sites + 4GB 5G + 8GB choice apps; unli all-net texts',validity:'7 days'},
+  {id:'globe-go120',network:'Globe',name:'Go120',amount:120,details:'10GB all sites data + unli all-net texts + unli Globe/TM calls',validity:'7 days'},
   {id:'globe-go129',network:'Globe',name:'Go+129',amount:129,details:'27GB total: 11GB all sites + 8GB 5G + 8GB choice apps; unli all-net texts',validity:'7 days'},
+  {id:'globe-goextra129',network:'Globe',name:'GoEXTRA129',amount:129,details:'10GB all sites data + unli all-net calls & texts (MariBank / digital exclusive)',validity:'7 days'},
+  {id:'globe-go140',network:'Globe',name:'Go140',amount:140,details:'11GB all sites data + unli all-net calls & texts',validity:'7 days'},
   {id:'globe-go149',network:'Globe',name:'Go+149',amount:149,details:'29GB total: 13GB all sites + 8GB 5G + 8GB choice apps; unli all-net texts',validity:'7 days'},
   {id:'globe-go179',network:'Globe',name:'Go+179',amount:179,details:'24GB total: 8GB all sites + 8GB 5G + 8GB choice apps; unli all-net texts',validity:'15 days'},
+  {id:'globe-surf4all249',network:'Globe',name:'SURF4ALL 249',amount:249,details:'20GB shareable data for up to 4 users; all networks',validity:'7 days'},
   {id:'globe-go250',network:'Globe',name:'Go+250',amount:250,details:'38GB total: 15GB all sites + 8GB 5G + 15GB choice apps',validity:'15 days'},
-  {id:'globe-go400',network:'Globe',name:'Go+400',amount:400,details:'48GB total: 25GB all sites + 8GB 5G + 15GB choice apps',validity:'15 days'},
-  {id:'globe-starlink99',network:'Globe',name:'Globe Starlink 99',amount:99,details:'2GB satellite data + 100 satellite texts to all networks; requires Starlink connection',validity:'30 days'},
   {id:'globe-starlink299',network:'Globe',name:'Globe Starlink 299',amount:299,details:'10GB satellite data + 500 satellite texts to all networks; requires Starlink connection',validity:'90 days'},
-  // Smart prepaid.
-  {id:'smart-pa59',network:'Smart',name:'Power All 59',amount:59,details:'5GB data + unli calls and texts',validity:'3 days'},
-  {id:'smart-pa99',network:'Smart',name:'Power All 99',amount:99,details:'Power All variant (FB/TikTok/Khan Academy); check chosen version for data inclusions',validity:'7 days'},
-  {id:'smart-pa109',network:'Smart',name:'Power All YouTube 109',amount:109,details:'YouTube-focused Power All offer; confirm data and call/text inclusions in retailer menu',validity:'Check retailer menu'},
-  {id:'smart-pa149',network:'Smart',name:'Power All 149',amount:149,details:'Power All variant with unli 5G; confirm selected app and inclusions in retailer menu',validity:'7 days'},
-  {id:'smart-pa449',network:'Smart',name:'Power All 449',amount:449,details:'Power All variant with unli 5G; confirm selected app and inclusions in retailer menu',validity:'28 days'},
-  {id:'smart-md149',network:'Smart',name:'Magic Data 149',amount:149,details:'3GB data, no expiry',validity:'No expiry'},
-  {id:'smart-md249',network:'Smart',name:'Magic Data 249',amount:249,details:'8GB data, no expiry',validity:'No expiry'},
-  {id:'smart-md349',network:'Smart',name:'Magic Data 349',amount:349,details:'16GB data, no expiry',validity:'No expiry'},
-  {id:'smart-md449',network:'Smart',name:'Magic Data 449',amount:449,details:'26GB data, no expiry',validity:'No expiry'},
-  {id:'smart-md549',network:'Smart',name:'Magic Data 549',amount:549,details:'38GB data, no expiry',validity:'No expiry'},
-  {id:'smart-md649',network:'Smart',name:'Magic Data 649',amount:649,details:'50GB data, no expiry',validity:'No expiry'},
-  {id:'smart-md749',network:'Smart',name:'Magic Data 749',amount:749,details:'65GB data, no expiry',validity:'No expiry'},
-  {id:'smart-md988',network:'Smart',name:'Magic Data 988',amount:988,details:'88GB data, no expiry',validity:'No expiry'},
+  {id:'globe-go400',network:'Globe',name:'Go+400',amount:400,details:'48GB total: 25GB all sites + 8GB 5G + 15GB choice apps',validity:'15 days'},
+
+  // Smart (MariBank / Shopee Buy Load offerings)
   {id:'smart-ad50',network:'Smart',name:'All Data 50',amount:50,details:'2GB all-sites data',validity:'3 days'},
+  {id:'smart-giga-video50',network:'Smart',name:'GIGA Video 50',amount:50,details:'1GB all-access data + 1GB/day YouTube & video apps',validity:'3 days'},
+  {id:'smart-giga-stories50',network:'Smart',name:'GIGA Stories 50',amount:50,details:'1GB all-access data + 1GB/day TikTok, IG, FB, Twitter',validity:'3 days'},
+  {id:'smart-giga-games50',network:'Smart',name:'GIGA Games 50',amount:50,details:'1GB all-access data + 1GB/day Mobile Legends & games',validity:'3 days'},
+  {id:'smart-pa59',network:'Smart',name:'Power All 59',amount:59,details:'5GB data + unli calls and texts to all networks',validity:'3 days'},
   {id:'smart-ad99',network:'Smart',name:'All Data 99',amount:99,details:'6GB all-sites data',validity:'7 days'},
+  {id:'smart-pa99',network:'Smart',name:'Power All 99',amount:99,details:'Power All variant (FB/TikTok/Khan Academy); check chosen version for data inclusions',validity:'7 days'},
+  {id:'smart-giga-video99',network:'Smart',name:'GIGA Video 99',amount:99,details:'2GB all-access data + 1GB/day YouTube & video apps',validity:'7 days'},
+  {id:'smart-giga-stories99',network:'Smart',name:'GIGA Stories 99',amount:99,details:'2GB all-access data + 1GB/day TikTok, IG, FB, Twitter',validity:'7 days'},
+  {id:'smart-giga-games99',network:'Smart',name:'GIGA Games 99',amount:99,details:'2GB all-access data + 1GB/day Mobile Legends & games',validity:'7 days'},
+  {id:'smart-pa109',network:'Smart',name:'Power All YouTube 109',amount:109,details:'YouTube-focused Power All offer; confirm data and call/text inclusions in retailer menu',validity:'Check retailer menu'},
+  {id:'smart-ad149',network:'Smart',name:'All Data 149',amount:149,details:'12GB all-sites data',validity:'7 days'},
+  {id:'smart-pa149',network:'Smart',name:'Power All 149',amount:149,details:'Power All variant with unli 5G; confirm selected app and inclusions in retailer menu',validity:'7 days'},
+  {id:'smart-md149',network:'Smart',name:'Magic Data 149',amount:149,details:'3GB data, no expiry',validity:'No expiry'},
+  {id:'smart-ad199',network:'Smart',name:'All Data 199',amount:199,details:'18GB all-sites data',validity:'15 days'},
+  {id:'smart-magic-plus199',network:'Smart',name:'Magic Data+ 199',amount:199,details:'2GB no-expiry data + 50 mins all-net calls + 50 all-net texts',validity:'No expiry'},
+  {id:'smart-md249',network:'Smart',name:'Magic Data 249',amount:249,details:'8GB data, no expiry',validity:'No expiry'},
   {id:'smart-ad299',network:'Smart',name:'All Data 299',amount:299,details:'24GB all-sites data',validity:'30 days'},
-  // TNT (All Access+ and Saya All offers).
-  {id:'tnt-aa99',network:'TNT',name:'All Access+ 99',amount:99,details:'5GB open-access data, unli all-net calls and texts',validity:'15 days'},
+  {id:'smart-magic-plus299',network:'Smart',name:'Magic Data+ 299',amount:299,details:'6GB no-expiry data + 100 mins all-net calls + 100 all-net texts',validity:'No expiry'},
+  {id:'smart-unli-5g-299',network:'Smart',name:'Unli 5G Data 299',amount:299,details:'Unlimited 5G Data + 10GB non-5G data',validity:'7 days'},
+  {id:'smart-md349',network:'Smart',name:'Magic Data 349',amount:349,details:'16GB data, no expiry',validity:'No expiry'},
+  {id:'smart-ad399',network:'Smart',name:'All Data 399',amount:399,details:'36GB all-sites data',validity:'30 days'},
+  {id:'smart-pa449',network:'Smart',name:'Power All 449',amount:449,details:'Power All variant with unli 5G; confirm selected app and inclusions in retailer menu',validity:'28 days'},
+  {id:'smart-md449',network:'Smart',name:'Magic Data 449',amount:449,details:'26GB data, no expiry',validity:'No expiry'},
+  {id:'smart-unli-data449',network:'Smart',name:'Unli Data 449',amount:449,details:'Unlimited data for all sites and apps',validity:'7 days'},
+  {id:'smart-ad499',network:'Smart',name:'All Data 499',amount:499,details:'48GB all-sites data',validity:'30 days'},
+  {id:'smart-magic-plus499',network:'Smart',name:'Magic Data+ 499',amount:499,details:'12GB no-expiry data + 200 mins all-net calls + 200 all-net texts',validity:'No expiry'},
+  {id:'smart-md549',network:'Smart',name:'Magic Data 549',amount:549,details:'38GB data, no expiry',validity:'No expiry'},
+  {id:'smart-unli-5g-599',network:'Smart',name:'Unli 5G Data 599',amount:599,details:'Unlimited 5G Data + 20GB non-5G data',validity:'30 days'},
+  {id:'smart-ad599',network:'Smart',name:'All Data 599',amount:599,details:'60GB all-sites data',validity:'30 days'},
+  {id:'smart-md649',network:'Smart',name:'Magic Data 649',amount:649,details:'50GB data, no expiry',validity:'No expiry'},
+  {id:'smart-magic-plus649',network:'Smart',name:'Magic Data+ 649',amount:649,details:'24GB no-expiry data + 400 mins all-net calls + 400 all-net texts',validity:'No expiry'},
+  {id:'smart-md749',network:'Smart',name:'Magic Data 749',amount:749,details:'65GB data, no expiry',validity:'No expiry'},
+  {id:'smart-magic-plus749',network:'Smart',name:'Magic Data+ 749',amount:749,details:'36GB no-expiry data + 600 mins all-net calls + 600 all-net texts',validity:'No expiry'},
+  {id:'smart-unli-5g-799',network:'Smart',name:'Unli 5G Data 799',amount:799,details:'Unlimited 5G Data + 30GB non-5G data',validity:'30 days'},
+  {id:'smart-md988',network:'Smart',name:'Magic Data 988',amount:988,details:'88GB data, no expiry',validity:'No expiry'},
+  {id:'smart-unli-data999',network:'Smart',name:'Unli Data 999',amount:999,details:'Unlimited data for all sites and apps',validity:'30 days'},
+
+  // TNT (MariBank / Shopee Buy Load offerings)
+  {id:'tnt-ut10',network:'TNT',name:'UT10 Unli Talk',amount:10,details:'Unlimited calls to TNT and Smart',validity:'1 day'},
+  {id:'tnt-uot15',network:'TNT',name:'UOT15 Unli All Net',amount:15,details:'Unlimited calls and texts to all networks',validity:'1 day'},
+  {id:'tnt-surfsaklob20',network:'TNT',name:'SURFSAKLOB 20',amount:20,details:'1GB all-access data',validity:'1 day'},
+  {id:'tnt-panalo30',network:'TNT',name:'Panalo Data 30',amount:30,details:'2GB all-sites data',validity:'2 days'},
+  {id:'tnt-surfsaklob50',network:'TNT',name:'SURFSAKLOB 50',amount:50,details:'3GB all-access data',validity:'3 days'},
+  {id:'tnt-panalo50',network:'TNT',name:'Panalo Data 50',amount:50,details:'5GB all-sites data',validity:'3 days'},
   {id:'tnt-saya50',network:'TNT',name:'Saya All 50',amount:50,details:'3GB open-access data + 3GB app data; unli all-net calls and texts',validity:'3 days'},
+  {id:'tnt-aa50',network:'TNT',name:'All Access+ 50',amount:50,details:'2GB open-access data + unli all-net calls and texts',validity:'3 days'},
+  {id:'tnt-giga-video50',network:'TNT',name:'GIGA Video 50 TNT',amount:50,details:'1GB all-access + 1GB/day YouTube & video apps',validity:'3 days'},
+  {id:'tnt-giga-stories50',network:'TNT',name:'GIGA Stories 50 TNT',amount:50,details:'1GB all-access + 1GB/day TikTok & FB',validity:'3 days'},
+  {id:'tnt-panalo99',network:'TNT',name:'Panalo Data 99',amount:99,details:'10GB all-sites data',validity:'7 days'},
+  {id:'tnt-aa99',network:'TNT',name:'All Access+ 99',amount:99,details:'5GB open-access data, unli all-net calls and texts',validity:'15 days'},
   {id:'tnt-saya99',network:'TNT',name:'Saya All 99',amount:99,details:'7GB open-access + 10GB app data + 3GB 5G; unli all-net calls and texts',validity:'7 days'},
   {id:'tnt-saya109',network:'TNT',name:'Saya All 109',amount:109,details:'7GB open-access data + unlimited FB/TikTok/ML app data; unli all-net calls and texts',validity:'7 days'},
+  {id:'tnt-aa149',network:'TNT',name:'All Access+ 149',amount:149,details:'8GB open-access data + unli all-net calls and texts',validity:'30 days'},
   {id:'tnt-saya149',network:'TNT',name:'Saya All 149',amount:149,details:'12GB open-access + unlimited FB/TikTok/ML app data + 7GB 5G; unli all-net calls and texts',validity:'7 days'},
   {id:'tnt-saya449',network:'TNT',name:'Saya All 449',amount:449,details:'20GB open-access + unlimited FB/TikTok/ML app data + 15GB 5G; unli all-net calls and texts',validity:'28 days'},
-  // DITO Level-Up, 5G double-data, and Socials.
+
+  // DITO (MariBank / Shopee Buy Load offerings)
+  {id:'dito-data10',network:'DITO',name:'DITO Data 10',amount:10,details:'1GB all-access data',validity:'1 day'},
+  {id:'dito-data20',network:'DITO',name:'DITO Data 20',amount:20,details:'2GB all-access data',validity:'1 day'},
+  {id:'dito-socials20',network:'DITO',name:'Level-Up Socials 20',amount:20,details:'2.5GB: 2GB app data + 0.5GB all-access',validity:'1 day'},
+  {id:'dito-wow30',network:'DITO',name:'DITO WOW 30',amount:30,details:'3GB total: 1GB open access + 2GB TikTok/FB/YouTube',validity:'3 days'},
+  {id:'dito-lu49',network:'DITO',name:'Level-Up 49',amount:49,details:'4GB data, unli DITO calls, 100 mins other-network calls, unli texts',validity:'7 days'},
+  {id:'dito-data50',network:'DITO',name:'DITO Data 50',amount:50,details:'5GB all-access data',validity:'3 days'},
+  {id:'dito-socials50',network:'DITO',name:'Level-Up Socials 50',amount:50,details:'7GB: 3.5GB app data + 3.5GB all-access',validity:'3 days'},
+  {id:'dito-wow50',network:'DITO',name:'DITO WOW 50',amount:50,details:'6GB total: 2GB open access + 4GB TikTok/FB/YouTube',validity:'3 days'},
+  {id:'dito-socials70',network:'DITO',name:'Level-Up Socials 70',amount:70,details:'Unlimited social app data + 5GB all-access',validity:'7 days'},
+  {id:'dito-lu79',network:'DITO',name:'Level-Up 79',amount:79,details:'7GB data, unli DITO calls, 150 mins other-network calls, unli texts',validity:'15 days'},
+  {id:'dito-data100',network:'DITO',name:'DITO Data 100',amount:100,details:'10GB all-access data',validity:'7 days'},
   {id:'dito-lu99',network:'DITO',name:'Level-Up 99',amount:99,details:'7GB data, unli DITO calls, 300 mins other-network calls, unli texts',validity:'30 days'},
   {id:'dito-lu99-15',network:'DITO',name:'New Level-Up 99',amount:99,details:'9GB data, unli DITO calls, 150 mins other-network calls, unli texts',validity:'15 days'},
   {id:'dito-lu99-5g',network:'DITO',name:'New Level-Up 99 5G Double Data',amount:99,details:'18GB total: 9GB all-access + 9GB 5G; unli DITO calls/texts, 150 mins other-network calls',validity:'15 days'},
@@ -94,12 +153,15 @@ const promoOffers:PromoOffer[]=[
   {id:'dito-lu129-5g',network:'DITO',name:'Level-Up 129 5G Double Data',amount:129,details:'20GB total: 10GB all-access + 10GB 5G; unli DITO calls/texts, 300 mins other-network calls',validity:'30 days'},
   {id:'dito-lu169',network:'DITO',name:'Level-Up 169',amount:169,details:'16GB data, unli DITO calls, 300 mins other-network calls, unli texts; includes Prime Video mobile subscription',validity:'30 days'},
   {id:'dito-lu199',network:'DITO',name:'Level-Up 199',amount:199,details:'20GB data, unli DITO calls, 300 mins other-network calls, unli texts',validity:'30 days'},
+  {id:'dito-unli5g-299',network:'DITO',name:'DITO UNLI 5G 299',amount:299,details:'Unlimited 5G Data + 10GB 4G Data',validity:'7 days'},
   {id:'dito-lu299',network:'DITO',name:'Level-Up 299',amount:299,details:'32GB data, unli DITO calls, 300 mins other-network calls, unli texts',validity:'30 days'},
+  {id:'dito-unli5g-499',network:'DITO',name:'DITO UNLI 5G 499',amount:499,details:'Unlimited 5G Data + 20GB 4G Data',validity:'14 days'},
   {id:'dito-lu499',network:'DITO',name:'Level-Up 499',amount:499,details:'62GB data, unli DITO calls, 300 mins other-network calls, unli texts',validity:'30 days'},
+  {id:'dito-advance713',network:'DITO',name:'DITO Advance Pay 713',amount:713,details:'96GB data for 90 days, unli DITO calls/texts, 300 mins other-network calls',validity:'90 days'},
+  {id:'dito-unli5g-999',network:'DITO',name:'DITO UNLI 5G 999',amount:999,details:'Unlimited 5G Data + 40GB 4G Data',validity:'30 days'},
   {id:'dito-lu999',network:'DITO',name:'Level-Up 999',amount:999,details:'130GB data, unli DITO calls, 300 mins other-network calls, unli texts',validity:'30 days'},
-  {id:'dito-socials20',network:'DITO',name:'Level-Up Socials 20',amount:20,details:'2.5GB: 2GB app data + 0.5GB all-access',validity:'1 day'},
-  {id:'dito-socials50',network:'DITO',name:'Level-Up Socials 50',amount:50,details:'7GB: 3.5GB app data + 3.5GB all-access',validity:'3 days'},
-  {id:'dito-socials70',network:'DITO',name:'Level-Up Socials 70',amount:70,details:'Unlimited social app data + 5GB all-access',validity:'7 days'},
+  {id:'dito-advance1209',network:'DITO',name:'DITO Advance Pay 1209',amount:1209,details:'192GB data for 180 days, unli DITO calls/texts, 300 mins other-network calls',validity:'180 days'},
+  {id:'dito-advance2060',network:'DITO',name:'DITO Advance Pay 2060',amount:2060,details:'384GB data for 365 days, unli DITO calls/texts, 300 mins other-network calls',validity:'365 days'},
 ];
 const defaultWallets:Wallets={cash:10000, maribank:5000};
 const defaultMeta:Meta={kind:'meta', businessName:'E-Load & Cash In/Out App', eloadPct:3, cashInPct:2, cashOutPct:2, palawanFee:10, wallets:{...defaultWallets}, lastClosed:'', lowThreshold:1000};
@@ -192,6 +254,7 @@ function previewRecords(action:string,args:any){
 const walletDefs:{key:keyof Wallets; label:string; color:string; hint:string}[]=[
   {key:'maribank', label:'Main Wallet', color:'var(--wallet-ink)', hint:'Main wallet — load, Cash In & Cash Out'},
   {key:'cash', label:'Cash on Hand', color:'var(--green)', hint:'Bills & coins in the till'},
+  {key:'profit', label:'Profit Wallet', color:'var(--purple-solid)', hint:'Stashed store earnings & profit savings'},
 ];
 function normalizePaymentWalletCorrections(value:unknown):PaymentWalletCorrection[]|undefined{
   if(!Array.isArray(value)) return undefined;
@@ -324,6 +387,12 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   const [utangReminderTheme,setUtangReminderTheme]=useState<ReminderTheme>('classic');
   const [utangReminderAll,setUtangReminderAll]=useState(false);
   const [showWalletAction,setShowWalletAction]=useState<keyof Wallets|null>(null);
+  const [showWalletTransfer,setShowWalletTransfer]=useState<boolean>(false);
+  const [transferFrom,setTransferFrom]=useState<keyof Wallets>('cash');
+  const [transferTo,setTransferTo]=useState<keyof Wallets>('maribank');
+  const [transferAmt,setTransferAmt]=useState<number>(100);
+  const [transferNote,setTransferNote]=useState<string>('');
+  const [transferError,setTransferError]=useState<string>('');
   const [showEOD,setShowEOD]=useState(false);
   const [selectedDay,setSelectedDay]=useState(todayKey());
   const [search,setSearch]=useState('');
@@ -335,6 +404,21 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   const [shortcutsOn,setShortcutsOn]=useState(true);
   const [selectedTxId,setSelectedTxId]=useState<string|null>(null);
   const [selectedCustomerId,setSelectedCustomerId]=useState<string|null>(null);
+  const [customerViewMode,setCustomerViewMode]=useState<'cards'|'list'>(()=>{
+    try{
+      const saved=localStorage.getItem('eics.customer-view-mode');
+      if(saved==='list'||saved==='cards') return saved;
+    }catch{}
+    return 'cards';
+  });
+  const [utangViewMode,setUtangViewMode]=useState<'cards'|'list'>(()=>{
+    try{
+      const saved=localStorage.getItem('eics.utang-view-mode');
+      if(saved==='list'||saved==='cards') return saved;
+    }catch{}
+    return 'cards';
+  });
+  const [utangSearch,setUtangSearch]=useState('');
   const txSearchRef=useRef<HTMLInputElement|null>(null);
   const customerSearchRef=useRef<HTMLInputElement|null>(null);
   const filterRef=useRef<HTMLDivElement|null>(null);
@@ -458,7 +542,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
       const row=rows[0];
       if(!row) return;
       const raw=row.value||{}, oldW=raw.wallets||{}, palawanRaw=raw.palawanFee??raw.palawanTopUpFee;
-      const wallets:Wallets={cash:typeof oldW.cash==='number'?round2(oldW.cash):defaultMeta.wallets.cash,maribank:typeof oldW.maribank==='number'?round2(oldW.maribank):defaultMeta.wallets.maribank};
+      const wallets:Wallets={cash:typeof oldW.cash==='number'?round2(oldW.cash):defaultMeta.wallets.cash,maribank:typeof oldW.maribank==='number'?round2(oldW.maribank):defaultMeta.wallets.maribank,...(typeof oldW.profit==='number'&&oldW.profit>0?{profit:round2(oldW.profit)}:{})};
       const next:Meta={kind:'meta',businessName:raw.businessName==='May E-Load & Cash In/Out'?defaultMeta.businessName:typeof raw.businessName==='string'&&raw.businessName?raw.businessName:defaultMeta.businessName,eloadPct:typeof raw.eloadPct==='number'?raw.eloadPct:defaultMeta.eloadPct,cashInPct:typeof raw.cashInPct==='number'?raw.cashInPct:defaultMeta.cashInPct,cashOutPct:typeof raw.cashOutPct==='number'?raw.cashOutPct:defaultMeta.cashOutPct,palawanFee:typeof palawanRaw==='number'?palawanRaw:defaultMeta.palawanFee,wallets,lastClosed:typeof raw.lastClosed==='string'?raw.lastClosed:'',lowThreshold:typeof raw.lowThreshold==='number'?raw.lowThreshold:1000,startingFloat:typeof raw.startingFloat==='number'?raw.startingFloat:undefined,startingFloatDate:typeof raw.startingFloatDate==='string'?raw.startingFloatDate:undefined};
       metaRef.current=next; metaIdRef.current=row.id; metaUpdatedAtRef.current=Number(row.updatedAt||0);
       setMeta(next); setMetaId(row.id); setMetaUpdatedAt(Number(row.updatedAt||0));
@@ -496,7 +580,8 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   const reloadRecordsRef=useRef(reloadRecords); reloadRecordsRef.current=reloadRecords;
   function captureMeta(){return {value:metaRef.current,id:metaIdRef.current,updatedAt:metaUpdatedAtRef.current};}
   async function saveMeta(next:Meta,base=captureMeta()){
-    const clean:Meta={kind:'meta',businessName:next.businessName,eloadPct:next.eloadPct,cashInPct:next.cashInPct,cashOutPct:next.cashOutPct,palawanFee:next.palawanFee,lastClosed:next.lastClosed,lowThreshold:typeof next.lowThreshold==='number'?next.lowThreshold:1000,startingFloat:next.startingFloat,startingFloatDate:next.startingFloatDate,wallets:{cash:round2(next.wallets.cash),maribank:round2(next.wallets.maribank)}};
+    const cleanWallets:Wallets={cash:round2(next.wallets.cash),maribank:round2(next.wallets.maribank),...(typeof next.wallets.profit==='number'&&next.wallets.profit>0?{profit:round2(next.wallets.profit)}:{})};
+    const clean:Meta={kind:'meta',businessName:next.businessName,eloadPct:next.eloadPct,cashInPct:next.cashInPct,cashOutPct:next.cashOutPct,palawanFee:next.palawanFee,lastClosed:next.lastClosed,lowThreshold:typeof next.lowThreshold==='number'?next.lowThreshold:1000,startingFloat:next.startingFloat,startingFloatDate:next.startingFloatDate,wallets:cleanWallets};
     // Pin the revision used for the calculation, not a newer revision arriving
     // while the transaction/customer writes are in flight on another device.
     const row:any=base.id?await api('records.replace',{collection:'meta',id:base.id,value:clean,expectedUpdatedAt:base.updatedAt}):await api('records.create',{collection:'meta',value:clean,idempotency_key:`meta-${uid()}`});
@@ -682,9 +767,43 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   const todayDatedWalletEffects = useMemo(()=>{
     let moves:Wallets={cash:0,maribank:0};
     todayTxs.forEach(tx=>{moves=applyTransaction(moves,tx);});
-    walletAdjustments.forEach(({value:a})=>{if(a.date===todayKey()) moves[a.wallet]=round2(moves[a.wallet]+(a.mode==='add'?a.amount:-a.amount));});
+    walletAdjustments.forEach(({value:a})=>{if(a.date===todayKey()) moves[a.wallet]=round2((moves[a.wallet]||0)+(a.mode==='add'?a.amount:-a.amount));});
     return moves;
   },[todayTxs,walletAdjustments]);
+  const todayWalletProfit = useMemo(()=>{
+    const profit: Record<keyof Wallets, { total: number; fees: number; discounts: number; tips: number }> = {
+      cash: { total: 0, fees: 0, discounts: 0, tips: 0 },
+      maribank: { total: 0, fees: 0, discounts: 0, tips: 0 },
+      profit: { total: 0, fees: 0, discounts: 0, tips: 0 },
+    };
+    todayTxs.forEach(tx => {
+      const tip = txTip(tx);
+      const tipW = txTipWallet(tx);
+      if (tip > 0 && (tipW === 'cash' || tipW === 'maribank')) {
+        profit[tipW].tips = round2(profit[tipW].tips + tip);
+      }
+      const disc = eLoadDiscount(tx);
+      if (disc > 0) {
+        profit.maribank.discounts = round2(profit.maribank.discounts + disc);
+      }
+      const fee = round2(tx.fee || 0);
+      if (fee > 0) {
+        const alloc = normalizePaymentAllocation(tx.paymentAllocation);
+        if (alloc && (alloc.cash + alloc.maribank) > 0) {
+          const cashFee = round2(fee * (alloc.cash / (alloc.cash + alloc.maribank)));
+          const mariFee = round2(fee - cashFee);
+          profit.cash.fees = round2(profit.cash.fees + cashFee);
+          profit.maribank.fees = round2(profit.maribank.fees + mariFee);
+        } else {
+          const receivingW = defaultReceivingWallet(tx);
+          profit[receivingW].fees = round2(profit[receivingW].fees + fee);
+        }
+      }
+    });
+    profit.cash.total = round2(profit.cash.fees + profit.cash.discounts + profit.cash.tips);
+    profit.maribank.total = round2(profit.maribank.fees + profit.maribank.discounts + profit.maribank.tips);
+    return profit;
+  },[todayTxs]);
   const startingFloat = useMemo(()=>{
     if(meta.startingFloatDate===todayKey() && typeof meta.startingFloat==='number' && Number.isFinite(meta.startingFloat)) return round2(meta.startingFloat);
     const prev = dailyReports.find(r=>r.value.date===addDaysKey(todayKey(),-1));
@@ -707,7 +826,34 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   const utangDueTodayList = useMemo(()=> utangList.filter(r=>utangPromiseStatus(r.value)==='due-today'),[utangList]);
   const utangOverdueCount = utangOverdueList.length;
   const utangDueTodayCount = utangDueTodayList.length;
-  const utangFiltered = useMemo(()=>{ let a=[...utangList]; if(utangFilter==='Unpaid') a=a.filter(r=>r.value.utangStatus!=='paid'); if(utangFilter==='Paid') a=a.filter(r=>r.value.utangStatus==='paid'); if(utangFilter==='Due Today') a=a.filter(r=>utangPromiseStatus(r.value)==='due-today'); if(utangFilter==='Overdue') a=a.filter(r=>utangPromiseStatus(r.value)==='overdue'); if(utangFilter==='Due This Week') a=a.filter(r=> r.value.utangStatus!=='paid' && r.value.promiseDate && daysBetween(todayKey(), r.value.promiseDate)>=0 && daysBetween(todayKey(), r.value.promiseDate)<=7); const rank=(r:TxRecord)=>{ const s=utangPromiseStatus(r.value); if(s==='overdue') return 0; if(s==='due-today') return 1; if(s==='due-soon') return 2; if(s==='no-date') return 3; return 4; }; a.sort((x,y)=> rank(x)-rank(y) || (x.value.promiseDate||'9999').localeCompare(y.value.promiseDate||'9999') || y.value.date.localeCompare(x.value.date) || y.value.createdAt-x.value.createdAt); return a; },[utangList, utangFilter]);
+  const utangFiltered = useMemo(()=>{
+    let a=[...utangList];
+    if(utangFilter==='Unpaid') a=a.filter(r=>r.value.utangStatus!=='paid');
+    if(utangFilter==='Paid') a=a.filter(r=>r.value.utangStatus==='paid');
+    if(utangFilter==='Due Today') a=a.filter(r=>utangPromiseStatus(r.value)==='due-today');
+    if(utangFilter==='Overdue') a=a.filter(r=>utangPromiseStatus(r.value)==='overdue');
+    if(utangFilter==='Due This Week') a=a.filter(r=> r.value.utangStatus!=='paid' && r.value.promiseDate && daysBetween(todayKey(), r.value.promiseDate)>=0 && daysBetween(todayKey(), r.value.promiseDate)<=7);
+    if(utangSearch.trim()){
+      const q=utangSearch.toLowerCase().trim();
+      const qd=digitsOnly(q);
+      a=a.filter(r=>{
+        const cust=customerByPhone.get(digitsOnly(r.value.phone||''));
+        const name=(cust?.value.name || r.value.customerName || '').toLowerCase();
+        const phone=digitsOnly(r.value.phone||'');
+        return name.includes(q) || (qd && phone.includes(qd)) || String(r.value.amount).includes(q);
+      });
+    }
+    const rank=(r:TxRecord)=>{
+      const s=utangPromiseStatus(r.value);
+      if(s==='overdue') return 0;
+      if(s==='due-today') return 1;
+      if(s==='due-soon') return 2;
+      if(s==='no-date') return 3;
+      return 4;
+    };
+    a.sort((x,y)=> rank(x)-rank(y) || (x.value.promiseDate||'9999').localeCompare(y.value.promiseDate||'9999') || y.value.date.localeCompare(x.value.date) || y.value.createdAt-x.value.createdAt);
+    return a;
+  },[utangList, utangFilter, utangSearch, customerByPhone]);
 
   const filtered = useMemo(()=>{
     let arr=[...records];
@@ -1123,12 +1269,12 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
   }
   function openWalletAction(wallet:keyof Wallets, mode:'add'|'deduct'){
     setShowWalletAction(wallet); setWalletMode(mode); setWalletAmt(500);
-    setWalletActionCategory(mode==='deduct'?'Shopee / Online shopping':'Balance correction');
+    setWalletActionCategory(mode==='deduct'?(wallet==='profit'?'Owner draw / Personal use':'Shopee / Online shopping'):'Balance correction');
     setWalletActionNote('');
   }
   async function doWalletAction(){
     if(!showWalletAction || !walletAmt || walletAmt<=0){ showErrorToast('Enter an amount greater than zero.'); return; }
-    if(walletMode==='deduct' && walletAmt>metaRef.current.wallets[showWalletAction]){ showErrorToast('Deduction exceeds the current wallet balance.'); return; }
+    if(walletMode==='deduct' && walletAmt>(metaRef.current.wallets[showWalletAction]||0)){ showErrorToast('Deduction exceeds the current wallet balance.'); return; }
     if(walletMode==='deduct' && !walletActionCategory.trim() && !walletActionNote.trim()){ showErrorToast('Choose a reason or enter a note for this deduction.'); return; }
     setSaving(true);
     let adjustmentId:string|undefined;
@@ -1137,7 +1283,11 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
       const adjustment:WalletAdjustment={wallet:showWalletAction,mode:walletMode,amount:round2(walletAmt),category:walletMode==='deduct'?walletActionCategory.trim():'Balance correction',note:walletActionNote.trim(),date:todayKey(),time:new Date().toLocaleTimeString('en-PH',{hour:'numeric',minute:'2-digit'}),createdAt:Date.now()};
       const created:any=await api('records.create',{collection:'wallet_adjustments',value:adjustment,idempotency_key:`wallet-${adjustment.createdAt}-${uid()}`});
       adjustmentId=created.id;
-      const next={...base.value,wallets:{...base.value.wallets,[showWalletAction]:round2(base.value.wallets[showWalletAction]+(walletMode==='add'?walletAmt:-walletAmt))}};
+      const newCash = showWalletAction==='cash' ? round2((base.value.wallets.cash||0)+(walletMode==='add'?walletAmt:-walletAmt)) : round2(base.value.wallets.cash||0);
+      const newMaribank = showWalletAction==='maribank' ? round2((base.value.wallets.maribank||0)+(walletMode==='add'?walletAmt:-walletAmt)) : round2(base.value.wallets.maribank||0);
+      const newProfit = showWalletAction==='profit' ? round2((base.value.wallets.profit||0)+(walletMode==='add'?walletAmt:-walletAmt)) : round2(base.value.wallets.profit||0);
+      const nextWallets:Wallets={cash:newCash,maribank:newMaribank,...(newProfit>0?{profit:newProfit}:{})};
+      const next={...base.value,wallets:nextWallets};
       try{ await saveMeta(next,base); }catch(e){ if(adjustmentId) await api('records.delete',{collection:'wallet_adjustments',id:adjustmentId}); throw e; }
       const rowId=adjustmentId||uid();
       if(!liveSubscriptionActive.current) setWalletAdjustments(prev=>prev.some(row=>row.id===rowId)?prev:[{id:rowId,value:adjustment},...prev]);
@@ -1145,6 +1295,91 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
       setShowWalletAction(null); setSaveMsg(label);
     }catch(e){ showErrorToast(e instanceof Error?e.message:String(e)); }
     setSaving(false);
+  }
+  function openTransfer(from:keyof Wallets, to:keyof Wallets, defaultAmt?:number, defaultNote?:string){
+    setTransferFrom(from);
+    setTransferTo(to);
+    const available = round2(metaRef.current.wallets[from]||0);
+    const preset = defaultAmt!==undefined && defaultAmt>0 ? round2(defaultAmt) : Math.min(available, 100);
+    setTransferAmt(preset>0 ? preset : 100);
+    setTransferNote(defaultNote||'');
+    setTransferError('');
+    setShowWalletTransfer(true);
+  }
+  async function doTransfer(){
+    if(transferFrom===transferTo){ setTransferError('Source and destination wallets must be different.'); return; }
+    const amt = round2(transferAmt);
+    if(!amt || amt<=0){ setTransferError('Enter an amount greater than zero.'); return; }
+    const base = captureMeta();
+    const sourceBal = round2(base.value.wallets[transferFrom]||0);
+    if(amt > sourceBal){
+      setTransferError(`Insufficient funds in ${walletLabel(transferFrom)}. Available: ${peso(sourceBal)}`);
+      return;
+    }
+    setSaving(true);
+    setTransferError('');
+    try{
+      const now = Date.now();
+      const date = todayKey();
+      const time = currentTimeLabel();
+      const fromLabel = walletLabel(transferFrom);
+      const toLabel = walletLabel(transferTo);
+      const note = transferNote.trim();
+
+      let category = 'Wallet Transfer';
+      if(transferFrom==='cash' && transferTo==='maribank') category = 'Cash to Main Wallet deposit';
+      else if(transferTo==='profit') category = 'Profit Stash';
+      else if(transferFrom==='profit' && transferTo==='maribank') category = 'Reinvest Profit to Main';
+      else if(transferFrom==='profit') category = 'Profit Transfer';
+
+      const adjDeduct: WalletAdjustment = {
+        wallet: transferFrom,
+        mode: 'deduct',
+        amount: amt,
+        category,
+        note: note ? `${note} (to ${toLabel})` : `Transfer to ${toLabel}`,
+        date,
+        time,
+        createdAt: now,
+      };
+      const adjAdd: WalletAdjustment = {
+        wallet: transferTo,
+        mode: 'add',
+        amount: amt,
+        category,
+        note: note ? `${note} (from ${fromLabel})` : `Transfer from ${fromLabel}`,
+        date,
+        time,
+        createdAt: now+1,
+      };
+
+      const newCash = transferFrom==='cash' ? round2(base.value.wallets.cash - amt) : transferTo==='cash' ? round2(base.value.wallets.cash + amt) : round2(base.value.wallets.cash);
+      const newMaribank = transferFrom==='maribank' ? round2(base.value.wallets.maribank - amt) : transferTo==='maribank' ? round2(base.value.wallets.maribank + amt) : round2(base.value.wallets.maribank);
+      const newProfit = transferFrom==='profit' ? round2((base.value.wallets.profit||0) - amt) : transferTo==='profit' ? round2((base.value.wallets.profit||0) + amt) : round2(base.value.wallets.profit||0);
+      const nextWallets: Wallets = {
+        cash: newCash,
+        maribank: newMaribank,
+        ...(newProfit > 0 ? { profit: newProfit } : {}),
+      };
+
+      await api('records.create', {collection:'wallet_adjustments', value:adjDeduct, idempotency_key:`transfer-out-${now}-${uid()}`});
+      await api('records.create', {collection:'wallet_adjustments', value:adjAdd, idempotency_key:`transfer-in-${now}-${uid()}`});
+      await saveMeta({...base.value, wallets:nextWallets}, base);
+
+      if(!liveSubscriptionActive.current){
+        setWalletAdjustments(prev=>[
+          {id:uid(), value:adjAdd},
+          {id:uid(), value:adjDeduct},
+          ...prev,
+        ]);
+      }
+      setShowWalletTransfer(false);
+      showToast(`Transferred ${peso(amt)} from ${fromLabel} to ${toLabel}.`);
+    }catch(e){
+      setTransferError(e instanceof Error?e.message:String(e));
+    }finally{
+      setSaving(false);
+    }
   }
   async function clearSample(){
     setSaving(true);
@@ -1302,7 +1537,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
       const isCustomerInput = !!(active && active.getAttribute && active.getAttribute('data-customer-input')==='true');
       const isTextTyping = !!(active && ((active.tagName==='TEXTAREA') || (active.tagName==='INPUT' && (active as HTMLInputElement).type==='text') || active.tagName==='SELECT' || active.isContentEditable));
       const isButton = !!(active && active.tagName==='BUTTON');
-      const anySheet = showTx || detail || customerDetail || showCustomerForm || showWalletAction || showEOD || addNameTarget || showHelp || showServices || pendingPayment || tipPrompt || pendingRelease || pendingCorrection;
+      const anySheet = showTx || detail || customerDetail || showCustomerForm || showWalletAction || showWalletTransfer || showEOD || addNameTarget || showHelp || showServices || pendingPayment || tipPrompt || pendingRelease || pendingCorrection;
       const key = e.key;
       const lower = key.toLowerCase();
       if(pendingPayment||tipPrompt||pendingRelease||pendingCorrection){
@@ -1333,6 +1568,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         else if(customerDetail) setCustomerDetail(null);
         else if(showCustomerForm) setShowCustomerForm(false);
         else if(showWalletAction) setShowWalletAction(null);
+        else if(showWalletTransfer) setShowWalletTransfer(false);
         else if(showEOD) setShowEOD(false);
         else if(tab!=='home'){ setTab('home'); setSaveMsg(''); }
         return;
@@ -1372,7 +1608,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         if((key==='Delete' || key==='Backspace') && !isTyping){ e.preventDefault(); setConfirmDeleteCustomer(customerDetail); return; }
         return;
       }
-      if(showWalletAction || showEOD){ return; }
+      if(showWalletAction || showWalletTransfer || showEOD){ return; }
       if(showServices){ return; }
       // Dashboard recent list: Enter repeats focused recent row, arrows move within it
       const inRecent = !!(active && active.closest && active.closest('[data-recent-list]'));
@@ -1442,7 +1678,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
     };
     window.addEventListener('keydown', onKeyDown);
     return ()=> window.removeEventListener('keydown', onKeyDown);
-  }, [pendingPayment,tipPrompt,pendingRelease,pendingCorrection,saving,showTx, detail, customerDetail, showCustomerForm, showWalletAction, showEOD, addNameTarget, confirmDelete, confirmDeleteCustomer, confirmClear, showHelp, shortcutsOn, tab, filtered, sortedCustomers, selectedTxId, selectedCustomerId, fType, fAmount, last7, selectedDay, meta, showServices, dashboardRecent, recentIndex, expectedCash, startingFloat]);
+  }, [pendingPayment,tipPrompt,pendingRelease,pendingCorrection,saving,showTx, detail, customerDetail, showCustomerForm, showWalletAction, showWalletTransfer, showEOD, addNameTarget, confirmDelete, confirmDeleteCustomer, confirmClear, showHelp, shortcutsOn, tab, filtered, sortedCustomers, selectedTxId, selectedCustomerId, fType, fAmount, last7, selectedDay, meta, showServices, dashboardRecent, recentIndex, expectedCash, startingFloat]);
 
   const reminderPreview = useMemo(()=>utangReminder ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(utangReminderSvg(utangReminder.value,meta.businessName,utangReminderTheme,utangReminderAll ? records.filter(r=>r.value.utang && r.value.utangStatus!=='paid' && digitsOnly(r.value.phone||'')===digitsOnly(utangReminder.value.phone||'')) : null))}` : '',[utangReminder,meta.businessName,records,utangReminderTheme]);
 
@@ -1508,90 +1744,402 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         {syncConflicts.length>0 && <section role="alert" className="card p-4 mb-3 border-2 border-[var(--amber-border)] bg-[var(--amber-soft)]"><h2 className="font-display font-bold text-lg">Review offline edits ({syncConflicts.length})</h2><p className="text-sm font-semibold mt-1">These records changed on another device before your offline edits synced. Choose which version to keep; the other copy will not be applied. For wallet/settings conflicts, compare both balances and reconcile transactions after choosing.</p><div className="mt-2 space-y-2">{syncConflicts.map(conflict=>{const remote=conflict.value.remoteValue;const local=conflict.value.value;const describe=(value:any)=>value?.wallets?`Main wallet ${peso(value.wallets.maribank||0)} · Cash ${peso(value.wallets.cash||0)}`:value?`${value.type||value.kind||'Record'}${value.date?` • ${value.date}`:''}${typeof value.amount==='number'?` • ${peso(value.amount)}`:''}`:'Record was deleted';return <div key={conflict.id} className="rounded-xl border border-[var(--amber-border)] bg-[var(--surface)] p-3"><p className="font-black text-sm">{conflict.value.collection} · {conflict.value.recordId}</p><p className="text-xs font-semibold text-[var(--muted)] mt-1">Cloud: {describe(remote)}{conflict.value.action==='delete'?' · your offline change was a delete':` · Your offline version: ${describe(local)}`}</p><div className="flex flex-wrap gap-2 mt-2"><button onClick={()=>void resolveSyncConflict(conflict,'use_remote')} className="min-h-[40px] rounded-xl border border-[var(--line)] px-3 text-xs font-black">Keep cloud version</button><button onClick={()=>void resolveSyncConflict(conflict,'keep_local')} className="min-h-[40px] rounded-xl bg-[var(--strong)] px-3 text-xs font-black text-[var(--on-strong)]">Apply my offline change</button></div></div>})}</div></section>}
         {maribankLow && <div className="wallet-low-notice card p-4 mb-3 flex gap-3 items-start" style={{borderColor:'var(--amber-border)', background:'var(--amber-soft)'}}><AlertTriangle className="text-[var(--amber)] shrink-0 mt-0.5" size={22}/><div className="flex-1"><p className="font-display font-bold">Main Wallet balance low — {peso(meta.wallets.maribank)}</p><p className="text-sm font-semibold text-[var(--muted)]">Need to top-up via External Provider before the next rush.</p></div><button onClick={()=>openNew('Top-Up')} className="shrink-0 min-h-[44px] px-4 rounded-xl bg-[var(--green-solid)] text-white font-black text-sm">Top-Up via External Provider</button></div>}
         {tab==='home' && (
-          <main>
-            {dayClosed && todayReport && <section className="card p-4 mb-3" style={{borderColor:'var(--green)', background:'var(--green-soft)'}}><div className="flex justify-between items-start gap-2"><div><p className="text-xs font-black tracking-wide uppercase text-[var(--green)]">Day Closed • {dateLabel(todayKey())}</p><p className="font-display font-bold text-lg mt-1">Closed with {peso(todayReport.value.actualCash)} counted • {todayReport.value.difference===0?'Exact':todayReport.value.difference<0?`Short ${peso(Math.abs(todayReport.value.difference))}`:`Over ${peso(todayReport.value.difference)}`}</p><p className="text-sm font-semibold text-[var(--muted)]">Sales {peso(todayReport.value.sales)} • Profit {peso(todayReport.value.profit)} • Tomorrow float {peso(todayReport.value.tomorrowFloat)}</p></div><button onClick={()=>setTab('report')} className="text-sm font-black text-[var(--green)] shrink-0">View report →</button></div></section>}
-            {utangOutstanding>0 && <section className="utang-overview card p-4 mb-3"><div className="flex justify-between items-start gap-2 flex-wrap"><div><p className="label">Utang Outstanding</p><p className="font-display font-extrabold text-2xl">{peso(utangOutstanding)}</p><p className="text-xs font-bold text-[var(--muted)]">{utangList.filter(r=>r.value.utangStatus!=='paid').length} unpaid • Due Today: {utangDueTodayCount} • Overdue: {utangOverdueCount}</p></div><button onClick={()=>setTab('utang')} className="min-h-[44px] px-4 rounded-xl bg-[var(--purple-solid)] text-white font-black text-sm shrink-0">View Utang →</button></div><div className="flex flex-wrap gap-2 mt-3">{utangOverdueCount>0 && <button onClick={()=>{setUtangFilter('Overdue'); setTab('utang');}} className="min-h-[40px] px-3 rounded-full bg-[var(--red-soft)] border border-[var(--red-border)] text-[var(--red)] text-xs font-black">{utangOverdueCount} overdue — follow up →</button>}{utangDueTodayCount>0 && <button onClick={()=>{setUtangFilter('Due Today'); setTab('utang');}} className="min-h-[40px] px-3 rounded-full bg-[var(--amber-soft)] border border-[var(--amber-border)] text-[var(--amber)] text-xs font-black">Due Today: {utangDueTodayCount} →</button>}{utangDueTodayCount===0 && utangOverdueCount===0 && <span className="text-xs font-bold text-[var(--muted)]">No utang due today. Promise dates are tracked in the Utang tab.</span>}</div>{utangDueTodayList.slice(0,3).map(r=>{ const cust=customerByPhone.get(digitsOnly(r.value.phone||'')); return <button key={r.id} onClick={()=>{setUtangFilter('Due Today'); setTab('utang');}} className="w-full flex justify-between gap-2 mt-2 rounded-xl bg-[var(--surface2)] px-3 py-2 text-left"><span className="font-extrabold text-sm truncate">Due Today: {displayNameOnly(cust?.value.name||r.value.customerName, r.value.phone)}</span><span className="font-black text-sm shrink-0">{peso(utangRemaining(r.value))}</span></button> })}</section>}
-            <div className="dashboard-grid"><div className="dash-col dash-col-left">
-            <div className="dash-summary-grid grid grid-cols-2 gap-3">
-              <div className="card p-4 border-2" style={{borderColor:'var(--wallet-border)'}}><p className="label">Main Wallet Balance</p><p className="font-display font-extrabold mt-1 text-[var(--wallet-ink)]" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(meta.wallets.maribank)}</p><p className="text-xs font-bold text-[var(--muted)]">Main wallet for all sales</p>{maribankLow && <p className="text-[11px] font-black text-[var(--amber)] bg-[var(--amber-soft)] px-2 py-1 rounded-full mt-2 inline-block">Main Wallet low - top up soon</p>}</div>
-              <div className="card p-4"><p className="label">Cash on Hand</p><p className="font-display font-extrabold mt-1" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(meta.wallets.cash)}</p><p className="text-xs font-bold text-[var(--muted)]">Ready for cash out • {startingFloat===undefined?'Opening float not recorded':`Float ${startingFloatLabel}`}</p></div>
-              <div className="card p-4"><p className="label">Today&apos;s Profit</p><p className="font-display font-extrabold mt-1 text-[var(--green)]" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(todayProfit)}</p><p className="text-xs font-bold text-[var(--muted)]">{todayTips>0?`Includes ${peso(todayTips)} extra / tips • `:''}Recorded, includes unpaid Utang; not cash received</p></div>
-              <div className="card p-4"><p className="label">Today&apos;s Sales</p><p className="font-display font-extrabold mt-1" style={{fontSize:'clamp(26px,4vw,34px)'}}>{peso(todaySales)}</p><p className="text-xs font-bold text-[var(--muted)]">{todayTxs.filter(t=>salesTypes.includes(t.type)).length} transactions today</p></div>
-            </div>
-            <div className="card relative isolate overflow-hidden p-4 mt-3 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between" style={{background:'var(--green-soft)'}}>
-              <svg aria-hidden="true" className="eload-topup-art pointer-events-none absolute -right-2 -top-5 z-0 h-40 w-40 opacity-40 sm:right-4 sm:top-1 sm:h-36 sm:w-36" viewBox="0 0 180 180" fill="none">
-                <defs>
-                  <linearGradient id="clayPhone" x1="68" y1="20" x2="132" y2="150" gradientUnits="userSpaceOnUse"><stop stopColor="#fff"/><stop offset="1" stopColor="#c4f3d9"/></linearGradient>
-                  <linearGradient id="clayCoin" x1="36" y1="113" x2="112" y2="166" gradientUnits="userSpaceOnUse"><stop stopColor="#a8edc5"/><stop offset="1" stopColor="#4bc889"/></linearGradient>
-                  <filter id="clayShadow" x="8" y="8" width="164" height="172" colorInterpolationFilters="sRGB" filterUnits="userSpaceOnUse"><feDropShadow dx="0" dy="7" stdDeviation="6" floodColor="#087a48" floodOpacity=".2"/></filter>
-                </defs>
-                <g filter="url(#clayShadow)">
-                  <ellipse cx="71" cy="145" rx="39" ry="15" fill="#35b977"/><path d="M32 132v13c0 8 17 15 39 15s39-7 39-15v-13" fill="url(#clayCoin)"/><ellipse cx="71" cy="132" rx="39" ry="15" fill="#c7f4d9"/><ellipse cx="71" cy="132" rx="26" ry="9" stroke="#67ce96" strokeWidth="3"/>
-                  <ellipse cx="113" cy="151" rx="28" ry="11" fill="#2bad6a"/><path d="M85 140v11c0 6 13 11 28 11s28-5 28-11v-11" fill="#75d9a1"/><ellipse cx="113" cy="140" rx="28" ry="11" fill="#c4f3d9"/>
-                  <g transform="rotate(10 101 74)"><rect x="67" y="22" width="62" height="105" rx="18" fill="url(#clayPhone)" stroke="#fff" strokeWidth="4"/><rect x="74" y="37" width="48" height="70" rx="11" fill="#e3f8eb"/><rect x="88" y="29" width="20" height="3" rx="1.5" fill="#8bcda7"/><circle cx="98" cy="116" r="4" fill="#70bd8d"/><circle cx="98" cy="70" r="18" fill="#05a85b"/><path d="m90 70 6 6 11-13" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/></g>
-                </g>
-              </svg>
-              <div className="relative z-10 min-w-0"><p className="font-display font-bold text-lg text-[var(--green)]">External Provider top-ups this week: {peso(weekTopUp)}</p><p className="text-sm font-semibold text-[var(--muted)]">External Provider is only a top-up source — not a customer wallet.</p></div>
-              <button onClick={()=>openNew('Top-Up')} className="big-btn relative z-10 bg-[var(--green-solid)] text-white px-5"><RefreshCw size={18}/> Top-Up via External Provider</button>
-            </div>
-            <section className="card p-4 sm:p-5 mt-3">
-              <h2 className="font-display font-bold text-xl">Wallets + Float</h2>
-              <p className="text-sm font-semibold text-[var(--muted)]">Starting float today: <b className="text-[var(--ink)]">{startingFloatLabel}</b> • Expected cash {peso(expectedCash)}</p>
-              {maribankLow && <p className="text-[11px] font-black text-[var(--amber)] bg-[var(--amber-soft)] border border-[var(--amber-border)] px-2.5 py-1.5 rounded-full mt-2 inline-block">Main Wallet low - top up soon</p>}
-              <div className="space-y-2.5 mt-3">{walletDefs.map(w=><button key={w.key} onClick={()=>setTab('wallets')} className="w-full flex justify-between items-center p-3 rounded-2xl bg-[var(--surface2)] text-left"><span><span className="block font-extrabold text-sm">{w.label}</span><span className="text-xs font-bold text-[var(--muted)]">Live ledger balance • unpaid receipts excluded</span></span><span className="font-display font-extrabold" style={{color:w.color}}>{peso(meta.wallets[w.key])}</span></button>)}</div>
-              <button onClick={()=>openNew('Top-Up')} className="w-full flex justify-between items-center p-3 rounded-2xl text-left mt-2.5" style={{background:'var(--green-soft)'}}><span><span className="block font-extrabold text-sm text-[var(--green)]">External Provider — Top-Up Source Only</span><span className="text-xs font-bold text-[var(--muted)]">Not a customer wallet • {peso(weekTopUp)} topped up this week</span></span><span className="font-display font-extrabold text-[var(--green)]">Top-Up →</span></button>
-              <p className="text-xs font-bold text-[var(--muted)] mt-3">Total across Main Wallet + Cash: <b className="text-[var(--ink)]">{peso(totalWallet)}</b></p>
-            </section>
-            </div><div className="dash-col dash-col-middle">
-
-            <section className="card p-4 sm:p-5 mt-3">
-              <button onClick={()=>setFavOpen(v=>!v)} className="w-full flex justify-between items-center text-left"><span><span className="font-display font-bold text-xl flex items-center gap-2"><Star size={20} className="text-[var(--amber)]"/> Favorites — one-tap repeat</span><span className="block text-sm text-[var(--muted)] font-semibold">Tap a chip to pre-fill a sale for that customer.</span></span><ChevronDown size={20} className={`shrink-0 transition-transform ${favOpen?'rotate-180':''}`}/></button>
-              {favOpen && (favorites.length===0 ? <p className="text-sm font-bold text-[var(--muted)] mt-3">No favorites yet. Open a transaction and tap the star to save it here.</p> : <div className="favorites-scroll flex flex-wrap gap-2 mt-3">{favorites.slice(0,5).map(f=>{ const cust=customerByPhone.get(digitsOnly(f.value.phone)); return <button key={f.id} onClick={()=>openNew(f.value.type, cust||null, {amount:f.value.amount, network:f.value.network})} className="min-h-[44px] px-3.5 rounded-full bg-[var(--green-soft)] border border-[var(--line)] font-black text-[13px] text-left">{displayNameOnly(f.value.name, f.value.phone)} - {peso(f.value.amount)} {f.value.type==='E-Load'?f.value.network:f.value.type}</button> })}</div>)}
-            </section>
-
-            <section className="card p-4 sm:p-5 mt-3">
-              <div className="flex justify-between items-start gap-2"><div><h2 className="font-display font-bold text-xl flex items-center gap-2"><Crown size={20} className="text-[var(--amber)]"/> Top Suki this week</h2><p className="text-sm text-[var(--muted)] font-semibold">Your most frequent customers — tap to transact again fast.</p></div><button onClick={()=>setTab('customers')} className="text-sm font-black text-[var(--green)] shrink-0">All customers →</button></div>
-              {topSuki.length===0 ? <p className="text-sm font-bold text-[var(--muted)] mt-3">No customer transactions this week yet. Save a sale with a name or number and your suki will appear here.</p> : <div className="top-suki-grid mt-3">{topSuki.map((s,i)=>{ const rec=customerByPhone.get(s.phone); return <div key={s.phone} className="top-suki-card rounded-2xl bg-[var(--surface2)] p-3"><div className="flex items-center gap-2"><CustomerAvatar name={s.name} phone={s.phone} /><div className="min-w-0"><p className="font-extrabold truncate">#{i+1} {displayNameOnly(s.name, s.phone)}</p><p className="text-xs font-bold text-[var(--muted)]">{isRealName(s.name, s.phone) ? `${formatPhone(s.phone)} • ` : ''}{s.count} transactions • {peso(s.amount)}</p></div></div><div className="top-suki-actions grid grid-cols-3 gap-1.5 mt-3"><button onClick={()=>openNew('E-Load', rec||null)} className="min-h-[40px] rounded-lg bg-[var(--green-solid)] text-white text-[11px] font-black">E-Load</button><button onClick={()=>openNew('Cash In', rec||null)} className="min-h-[40px] rounded-lg bg-[var(--blue-solid)] text-white text-[11px] font-black">Cash In</button><button onClick={()=>openNew('Cash Out', rec||null)} className="min-h-[40px] rounded-lg bg-[var(--purple-solid)] text-white text-[11px] font-black">Cash Out</button></div></div> })}</div>}
-            </section>
-
-            <section className="card p-4 sm:p-5 mt-3">
-              <h2 className="font-display font-bold text-xl">Today&apos;s breakdown — all via Main Wallet</h2><p className="mt-1 text-xs font-bold text-[var(--muted)]">Recorded sales, fees, and profit include unpaid Utang. They are not customer cash received. Wallets show only recorded payouts and confirmed receipts.</p>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
-                <div className="rounded-2xl bg-[var(--surface2)] p-4"><div className="flex items-center gap-2 text-[var(--blue)] font-black text-sm"><Zap size={18}/> E-Load Sales</div><p className="font-display font-extrabold text-2xl mt-2">{eloadToday.length} sales • {peso(sum(eloadToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--green)]">Profit {peso(sum(eloadToday,t=>txProfit(t)))}</p>{sum(eloadToday,txTip)>0 && <p className="text-xs font-bold text-[var(--muted)]">Extra / Tips {peso(sum(eloadToday,txTip))}</p>}</div>
-                <div className="rounded-2xl bg-[var(--surface2)] p-4"><div className="flex items-center gap-2 text-[var(--blue)] font-black text-sm"><ArrowDownToLine size={18}/> Cash In</div><p className="font-display font-extrabold text-2xl mt-2">{cashInToday.length} • {peso(sum(cashInToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--green)]">Fees {peso(sum(cashInToday,t=>t.fee))}</p>{sum(cashInToday,txTip)>0 && <p className="text-xs font-bold text-[var(--muted)]">Extra / Tips {peso(sum(cashInToday,txTip))}</p>}</div>
-                <div className="rounded-2xl bg-[var(--surface2)] p-4"><div className="flex items-center gap-2 text-[var(--purple)] font-black text-sm"><ArrowUpFromLine size={18}/> Cash Out</div><p className="font-display font-extrabold text-2xl mt-2">{cashOutToday.length} • {peso(sum(cashOutToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--green)]">Fees {peso(sum(cashOutToday,t=>t.fee))}</p>{sum(cashOutToday,txTip)>0 && <p className="text-xs font-bold text-[var(--muted)]">Extra / Tips {peso(sum(cashOutToday,txTip))}</p>}</div>
-                <div className="rounded-2xl p-4" style={{background:'var(--green-soft)'}}><div className="flex items-center gap-2 text-[var(--green)] font-black text-sm"><RefreshCw size={18}/> External Provider Top-Ups</div><p className="font-display font-extrabold text-2xl mt-2">{topUpToday.length} • {peso(sum(topUpToday,t=>t.amount))}</p><p className="text-sm font-bold text-[var(--muted)]">Fees paid {peso(sum(topUpToday,t=>t.fee))}</p></div>
-              </div>
-              <div className="quick-actions-grid grid grid-cols-2 gap-2 mt-3">
-                <button onClick={()=>openNew('E-Load')} aria-label="E-Load Sale" className="big-btn bg-[var(--green-solid)] text-white"><Smartphone size={20}/> E-Load Sale</button>
-                <button onClick={()=>openNew('Cash In')} aria-label="Cash In" className="big-btn bg-[var(--blue-solid)] text-white"><ArrowDownToLine size={20}/> Cash In</button>
-                <button onClick={()=>openNew('Cash Out')} aria-label="Cash Out" className="big-btn bg-[var(--purple-solid)] text-white"><ArrowUpFromLine size={20}/> Cash Out</button>
-                <button onClick={()=>openNew('Top-Up')} aria-label="Top-Up via External Provider" className="big-btn bg-[var(--green-solid)] text-white ring-2 ring-[var(--green)] ring-offset-2 ring-offset-[var(--surface)]"><RefreshCw size={20}/> Top-Up via External Provider</button>
-              </div>
-            </section>
-
-            </div><div className="dash-col dash-col-right">
-            <div className="grid gap-3 mt-3">
-              <section className="card p-4 sm:p-5">
-                <div className="flex justify-between items-start gap-2"><div><h2 className="font-display font-bold text-xl">Last 7 days</h2><p className="text-sm text-[var(--muted)] font-semibold">Tap a bar to see that day&apos;s detail.</p></div><span className="text-xs font-black bg-[var(--green-soft)] text-[var(--green)] px-2.5 py-1.5 rounded-full">Sales vs Profit</span></div>
-                <div className="flex items-end justify-between gap-2 sm:gap-3 h-[170px] mt-4 pt-2">
-                  {last7.map(d=>{ const active=selectedDay===d.key; return <button key={d.key} onClick={()=>setSelectedDay(d.key)} className={`flex-1 flex flex-col items-center justify-end gap-1 min-w-0 rounded-xl p-1 ${active?'bg-[var(--green-soft)]':''}`} aria-label={`Show ${dateLabel(d.key)} sales ${peso(d.sales)}`}>
-                    <span className="text-[11px] font-black text-[var(--green)]">{d.profit>0?peso(d.profit):''}</span>
-                    <div className="w-full max-w-[44px] rounded-t-lg bg-[var(--green-solid)]" style={{height:Math.max(8, d.sales/maxSales*110)}} />
-                    <span className="text-[11px] font-black">{d.label}</span><span className="text-[10px] font-bold text-[var(--muted)]">{d.count} tx</span>
-                  </button> })}
+          <main className="space-y-4">
+            {dayClosed && todayReport && (
+              <section className="card p-4" style={{borderColor:'var(--green)', background:'var(--green-soft)'}}>
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <p className="text-xs font-black tracking-wide uppercase text-[var(--green)]">Day Closed • {dateLabel(todayKey())}</p>
+                    <p className="font-display font-bold text-lg mt-1">Closed with {peso(todayReport.value.actualCash)} counted • {todayReport.value.difference===0?'Exact':todayReport.value.difference<0?`Short ${peso(Math.abs(todayReport.value.difference))}`:`Over ${peso(todayReport.value.difference)}`}</p>
+                    <p className="text-sm font-semibold text-[var(--muted)]">Sales {peso(todayReport.value.sales)} • Profit {peso(todayReport.value.profit)} • Tomorrow float {peso(todayReport.value.tomorrowFloat)}</p>
+                  </div>
+                  <button onClick={()=>setTab('report')} className="text-sm font-black text-[var(--green)] shrink-0">View report →</button>
                 </div>
-                <div className="mt-4 rounded-2xl bg-[var(--surface2)] p-3 flex flex-wrap justify-between gap-2"><div><p className="label">Selected: {dateLabel(selectedDay)}</p><p className="font-display font-bold text-lg">{peso(sum(dayTxs.filter(t=>salesTypes.includes(t.type)),t=>t.amount))} sales • {peso(sum(dayTxs,t=>txProfit(t)))} profit • {dayTxs.filter(t=>salesTypes.includes(t.type)).length} transactions</p></div><button onClick={()=>{setTab('transactions'); setFilter('All');}} className="font-black text-[var(--green)] text-sm flex items-center gap-1">View day <ChevronRight size={16}/></button></div>
               </section>
+            )}
+
+            {utangOutstanding>0 && (
+              <section className="utang-overview card p-4">
+                <div className="flex justify-between items-start gap-2 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-[var(--purple-soft)] border border-[var(--purple-border)] grid place-items-center shrink-0">
+                      <ClayUtangHourglassArt className="w-9 h-9" />
+                    </div>
+                    <div>
+                      <p className="label text-[var(--purple)]">Utang Outstanding</p>
+                      <p className="font-display font-extrabold text-2xl sm:text-3xl text-[var(--ink)]">{peso(utangOutstanding)}</p>
+                      <p className="text-xs font-bold text-[var(--muted)]">{utangList.filter(r=>r.value.utangStatus!=='paid').length} unpaid • Due Today: {utangDueTodayCount} • Overdue: {utangOverdueCount}</p>
+                    </div>
+                  </div>
+                  <button onClick={()=>setTab('utang')} className="min-h-[44px] px-4 rounded-xl bg-[var(--purple-solid)] text-white font-black text-sm shrink-0 flex items-center gap-1.5 shadow-md">
+                    <span>View Utang</span> <ArrowRight size={16} />
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-[var(--line)]">
+                  {utangOverdueCount>0 && (
+                    <button onClick={()=>{setUtangFilter('Overdue'); setTab('utang');}} className="min-h-[40px] px-3.5 rounded-full bg-[var(--red-soft)] border border-[var(--red-border)] text-[var(--red)] text-xs font-black flex items-center gap-1.5">
+                      <AlertCircle size={14}/> {utangOverdueCount} overdue — follow up →
+                    </button>
+                  )}
+                  {utangDueTodayCount>0 && (
+                    <button onClick={()=>{setUtangFilter('Due Today'); setTab('utang');}} className="min-h-[40px] px-3.5 rounded-full bg-[var(--amber-soft)] border border-[var(--amber-border)] text-[var(--amber)] text-xs font-black flex items-center gap-1.5">
+                      <Clock size={14}/> Due Today: {utangDueTodayCount} →
+                    </button>
+                  )}
+                  {utangDueTodayCount===0 && utangOverdueCount===0 && (
+                    <span className="text-xs font-bold text-[var(--muted)]">No utang due today. Promise dates are tracked in the Utang tab.</span>
+                  )}
+                </div>
+                {utangDueTodayList.slice(0,3).map(r=>{
+                  const cust=customerByPhone.get(digitsOnly(r.value.phone||''));
+                  return (
+                    <button key={r.id} onClick={()=>{setUtangFilter('Due Today'); setTab('utang');}} className="w-full flex justify-between gap-2 mt-2 rounded-xl bg-[var(--surface2)] px-3 py-2 text-left hover:bg-[var(--line)] transition-colors">
+                      <span className="font-extrabold text-sm truncate">Due Today: {displayNameOnly(cust?.value.name||r.value.customerName, r.value.phone)}</span>
+                      <span className="font-black text-sm shrink-0 text-[var(--purple)]">{peso(utangRemaining(r.value))}</span>
+                    </button>
+                  );
+                })}
+              </section>
+            )}
+
+            {/* 1. Hero Store Header & Clay POS Action Dock */}
+            <div className="card relative isolate overflow-hidden p-4 sm:p-6" style={{background:'linear-gradient(135deg, var(--surface) 0%, var(--surface2) 100%)'}}>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="relative z-10 flex items-center gap-4">
+                  <div className="hidden sm:block shrink-0">
+                    <ClayDashboardHeroArt className="w-24 h-24 sm:w-28 sm:h-28" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="px-2.5 py-1 rounded-full text-[11px] font-black uppercase tracking-wider bg-[var(--green-soft)] text-[var(--green)] border border-[var(--green-border)]">Store Cockpit • Tab First</span>
+                      <span className="text-xs font-bold text-[var(--muted)]">{dateLabel(todayKey())}</span>
+                    </div>
+                    <h1 className="font-display font-extrabold text-2xl sm:text-3xl mt-1 text-[var(--ink)]">{settings.businessName || 'E-Load & Cash In/Out App'}</h1>
+                    <p className="text-xs sm:text-sm font-semibold text-[var(--muted)] mt-0.5">Fast retail POS terminal • External Provider top-ups this week: <b className="text-[var(--green)]">{peso(weekTopUp)}</b></p>
+                  </div>
+                </div>
+                <div className="relative z-10 flex items-center gap-2 flex-wrap">
+                  <button onClick={openEndDay} className="min-h-[44px] px-3.5 rounded-xl border border-[var(--line)] bg-[var(--surface)] text-[var(--ink)] font-black text-xs sm:text-sm flex items-center gap-2 hover:bg-[var(--surface2)] shadow-sm">
+                    <CheckCircle2 size={16} className="text-[var(--green)]"/> End Day
+                  </button>
+                  <button onClick={()=>openNew('E-Load')} className="min-h-[44px] px-4 rounded-xl bg-[var(--green-solid)] text-white font-black text-xs sm:text-sm flex items-center gap-2 shadow-md">
+                    <Plus size={18}/> + Quick Sale
+                  </button>
+                </div>
+              </div>
+
+              {/* 4 Clay 3D POS Action Buttons */}
+              <div className="quick-actions-grid grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-3 mt-4 pt-4 border-t border-[var(--line)]">
+                <button onClick={()=>openNew('E-Load')} aria-label="E-Load Sale" className="clay-action-btn clay-action-btn--eload">
+                  <Smartphone size={20} className="shrink-0"/>
+                  <span className="truncate">E-Load Sale</span>
+                </button>
+                <button onClick={()=>openNew('Cash In')} aria-label="Cash In" className="clay-action-btn clay-action-btn--cashin">
+                  <ArrowDownToLine size={20} className="shrink-0"/>
+                  <span className="truncate">Cash In</span>
+                </button>
+                <button onClick={()=>openNew('Cash Out')} aria-label="Cash Out" className="clay-action-btn clay-action-btn--cashout">
+                  <ArrowUpFromLine size={20} className="shrink-0"/>
+                  <span className="truncate">Cash Out</span>
+                </button>
+                <button onClick={()=>openNew('Top-Up')} aria-label="Top-Up via External Provider" className="clay-action-btn clay-action-btn--topup">
+                  <RefreshCw size={20} className="shrink-0"/>
+                  <span className="truncate">External Top-Up</span>
+                </button>
+              </div>
             </div>
 
-            <section className="card p-4 sm:p-5 mt-3">
-              <button onClick={()=>setRecentOpen(v=>!v)} className="w-full flex justify-between items-center text-left"><span><span className="font-display font-bold text-xl">Recent transactions</span><span className="block text-sm font-semibold text-[var(--muted)]">Arrow Up/Down + Enter repeats • or tap Repeat</span></span><ChevronDown size={20} className={`shrink-0 transition-transform ${recentOpen?'rotate-180':''}`}/></button>
-              {recentOpen && <><div className="relative mt-3"><Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={18}/><input value={dashboardSearch} onChange={e=>setDashboardSearch(e.target.value)} placeholder="Search everything — name, number, amount, date, notes…" className="field pl-10" aria-label="Search everything on Dashboard"/></div>
-              <div data-recent-list className="divide-y divide-[var(--line)] mt-1">{dashboardRecent.map((r,i)=><div key={r.id} className={i===recentIndex?'ring-2 ring-inset ring-[var(--green)] rounded-xl':''}><TxRow r={r} customers={customerByPhone} selected={i===recentIndex} onClick={()=>{setRecentIndex(i); setDetail(r);}} onAddName={(p)=>openAddName(p)} onRepeat={()=>repeatTx(r)} onToggleFavorite={()=>toggleFavoriteForTx(r)} isFavorite={favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(r.value.phone) && f.value.amount===r.value.amount && f.value.type===r.value.type)} /></div>)}{dashboardRecent.length===0 && <p className="py-6 text-center font-bold text-[var(--muted)]">No transactions yet. Tap + E-Load Sale to add your first one.</p>}</div></>}
-            </section>
-            <section className="card p-4 sm:p-5 mt-3" style={{background:'var(--green-soft)'}}><h2 className="font-display font-bold text-xl text-[var(--green)]">End Day Summary</h2><p className="text-sm font-semibold text-[var(--muted)]">Expected cash {peso(expectedCash)} • Float tomorrow {peso(tomorrowFloat || expectedCash)} • Profit today {peso(todayProfit)}</p><p className="text-sm font-bold mt-1">Due Today: {utangDueTodayCount} • Overdue: {utangOverdueCount} • Outstanding {peso(utangOutstanding)}</p><button onClick={openEndDay} className="big-btn bg-[var(--strong)] text-[var(--on-strong)] w-full mt-3">End Day — Cash Count + Float</button></section>
-            </div></div>
+            {/* 2. Four Key Financial Pulse Cards (.dash-summary-grid) */}
+            <div className="dash-summary-grid grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Today's Profit */}
+              <div className="clay-kpi-card flex flex-col justify-between cursor-pointer" onClick={()=>setTab('report')}>
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <span className="label text-[var(--green)] flex items-center gap-1.5"><TrendingUp size={14}/> Today&apos;s Profit</span>
+                    <p className="font-display font-extrabold text-[var(--green)] mt-1" style={{fontSize:'clamp(24px,3.5vw,32px)'}}>{peso(todayProfit)}</p>
+                  </div>
+                  <ClayProfitArt className="w-10 h-10 shrink-0" />
+                </div>
+                <div className="mt-2 pt-2 border-t border-[var(--line)] flex justify-between items-center text-xs">
+                  <span className="font-bold text-[var(--muted)] truncate">{todayTips>0?`+${peso(todayTips)} tips`: 'Recorded profit'}</span>
+                  <span className="font-black text-[var(--green)] shrink-0 flex items-center gap-0.5">Report <ChevronRight size={13}/></span>
+                </div>
+              </div>
+
+              {/* Today's Sales */}
+              <div className="clay-kpi-card flex flex-col justify-between cursor-pointer" onClick={()=>setTab('transactions')}>
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <span className="label text-[var(--blue)] flex items-center gap-1.5"><Zap size={14}/> Today&apos;s Sales</span>
+                    <p className="font-display font-extrabold text-[var(--ink)] mt-1" style={{fontSize:'clamp(24px,3.5vw,32px)'}}>{peso(todaySales)}</p>
+                  </div>
+                  <ClaySalesArt className="w-10 h-10 shrink-0" />
+                </div>
+                <div className="mt-2 pt-2 border-t border-[var(--line)] flex justify-between items-center text-xs">
+                  <span className="font-bold text-[var(--muted)] truncate">{todayTxs.filter(t=>salesTypes.includes(t.type)).length} transactions</span>
+                  <span className="font-black text-[var(--blue)] shrink-0 flex items-center gap-0.5">Sales <ChevronRight size={13}/></span>
+                </div>
+              </div>
+
+              {/* Main Wallet Balance */}
+              <div className="clay-kpi-card flex flex-col justify-between cursor-pointer" onClick={()=>setTab('wallets')} style={maribankLow?{borderColor:'var(--amber-border)'}:undefined}>
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <span className="label text-[var(--wallet-ink)] flex items-center gap-1.5"><Wallet size={14}/> Main Wallet Balance</span>
+                    <p className="font-display font-extrabold text-[var(--wallet-ink)] mt-1" style={{fontSize:'clamp(24px,3.5vw,32px)'}}>{peso(meta.wallets.maribank)}</p>
+                  </div>
+                  <ClayMainWalletArt className="w-10 h-10 shrink-0" />
+                </div>
+                <div className="mt-2 pt-2 border-t border-[var(--line)] flex justify-between items-center text-xs">
+                  <span className="font-bold text-[var(--muted)] truncate">{maribankLow ? <b className="text-[var(--amber)]">Low balance!</b> : 'Main load float'}</span>
+                  <span className="font-black text-[var(--wallet-ink)] shrink-0 flex items-center gap-0.5">Wallets <ChevronRight size={13}/></span>
+                </div>
+              </div>
+
+              {/* Cash on Hand */}
+              <div className="clay-kpi-card flex flex-col justify-between cursor-pointer" onClick={()=>setTab('wallets')}>
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <span className="label text-[var(--ink)] flex items-center gap-1.5"><Coins size={14}/> Cash on Hand</span>
+                    <p className="font-display font-extrabold text-[var(--ink)] mt-1" style={{fontSize:'clamp(24px,3.5vw,32px)'}}>{peso(meta.wallets.cash)}</p>
+                  </div>
+                  <ClayCashOnHandArt className="w-10 h-10 shrink-0" />
+                </div>
+                <div className="mt-2 pt-2 border-t border-[var(--line)] flex justify-between items-center text-xs">
+                  <span className="font-bold text-[var(--muted)] truncate">{startingFloat===undefined?'Float not set':`Float ${startingFloatLabel}`}</span>
+                  <span className="font-black text-[var(--ink)] shrink-0 flex items-center gap-0.5">Count <ChevronRight size={13}/></span>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. The Dual-Column Tab-First Grid */}
+            <div className="dashboard-grid">
+              {/* Left Column: Operations, Wallets, and Customer CRM */}
+              <div className="dash-col dash-col-left space-y-4">
+                {/* Wallets & Float Card */}
+                <section className="card p-4 sm:p-5">
+                  <div className="flex justify-between items-center gap-2">
+                    <div>
+                      <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                        <Wallet size={20} className="text-[var(--green)]"/> Wallets + Float
+                      </h2>
+                      <p className="text-xs sm:text-sm font-semibold text-[var(--muted)]">Starting float today: <b className="text-[var(--ink)]">{startingFloatLabel}</b> • Expected cash {peso(expectedCash)}</p>
+                    </div>
+                    <button onClick={()=>setTab('wallets')} className="text-xs sm:text-sm font-black text-[var(--green)] shrink-0">Open Wallets →</button>
+                  </div>
+                  {maribankLow && <p className="text-[11px] font-black text-[var(--amber)] bg-[var(--amber-soft)] border border-[var(--amber-border)] px-2.5 py-1.5 rounded-full mt-3 inline-block">Main Wallet low - top up soon</p>}
+                  <div className="space-y-2 mt-3">
+                    {walletDefs.map(w=>(
+                      <button key={w.key} onClick={()=>setTab('wallets')} className="w-full flex justify-between items-center p-3 rounded-2xl bg-[var(--surface2)] hover:bg-[var(--line)] transition-colors text-left">
+                        <span className="min-w-0 pr-2">
+                          <span className="block font-extrabold text-sm truncate">{w.label}</span>
+                          <span className="text-xs font-bold text-[var(--muted)] truncate">{(todayWalletProfit[w.key]?.total || 0) > 0 ? <b className="text-[var(--green)]">+{peso(todayWalletProfit[w.key].total)} profit today • </b> : ''}Live ledger balance</span>
+                        </span>
+                        <span className="font-display font-extrabold text-base sm:text-lg shrink-0" style={{color:w.color}}>{peso(meta.wallets[w.key] || 0)}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={()=>openNew('Top-Up')} className="w-full flex justify-between items-center p-3 rounded-2xl text-left mt-2.5" style={{background:'var(--green-soft)'}}>
+                    <span className="min-w-0 pr-2">
+                      <span className="block font-extrabold text-sm text-[var(--green)]">External Provider — Top-Up Source Only</span>
+                      <span className="text-xs font-bold text-[var(--muted)]">Not a customer wallet • {peso(weekTopUp)} topped up this week</span>
+                    </span>
+                    <span className="font-display font-extrabold text-[var(--green)] shrink-0">Top-Up →</span>
+                  </button>
+                  <p className="text-xs font-bold text-[var(--muted)] mt-3">Total across Main Wallet + Cash: <b className="text-[var(--ink)]">{peso(totalWallet)}</b></p>
+                </section>
+
+                {/* Top Suki This Week (CRM Hub) */}
+                <section className="card p-4 sm:p-5">
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                        <Crown size={20} className="text-[var(--amber)]"/> Top Suki this week
+                      </h2>
+                      <p className="text-sm text-[var(--muted)] font-semibold">Your most frequent customers — tap to transact again fast.</p>
+                    </div>
+                    <button onClick={()=>setTab('customers')} className="text-sm font-black text-[var(--green)] shrink-0">All customers →</button>
+                  </div>
+                  {topSuki.length===0 ? (
+                    <p className="text-sm font-bold text-[var(--muted)] mt-3">No customer transactions this week yet. Save a sale with a name or number and your suki will appear here.</p>
+                  ) : (
+                    <div className="top-suki-grid mt-3">
+                      {topSuki.map((s,i)=>{
+                        const rec=customerByPhone.get(s.phone);
+                        return (
+                          <div key={s.phone} className="top-suki-card rounded-2xl bg-[var(--surface2)] p-3 border border-[var(--line)]">
+                            <div className="flex items-center gap-2.5">
+                              <CustomerAvatar name={s.name} phone={s.phone} />
+                              <div className="min-w-0 flex-1">
+                                <p className="font-extrabold truncate">#{i+1} {displayNameOnly(s.name, s.phone)}</p>
+                                <p className="text-xs font-bold text-[var(--muted)]">{isRealName(s.name, s.phone) ? `${formatPhone(s.phone)} • ` : ''}{s.count} tx • {peso(s.amount)}</p>
+                              </div>
+                            </div>
+                            <div className="top-suki-actions grid grid-cols-3 gap-1.5 mt-3">
+                              <button onClick={()=>openNew('E-Load', rec||null)} className="min-h-[40px] rounded-xl bg-[var(--green-solid)] text-white text-[11px] font-black">E-Load</button>
+                              <button onClick={()=>openNew('Cash In', rec||null)} className="min-h-[40px] rounded-xl bg-[var(--blue-solid)] text-white text-[11px] font-black">Cash In</button>
+                              <button onClick={()=>openNew('Cash Out', rec||null)} className="min-h-[40px] rounded-xl bg-[var(--purple-solid)] text-white text-[11px] font-black">Cash Out</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+
+                {/* Favorites — One-Tap Repeat */}
+                <section className="card p-4 sm:p-5">
+                  <button onClick={()=>setFavOpen(v=>!v)} className="w-full flex justify-between items-center text-left">
+                    <span>
+                      <span className="font-display font-bold text-xl flex items-center gap-2">
+                        <Star size={20} className="text-[var(--amber)]"/> Favorites — one-tap repeat
+                      </span>
+                      <span className="block text-sm text-[var(--muted)] font-semibold">Tap a chip to pre-fill a sale for that customer.</span>
+                    </span>
+                    <ChevronDown size={20} className={`shrink-0 transition-transform ${favOpen?'rotate-180':''}`}/>
+                  </button>
+                  {favOpen && (
+                    favorites.length===0 ? (
+                      <p className="text-sm font-bold text-[var(--muted)] mt-3">No favorites yet. Open a transaction and tap the star to save it here.</p>
+                    ) : (
+                      <div className="favorites-scroll flex flex-wrap gap-2 mt-3">
+                        {favorites.slice(0,6).map(f=>{
+                          const cust=customerByPhone.get(digitsOnly(f.value.phone));
+                          return (
+                            <button key={f.id} onClick={()=>openNew(f.value.type, cust||null, {amount:f.value.amount, network:f.value.network})} className="min-h-[44px] px-3.5 rounded-full bg-[var(--green-soft)] border border-[var(--line)] font-black text-[13px] text-left hover:bg-[var(--green-border)] transition-colors">
+                              {displayNameOnly(f.value.name, f.value.phone)} - {peso(f.value.amount)} {f.value.type==='E-Load'?f.value.network:f.value.type}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )
+                  )}
+                </section>
+              </div>
+
+              {/* Right Column: Performance, Trends, Recent Ledger, and Closing */}
+              <div className="dash-col dash-col-right space-y-4">
+                {/* Today's Service Breakdown */}
+                <section className="card p-4 sm:p-5">
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <h2 className="font-display font-bold text-xl">Today&apos;s breakdown — all via Main Wallet</h2>
+                      <p className="mt-0.5 text-xs font-bold text-[var(--muted)]">Recorded sales, fees, and profit include unpaid Utang. Wallets reflect recorded payouts & receipts.</p>
+                    </div>
+                    <button onClick={()=>setTab('report')} className="text-xs sm:text-sm font-black text-[var(--green)] shrink-0">Detailed Report →</button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5 sm:gap-3 mt-3">
+                    <div className="rounded-2xl bg-[var(--surface2)] p-3 sm:p-4 border border-[var(--line)]">
+                      <div className="flex items-center gap-1.5 text-[var(--sky)] font-black text-xs sm:text-sm"><Zap size={16}/> E-Load Sales</div>
+                      <p className="font-display font-extrabold text-xl sm:text-2xl mt-1.5">{eloadToday.length} • {peso(sum(eloadToday,t=>t.amount))}</p>
+                      <p className="text-xs sm:text-sm font-bold text-[var(--green)]">Profit {peso(sum(eloadToday,t=>txProfit(t)))}</p>
+                    </div>
+                    <div className="rounded-2xl bg-[var(--surface2)] p-3 sm:p-4 border border-[var(--line)]">
+                      <div className="flex items-center gap-1.5 text-[var(--blue)] font-black text-xs sm:text-sm"><ArrowDownToLine size={16}/> Cash In</div>
+                      <p className="font-display font-extrabold text-xl sm:text-2xl mt-1.5">{cashInToday.length} • {peso(sum(cashInToday,t=>t.amount))}</p>
+                      <p className="text-xs sm:text-sm font-bold text-[var(--green)]">Fees {peso(sum(cashInToday,t=>t.fee))}</p>
+                    </div>
+                    <div className="rounded-2xl bg-[var(--surface2)] p-3 sm:p-4 border border-[var(--line)]">
+                      <div className="flex items-center gap-1.5 text-[var(--purple)] font-black text-xs sm:text-sm"><ArrowUpFromLine size={16}/> Cash Out</div>
+                      <p className="font-display font-extrabold text-xl sm:text-2xl mt-1.5">{cashOutToday.length} • {peso(sum(cashOutToday,t=>t.amount))}</p>
+                      <p className="text-xs sm:text-sm font-bold text-[var(--green)]">Fees {peso(sum(cashOutToday,t=>t.fee))}</p>
+                    </div>
+                    <div className="rounded-2xl p-3 sm:p-4 border border-[var(--green-border)]" style={{background:'var(--green-soft)'}}>
+                      <div className="flex items-center gap-1.5 text-[var(--green)] font-black text-xs sm:text-sm"><RefreshCw size={16}/> External Top-Ups</div>
+                      <p className="font-display font-extrabold text-xl sm:text-2xl mt-1.5">{topUpToday.length} • {peso(sum(topUpToday,t=>t.amount))}</p>
+                      <p className="text-xs sm:text-sm font-bold text-[var(--muted)]">Fees paid {peso(sum(topUpToday,t=>t.fee))}</p>
+                    </div>
+                  </div>
+                </section>
+
+                {/* Last 7 Days Performance Chart */}
+                <section className="card p-4 sm:p-5">
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                        <BarChart2 size={20} className="text-[var(--green)]"/> Last 7 days
+                      </h2>
+                      <p className="text-sm text-[var(--muted)] font-semibold">Tap a bar to see that day&apos;s detail.</p>
+                    </div>
+                    <span className="text-xs font-black bg-[var(--green-soft)] text-[var(--green)] px-2.5 py-1.5 rounded-full border border-[var(--green-border)]">Sales vs Profit</span>
+                  </div>
+                  <div className="flex items-end justify-between gap-1.5 sm:gap-2.5 h-[160px] mt-4 pt-2">
+                    {last7.map(d=>{
+                      const active=selectedDay===d.key;
+                      return (
+                        <button key={d.key} onClick={()=>setSelectedDay(d.key)} className={`flex-1 flex flex-col items-center justify-end gap-1 min-w-0 rounded-xl p-1 transition-colors ${active?'bg-[var(--green-soft)] ring-1 ring-[var(--green)]':''}`} aria-label={`Show ${dateLabel(d.key)} sales ${peso(d.sales)}`}>
+                          <span className="text-[11px] font-black text-[var(--green)] truncate">{d.profit>0?peso(d.profit):''}</span>
+                          <div className="w-full max-w-[42px] rounded-t-lg bg-[var(--green-solid)] shadow-sm" style={{height:Math.max(8, d.sales/maxSales*100)}} />
+                          <span className="text-[11px] font-black truncate">{d.label}</span>
+                          <span className="text-[10px] font-bold text-[var(--muted)] truncate">{d.count} tx</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-4 rounded-2xl bg-[var(--surface2)] p-3 border border-[var(--line)] flex flex-wrap justify-between items-center gap-2">
+                    <div>
+                      <p className="label">Selected: {dateLabel(selectedDay)}</p>
+                      <p className="font-display font-bold text-sm sm:text-base text-[var(--ink)]">
+                        {peso(sum(dayTxs.filter(t=>salesTypes.includes(t.type)),t=>t.amount))} sales • {peso(sum(dayTxs,t=>txProfit(t)))} profit • {dayTxs.filter(t=>salesTypes.includes(t.type)).length} transactions
+                      </p>
+                    </div>
+                    <button onClick={()=>{setTab('transactions'); setFilter('All');}} className="font-black text-[var(--green)] text-xs sm:text-sm flex items-center gap-1 shrink-0">
+                      View day <ChevronRight size={16}/>
+                    </button>
+                  </div>
+                </section>
+
+                {/* Recent Transactions Feed */}
+                <section className="card p-4 sm:p-5">
+                  <div className="flex justify-between items-center gap-2">
+                    <button onClick={()=>setRecentOpen(v=>!v)} className="flex-1 flex justify-between items-center text-left">
+                      <span>
+                        <span className="font-display font-bold text-xl flex items-center gap-2">
+                          <Clock size={20} className="text-[var(--blue)]"/> Recent transactions
+                        </span>
+                        <span className="block text-xs sm:text-sm font-semibold text-[var(--muted)]">Arrow keys + Enter repeats • or tap Repeat</span>
+                      </span>
+                      <ChevronDown size={20} className={`shrink-0 transition-transform ${recentOpen?'rotate-180':''}`}/>
+                    </button>
+                    <button onClick={()=>setTab('transactions')} className="text-xs sm:text-sm font-black text-[var(--green)] shrink-0 hidden sm:block">All in Transactions →</button>
+                  </div>
+                  {recentOpen && (
+                    <>
+                      <div className="relative mt-3">
+                        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={18}/>
+                        <input value={dashboardSearch} onChange={e=>setDashboardSearch(e.target.value)} placeholder="Search everything — name, number, amount, date, notes…" className="field pl-10" aria-label="Search everything on Dashboard"/>
+                      </div>
+                      <div data-recent-list className="divide-y divide-[var(--line)] mt-2 border border-[var(--line)] rounded-2xl overflow-hidden bg-[var(--surface)]">
+                        {dashboardRecent.map((r,i)=>(
+                          <div key={r.id} className={i===recentIndex?'ring-2 ring-inset ring-[var(--green)]':''}>
+                            <TxRow r={r} customers={customerByPhone} selected={i===recentIndex} onClick={()=>{setRecentIndex(i); setDetail(r);}} onAddName={(p)=>openAddName(p)} onRepeat={()=>repeatTx(r)} onToggleFavorite={()=>toggleFavoriteForTx(r)} isFavorite={favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(r.value.phone) && f.value.amount===r.value.amount && f.value.type===r.value.type)} />
+                          </div>
+                        ))}
+                        {dashboardRecent.length===0 && (
+                          <p className="py-6 text-center font-bold text-[var(--muted)]">No transactions yet. Tap + Quick Sale to add your first one.</p>
+                        )}
+                      </div>
+                      <div className="mt-2.5 text-right sm:hidden">
+                        <button onClick={()=>setTab('transactions')} className="text-xs font-black text-[var(--green)]">View all in Transactions →</button>
+                      </div>
+                    </>
+                  )}
+                </section>
+
+                {/* End Day Summary Card */}
+                <section className="card p-4 sm:p-5" style={{background:'linear-gradient(135deg, var(--green-soft) 0%, var(--surface2) 100%)', borderColor:'var(--green-border)'}}>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 size={22} className="text-[var(--green)]"/>
+                    <h2 className="font-display font-bold text-xl text-[var(--green)]">End Day Summary</h2>
+                  </div>
+                  <p className="text-sm font-semibold text-[var(--muted)] mt-1">Expected cash {peso(expectedCash)} • Float tomorrow {peso(tomorrowFloat || expectedCash)} • Profit today {peso(todayProfit)}</p>
+                  <p className="text-xs font-bold mt-1 text-[var(--ink)]">Due Today: {utangDueTodayCount} • Overdue: {utangOverdueCount} • Outstanding {peso(utangOutstanding)}</p>
+                  <button onClick={openEndDay} className="big-btn bg-[var(--strong)] text-[var(--on-strong)] w-full mt-3 shadow-md">
+                    End Day — Cash Count + Float
+                  </button>
+                </section>
+              </div>
+            </div>
           </main>
         )}
 
@@ -1603,7 +2151,7 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
             </div>
             {undoInfo && <div className="card p-3 mt-3 flex justify-between items-center gap-2 bg-[var(--surface)]"><p className="text-sm font-bold">Transaction deleted — wallets reversed.</p><button onClick={()=>void undoDelete()} className="min-h-[40px] px-4 rounded-xl bg-[var(--strong)] text-[var(--on-strong)] font-black text-sm flex items-center gap-1.5"><Undo2 size={16}/> Undo</button></div>}
             <div className="mt-3">
-              {filtered.length===0 ? <div className="card p-10 text-center"><p className="font-display font-bold text-xl">No transactions found</p><p className="text-sm font-semibold text-[var(--muted)] mt-1">Try a different search or filter, or add a new transaction.</p><button onClick={()=>openNew('E-Load')} className="big-btn bg-[var(--green-solid)] text-white px-5 mt-4 mx-auto">+ Add Transaction</button></div> : <div className="tx-table-wrap"><table className="tx-table"><thead><tr><th>Date</th><th>Customer</th><th>Type</th><th style={{textAlign:'right'}}>Amount</th><th style={{textAlign:'right'}}>Fee / Extra</th><th style={{textAlign:'right'}}>Profit</th><th>Status</th><th style={{textAlign:'right'}}>Actions</th></tr></thead><tbody>{filtered.map(r=>{ const v=r.value; const cust=customerByPhone.get(digitsOnly(v.phone||'')); const hasName=cust ? isRealName(cust.value.name, v.phone) : isRealName(v.customerName, v.phone); const isFav=favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(v.phone) && f.value.amount===v.amount && f.value.type===v.type); const typeBg=v.type==='E-Load'?'var(--sky-soft)':v.type==='Cash In'?'var(--blue-soft)':v.type==='Cash Out'?'var(--purple-soft)':'var(--green-soft)'; const typeColor=v.type==='E-Load'?'var(--sky)':v.type==='Cash In'?'var(--blue)':v.type==='Cash Out'?'var(--purple)':'var(--green)'; return <tr key={r.id} onClick={()=>{setSelectedTxId(r.id); setDetail(r);}} className={r.id===selectedTxId?'selected':''} style={r.id===selectedTxId?{background:'var(--green-soft)', boxShadow:'inset 0 0 0 2px var(--green)'}:undefined}><td data-label="date"><span className="font-extrabold">{v.date===todayKey()?'Today':dateLabel(v.date)}</span><span className="block text-xs text-[var(--muted)] font-bold">{v.time}</span></td><td data-label="customer"><span className="block truncate">{v.type==='Top-Up' ? (hasName?displayNamePhone(cust?.value.name||v.customerName, v.phone): v.phone?formatPhone(v.phone):'External Provider → Main Wallet') : hasName?displayNamePhone(cust?.value.name||v.customerName, v.phone): v.phone?formatPhone(v.phone):'No customer'}</span><span className="block text-xs text-[var(--muted)] truncate">{v.notes||v.payment}</span></td><td data-label="type"><span className="tx-type-pill" style={{background:typeBg,color:typeColor}}>{v.type==='Top-Up'?'Top-Up • External Provider':v.type==='E-Load'?`E-Load • ${v.network}`:`${v.type} • Main Wallet`}</span></td><td data-label="amount" style={{textAlign:'right'}}><span className="font-display font-extrabold">{peso(v.amount)}</span></td><td data-label="fee" style={{textAlign:'right'}}><span className="block">{peso(v.fee||0)} fee</span>{txTip(v)>0 && <span className="block text-xs font-black text-[var(--green)]">+{peso(txTip(v))} tip</span>}</td><td data-label="profit" style={{textAlign:'right'}}><span className="text-[var(--green)] font-black">{txProfit(v)<0?'−'+peso(Math.abs(txProfit(v))):'+'+peso(txProfit(v))}</span></td><td data-label="status">{v.utang ? <span className="tx-status-pill" style={{background:v.utangStatus==='paid'?'var(--green-soft)':'var(--amber-soft)', color:v.utangStatus==='paid'?'var(--green)':'var(--amber)'}}>{v.utangStatus==='paid'?'Utang Paid':`${utangPromiseLabel(v)} • ${peso(utangRemaining(v))}`}</span> : <span className="tx-status-pill" style={{background:'var(--green-soft)', color:'var(--green)'}}>Paid</span>}</td><td data-label="actions"><span className="tx-row-actions"><button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); toggleFavoriteForTx(r);}} aria-label={isFav?'Remove from favorites':'Add to favorites'}><Star size={13} fill={isFav?'currentColor':'none'}/> {isFav?'Favorited':'Favorite'}</button><button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); repeatTx(r);}}>Repeat</button>{!hasName && v.phone && <button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); openAddName(v.phone);}}>+ Add Name</button>}</span></td></tr> })}</tbody></table></div>}
+              {filtered.length===0 ? <div className="card p-10 text-center"><p className="font-display font-bold text-xl">No transactions found</p><p className="text-sm font-semibold text-[var(--muted)] mt-1">Try a different search or filter, or add a new transaction.</p><button onClick={()=>openNew('E-Load')} className="big-btn bg-[var(--green-solid)] text-white px-5 mt-4 mx-auto">+ Add Transaction</button></div> : <div className="tx-table-wrap"><table className="tx-table"><thead><tr><th className="tx-col-date">Date</th><th className="tx-col-customer">Customer</th><th className="tx-col-type">Type</th><th className="tx-col-amount" style={{textAlign:'right'}}>Amount</th><th className="tx-col-fee" style={{textAlign:'right'}}>Fee / Extra</th><th className="tx-col-profit" style={{textAlign:'right'}}>Profit</th><th className="tx-col-status">Status</th><th className="tx-col-actions" style={{textAlign:'right'}}>Actions</th></tr></thead><tbody>{filtered.map(r=>{ const v=r.value; const cust=customerByPhone.get(digitsOnly(v.phone||'')); const hasName=cust ? isRealName(cust.value.name, v.phone) : isRealName(v.customerName, v.phone); const isFav=favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(v.phone) && f.value.amount===v.amount && f.value.type===v.type); const typeBg=v.type==='E-Load'?'var(--sky-soft)':v.type==='Cash In'?'var(--blue-soft)':v.type==='Cash Out'?'var(--purple-soft)':'var(--green-soft)'; const typeColor=v.type==='E-Load'?'var(--sky)':v.type==='Cash In'?'var(--blue)':v.type==='Cash Out'?'var(--purple)':'var(--green)'; return <tr key={r.id} onClick={()=>{setSelectedTxId(r.id); setDetail(r);}} className={r.id===selectedTxId?'selected':''} style={r.id===selectedTxId?{background:'var(--green-soft)', boxShadow:'inset 0 0 0 2px var(--green)'}:undefined}><td data-label="date"><span className="tx-date-val font-extrabold">{v.date===todayKey()?'Today':dateLabel(v.date)}</span><span className="tx-time-val text-xs text-[var(--muted)] font-bold">{v.time}</span></td><td data-label="customer" className="tx-cell-customer"><div className="flex items-center gap-2 sm:gap-2.5 py-0.5 sm:py-0">{v.type==='Top-Up'&&!v.phone ? <span className="w-8 h-8 rounded-lg grid place-items-center shrink-0" style={{background:'var(--green-soft)', color:'var(--green)'}}><RefreshCw size={15}/></span> : <CustomerAvatar name={cust?.value.name||v.customerName} phone={v.phone} size={32} />}<div className="min-w-0 flex-1"><span className="block font-extrabold truncate">{v.type==='Top-Up' ? (hasName?displayNamePhone(cust?.value.name||v.customerName, v.phone): v.phone?formatPhone(v.phone):'External Provider → Main Wallet') : hasName?displayNamePhone(cust?.value.name||v.customerName, v.phone): v.phone?formatPhone(v.phone):'No customer'}</span><span className="block text-xs text-[var(--muted)] truncate">{v.notes||v.payment}</span></div></div></td><td data-label="type"><span className="tx-type-pill" style={{background:typeBg,color:typeColor}}>{v.type==='Top-Up'?'Top-Up • External Provider':v.type==='E-Load'?`E-Load • ${v.network}`:`${v.type} • Main Wallet`}</span></td><td data-label="amount" style={{textAlign:'right'}}><span className="font-display font-extrabold">{peso(v.amount)}</span></td><td data-label="fee" style={{textAlign:'right'}}><span className="block">{peso(v.fee||0)} fee</span>{txTip(v)>0 && <span className="block text-xs font-black text-[var(--green)]">+{peso(txTip(v))} tip</span>}</td><td data-label="profit" style={{textAlign:'right'}}><span className="text-[var(--green)] font-black">{txProfit(v)<0?'−'+peso(Math.abs(txProfit(v))):'+'+peso(txProfit(v))}</span></td><td data-label="status">{v.utang ? <span className="tx-status-pill" style={{background:v.utangStatus==='paid'?'var(--green-soft)':'var(--amber-soft)', color:v.utangStatus==='paid'?'var(--green)':'var(--amber)'}}>{v.utangStatus==='paid'?'Utang Paid':`${utangPromiseLabel(v)} • ${peso(utangRemaining(v))}`}</span> : <span className="tx-status-pill" style={{background:'var(--green-soft)', color:'var(--green)'}}>Paid</span>}</td><td data-label="actions"><span className="tx-row-actions"><button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); toggleFavoriteForTx(r);}} aria-label={isFav?'Remove from favorites':'Add to favorites'}><Star size={13} fill={isFav?'currentColor':'none'}/> {isFav?'Favorited':'Favorite'}</button><button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); repeatTx(r);}}>Repeat</button>{!hasName && v.phone && <button type="button" className="tx-mini-btn" onClick={(e)=>{e.stopPropagation(); openAddName(v.phone);}}>+ Add Name</button>}</span></td></tr> })}</tbody></table></div>}
             </div>
             <div className="card p-4 mt-3 flex flex-wrap justify-between gap-2"><span className="font-bold">Showing {filtered.length} transactions</span><span className="font-black">Daily total (today): <span className="text-[var(--green)]">{peso(todaySales)} sales • {peso(todayProfit)} profit</span></span></div>
           </main>
@@ -1612,12 +2160,93 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         {tab==='customers' && (
           <main>
             <div className="card p-4">
-              <div className="flex flex-col sm:flex-row gap-2">
-                <div className="relative flex-1"><Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={18}/><input ref={customerSearchRef} value={customerSearch} onChange={e=>setCustomerSearch(e.target.value)} placeholder="Search by name or phone number…" className="field pl-10" aria-label="Search customers"/></div>
-                <button onClick={()=>openCustomerForm(null)} className="big-btn bg-[var(--green-solid)] text-white px-5 shrink-0"><UserPlus size={19}/> Add Customer</button>
+              <div className="flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)]" size={18}/>
+                  <input
+                    ref={customerSearchRef}
+                    value={customerSearch}
+                    onChange={e=>setCustomerSearch(e.target.value)}
+                    placeholder="Search by name or phone number…"
+                    className="field pl-10"
+                    aria-label="Search customers"
+                  />
+                </div>
+                <button
+                  onClick={()=>openCustomerForm(null)}
+                  className="big-btn bg-[var(--green-solid)] text-white px-5 shrink-0"
+                >
+                  <UserPlus size={19}/> Add Customer
+                </button>
               </div>
-              <div ref={customerFilterRef} className="flex gap-2 mt-3 overflow-x-auto no-scrollbar">{(['Recent','A-Z','Most Frequent'] as const).map(s=><button key={s} onClick={()=>setCustomerSort(s)} className={`chip shrink-0 ${customerSort===s?'active':''}`}>{s==='Recent'?'Recent':s==='A-Z'?'A–Z':'Most Frequent'}</button>)}<span className="text-xs font-bold text-[var(--muted)] self-center ml-1">{sortedCustomers.length} customers • {customers.length} saved</span></div>
-              <div className="flex gap-2 mt-2 overflow-x-auto no-scrollbar">{(['All','No Name Yet','With Name'] as const).map(s=><button key={s} onClick={()=>setCustomerNameFilter(s)} className={`chip shrink-0 ${customerNameFilter===s?'active':''}`}>{s}</button>)}</div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 mt-3.5 pt-3 border-t border-[var(--line)]">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-[var(--muted)]">Filter:</span>
+                    <div className="inline-flex p-0.5 rounded-xl bg-[var(--surface2)] border border-[var(--line)]" role="group" aria-label="Filter by name">
+                      {(['All','With Name','No Name Yet'] as const).map(s => (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={()=>setCustomerNameFilter(s)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${customerNameFilter===s ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm' : 'text-[var(--muted)] hover:text-[var(--ink)]'}`}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="hidden sm:block h-4 w-[1px] bg-[var(--line)]" />
+
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-[var(--muted)]">Sort:</span>
+                    <div ref={customerFilterRef} className="inline-flex p-0.5 rounded-xl bg-[var(--surface2)] border border-[var(--line)]" role="group" aria-label="Sort customers">
+                      {(['Recent','A-Z','Most Frequent'] as const).map(s => (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={()=>setCustomerSort(s)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${customerSort===s ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm' : 'text-[var(--muted)] hover:text-[var(--ink)]'}`}
+                        >
+                          {s==='Recent'?'Recent':s==='A-Z'?'A–Z':'Most Frequent'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="hidden sm:block h-4 w-[1px] bg-[var(--line)]" />
+
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-black uppercase tracking-wider text-[var(--muted)]">View:</span>
+                    <div className="inline-flex p-0.5 rounded-xl bg-[var(--surface2)] border border-[var(--line)]" role="group" aria-label="Customer view mode">
+                      <button
+                        type="button"
+                        onClick={()=>{ setCustomerViewMode('cards'); try{localStorage.setItem('eics.customer-view-mode','cards');}catch{} }}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1 ${customerViewMode==='cards' ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm' : 'text-[var(--muted)] hover:text-[var(--ink)]'}`}
+                        aria-label="Cards view"
+                      >
+                        <LayoutGrid size={13}/> Cards
+                      </button>
+                      <button
+                        type="button"
+                        onClick={()=>{ setCustomerViewMode('list'); try{localStorage.setItem('eics.customer-view-mode','list');}catch{} }}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1 ${customerViewMode==='list' ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm' : 'text-[var(--muted)] hover:text-[var(--ink)]'}`}
+                        aria-label="List view"
+                      >
+                        <List size={13}/> List
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-xs font-extrabold text-[var(--muted)] bg-[var(--surface2)] px-2.5 py-1 rounded-full border border-[var(--line)] shrink-0">
+                  {sortedCustomers.length === customers.length
+                    ? `${customers.length} saved customer${customers.length===1?'':'s'}`
+                    : `${sortedCustomers.length} of ${customers.length} customers`}
+                </div>
+              </div>
             </div>
             <div className="mt-3 space-y-2">
               {sortedCustomers.map(c=>{ const st=customerStats.get(digitsOnly(c.value.phone))||{count:0,amount:0,fees:0,tips:0,lastDate:'',lastTx:null}; const suki=st.count>=5; const hasName=isRealName(c.value.name, c.value.phone); const sel=c.id===selectedCustomerId; const isFav=favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(c.value.phone)); return <div key={c.id} ref={sel?selectedRowRef as any:undefined} onClick={()=>{setSelectedCustomerId(c.id); setCustomerDetail(c);}} className={`customer-card card w-full p-4 flex items-center gap-3 text-left cursor-pointer ${sel?'ring-2 ring-[var(--green)] bg-[var(--green-soft)]':'hover:bg-[var(--surface2)]'}`} role="button" tabIndex={0} onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); setCustomerDetail(c); } }}>
@@ -1637,23 +2266,517 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         {tab==='utang' && (
           <main>
             <section className="card p-4 sm:p-5">
-              <div className="flex justify-between items-start gap-2"><div><h2 className="font-display font-bold text-xl flex items-center gap-2"><HandCoins size={22}/> Utang / Pay Later</h2><p className="text-sm font-semibold text-[var(--muted)]">Sent load / funds or released cash leave the source wallet immediately. Customer payments enter the receiving wallet only when confirmed.</p></div><span className="text-sm font-black bg-[var(--purple-soft)] text-[var(--purple)] px-3 py-1.5 rounded-full shrink-0">Outstanding {peso(utangOutstanding)}</span></div>
-              {utangReleaseReviews>0 && <p className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--surface2)] p-3 text-sm font-bold">{utangReleaseReviews} older Utang {utangReleaseReviews===1?'needs':'need'} a sent/released amount review. Open View / Partial, then Review sent / released. No automatic deductions are applied to old records.</p>}
-              <div className="flex gap-2 mt-3 overflow-x-auto no-scrollbar">{(['All','Unpaid','Paid','Due Today','Overdue','Due This Week'] as const).map(s=><button key={s} onClick={()=>setUtangFilter(s)} className={`chip shrink-0 ${utangFilter===s?'active':''}`}>{s}</button>)}</div>
-              <div className="grid grid-cols-3 gap-2 mt-3"><Stat label="Unpaid" v={peso(utangOutstanding)}/><Stat label="Due Today" v={String(utangDueTodayCount)}/><Stat label="Overdue" v={String(utangOverdueCount)}/></div>
-              <p className="text-xs font-bold text-[var(--muted)] mt-2">Outstanding includes the unpaid principal and fee, not tips. Sorted: Overdue first, then Due Today, then Due Soonest, then No date. Paid principal total: {peso(sum(utangList.filter(r=>r.value.utangStatus==='paid').map(r=>r.value),t=>t.amount))}</p>
+              <div className="flex justify-between items-start gap-2 flex-wrap sm:flex-nowrap">
+                <div>
+                  <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                    <HandCoins size={22} className="text-[var(--purple)]"/> Utang / Pay Later
+                  </h2>
+                  <p className="text-sm font-semibold text-[var(--muted)] mt-0.5">
+                    Sent load or cash leaves the source wallet immediately. Customer repayments enter the receiving wallet when collected.
+                  </p>
+                </div>
+                <span className="text-sm font-black bg-[var(--purple-soft)] text-[var(--purple)] px-3 py-1.5 rounded-full shrink-0">
+                  Outstanding {peso(utangOutstanding)}
+                </span>
+              </div>
+
+              {utangReleaseReviews > 0 && (
+                <p className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--surface2)] p-3 text-sm font-bold">
+                  {utangReleaseReviews} older Utang {utangReleaseReviews === 1 ? 'needs' : 'need'} a sent/released amount review. Open View / Partial, then Review sent / released. No automatic deductions are applied to old records.
+                </p>
+              )}
+
+              {/* 3 Quick Stat Cards */}
+              <div className="grid grid-cols-3 gap-2 mt-4">
+                <Stat label="Unpaid" v={peso(utangOutstanding)}/>
+                <Stat label="Due Today" v={String(utangDueTodayCount)}/>
+                <Stat label="Overdue" v={String(utangOverdueCount)}/>
+              </div>
+
+              {/* Search input */}
+              <div className="relative mt-4">
+                <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--muted)] pointer-events-none"/>
+                <input
+                  type="search"
+                  value={utangSearch}
+                  onChange={e => setUtangSearch(e.target.value)}
+                  placeholder="Search utang by customer name or phone..."
+                  className="w-full pl-9 pr-9 py-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] text-sm font-bold placeholder:text-[var(--muted)] outline-none focus:border-[var(--brand)] transition-colors"
+                />
+                {utangSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setUtangSearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-black text-[var(--muted)] hover:text-[var(--ink)]"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              {/* Filter Chips & View Mode Toggle */}
+              <div className="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-[var(--line)]">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-[var(--muted)] mr-1">Filter:</span>
+                  {(['All','Unpaid','Paid','Due Today','Overdue','Due This Week'] as const).map(s => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setUtangFilter(s)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${
+                        utangFilter === s
+                          ? 'bg-[var(--ink)] text-[var(--surface)] shadow-sm'
+                          : 'bg-[var(--surface2)] text-[var(--muted)] hover:text-[var(--ink)]'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center p-1 rounded-xl bg-[var(--surface2)] border border-[var(--line)]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUtangViewMode('cards');
+                        try { localStorage.setItem('eics.utang-view-mode', 'cards'); } catch {}
+                      }}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1 ${
+                        utangViewMode === 'cards'
+                          ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
+                          : 'text-[var(--muted)] hover:text-[var(--ink)]'
+                      }`}
+                      aria-label="Cards view"
+                    >
+                      <LayoutGrid size={13}/> Cards
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUtangViewMode('list');
+                        try { localStorage.setItem('eics.utang-view-mode', 'list'); } catch {}
+                      }}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1 ${
+                        utangViewMode === 'list'
+                          ? 'bg-[var(--surface)] text-[var(--ink)] shadow-sm'
+                          : 'text-[var(--muted)] hover:text-[var(--ink)]'
+                      }`}
+                      aria-label="List view"
+                    >
+                      <List size={13}/> List
+                    </button>
+                  </div>
+                  <span className="text-xs font-bold text-[var(--muted)] px-2.5 py-1 rounded-full bg-[var(--surface2)]">
+                    {utangFiltered.length} record{utangFiltered.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+              </div>
+
+              <p className="text-xs font-bold text-[var(--muted)] mt-2">
+                Outstanding includes the unpaid principal and fee, not tips. Sorted: Overdue first, then Due Today, then Due Soonest, then No date. Paid principal total: {peso(sum(utangList.filter(r=>r.value.utangStatus==='paid').map(r=>r.value),t=>t.amount))}
+              </p>
             </section>
-            <div className="mt-3 space-y-2">
-              {utangFiltered.map(r=>{ const cust=customerByPhone.get(digitsOnly(r.value.phone||'')); const paid=r.value.utangStatus==='paid'; const pStatus=utangPromiseStatus(r.value); const pillClass = pStatus==='paid'?'bg-[var(--green-soft)] text-[var(--green)]': pStatus==='overdue'?'bg-[var(--red-soft)] text-[var(--red)]': pStatus==='due-today'?'bg-[var(--amber-soft)] text-[var(--amber)]': pStatus==='due-soon'?'bg-[var(--blue-soft)] text-[var(--blue)]':'bg-[var(--surface2)] text-[var(--muted)]'; return <div key={r.id} className="card p-4"><div className="flex items-center gap-3"><CustomerAvatar name={cust?.value.name || r.value.customerName} phone={r.value.phone} /><span className="flex-1 min-w-0"><span className="block font-extrabold truncate">{displayNameOnly(cust?.value.name||r.value.customerName, r.value.phone)}</span><span className="block text-xs font-bold text-[var(--muted)]">{r.value.type} • Borrowed {dateLabel(r.value.date)} • {formatPhone(r.value.phone)}</span><span className="block text-xs font-bold text-[var(--muted)]">Promise to Pay: {utangPromiseDateLabel(r.value)}{!paid && (r.value.paidAmount||0)>0 ? ` • Paid ${peso(r.value.paidAmount||0)} • Principal left ${peso(utangRemaining(r.value))}` : ''}</span></span><span className={`text-[10px] font-black px-2.5 py-1 rounded-full shrink-0 ${pillClass}`}>{utangPromiseLabel(r.value)}</span><span className="font-display font-extrabold shrink-0">{peso(paid?r.value.amount:utangAmountDue(r.value))}</span></div><div className="flex gap-2 mt-3 flex-wrap">{!paid && <><button onClick={()=>{setDetail(r); setShowPartial(false);}} className="min-h-[40px] px-3 rounded-xl border border-[var(--line)] font-black text-xs">View / Partial</button><button onClick={()=>{const rr=r; setDetail(null); openEdit(rr);}} className="min-h-[40px] px-3 rounded-xl border border-[var(--line)] font-black text-xs">Edit Promise Date</button><button onClick={()=>markUtangPaid(r)} disabled={saving} className="min-h-[40px] px-3 rounded-xl bg-[var(--green-solid)] text-white font-black text-xs">Mark Paid</button></>}{paid && <button onClick={()=>setDetail(r)} className="min-h-[40px] px-3 rounded-xl border border-[var(--line)] font-black text-xs">View</button>}</div></div> })}
-              {utangFiltered.length===0 && <div className="card p-10 text-center"><HandCoins size={36} className="mx-auto text-[var(--muted)]"/><p className="font-display font-bold text-xl mt-2">No utang here</p><p className="text-sm font-semibold text-[var(--muted)] mt-1">Turn on “Utang / Pay Later” when saving a sale to add it here.</p><button onClick={()=>openNew('E-Load')} className="big-btn bg-[var(--green-solid)] text-white px-5 mt-4 mx-auto">+ New Sale</button></div>}
-            </div>
+
+            {utangViewMode === 'cards' ? (
+              /* Utang Card Grid View */
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {utangFiltered.map(r => {
+                  const cust = customerByPhone.get(digitsOnly(r.value.phone || ''));
+                  const paid = r.value.utangStatus === 'paid';
+                  const pStatus = utangPromiseStatus(r.value);
+                  const pillClass = pStatus === 'paid'
+                    ? 'bg-[var(--green-soft)] text-[var(--green)]'
+                    : pStatus === 'overdue'
+                    ? 'bg-[var(--red-soft)] text-[var(--red)]'
+                    : pStatus === 'due-today'
+                    ? 'bg-[var(--amber-soft)] text-[var(--amber)]'
+                    : pStatus === 'due-soon'
+                    ? 'bg-[var(--blue-soft)] text-[var(--blue)]'
+                    : 'bg-[var(--surface2)] text-[var(--muted)]';
+
+                  return (
+                    <article
+                      key={r.id}
+                      className={`card p-4 sm:p-5 flex flex-col justify-between transition-all duration-150 hover:shadow-md border ${
+                        pStatus === 'overdue'
+                          ? 'border-[var(--red-border)] bg-[var(--surface)] hover:border-[var(--red)]'
+                          : pStatus === 'due-today'
+                          ? 'border-[var(--amber-border)] bg-[var(--surface)] hover:border-[var(--amber)]'
+                          : paid
+                          ? 'border-[var(--green-border)] bg-[var(--surface)] hover:border-[var(--green)]'
+                          : 'border-[var(--line)] bg-[var(--surface)] hover:border-[var(--brand)]'
+                      }`}
+                    >
+                      <div>
+                        {/* Card Header: Avatar, Name, Phone & Status Badge */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <CustomerAvatar name={cust?.value.name || r.value.customerName} phone={r.value.phone} size={48} />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-extrabold text-sm text-[var(--ink)] truncate max-w-[140px] sm:max-w-[150px]">
+                                  {displayNameOnly(cust?.value.name || r.value.customerName, r.value.phone)}
+                                </span>
+                                {cust && (customerStats.get(digitsOnly(cust.value.phone))?.count || 0) >= 5 && (
+                                  <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                                    👑 Suki
+                                  </span>
+                                )}
+                              </div>
+                              <span className="block text-xs font-semibold text-[var(--muted)]">
+                                {formatPhone(r.value.phone)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <span className={`text-[10px] font-black px-2.5 py-1 rounded-full shrink-0 flex items-center gap-1 ${pillClass}`}>
+                            {pStatus === 'overdue' && <AlertTriangle size={11} className="text-[var(--red)]" />}
+                            {pStatus === 'paid' && <CheckCircle2 size={11} className="text-[var(--green)]" />}
+                            {utangPromiseLabel(r.value)}
+                          </span>
+                        </div>
+
+                        {/* Transaction Type & Borrowed Date */}
+                        <div className="flex items-center gap-2 mt-3 flex-wrap text-xs font-bold text-[var(--muted)]">
+                          <span className="px-2 py-0.5 rounded-md bg-[var(--surface2)] text-[var(--ink)] font-bold text-[11px]">
+                            {r.value.type} {r.value.network ? `• ${r.value.network}` : ''}
+                          </span>
+                          <span>Borrowed {dateLabel(r.value.date)}</span>
+                        </div>
+
+                        {/* Amount Due Box */}
+                        <div className={`mt-3 p-3 rounded-xl border ${
+                          paid
+                            ? 'bg-[var(--green-soft)] border-[var(--green-border)]'
+                            : pStatus === 'overdue'
+                            ? 'bg-[var(--red-soft)] border-[var(--red-border)]'
+                            : pStatus === 'due-today'
+                            ? 'bg-[var(--amber-soft)] border-[var(--amber-border)]'
+                            : 'bg-[var(--surface2)] border-[var(--line)]'
+                        }`}>
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-[var(--muted)]">
+                              {paid ? 'Total Paid' : 'Amount Due'}
+                            </span>
+                            <span className={`font-display font-black text-xl ${
+                              paid ? 'text-[var(--green)]' : pStatus === 'overdue' ? 'text-[var(--red)]' : 'text-[var(--ink)]'
+                            }`}>
+                              {peso(paid ? r.value.amount : utangAmountDue(r.value))}
+                            </span>
+                          </div>
+
+                          <div className="mt-2 pt-2 border-t border-[var(--line)]/50 flex items-center justify-between text-xs font-bold text-[var(--muted)]">
+                            <span className="flex items-center gap-1">
+                              <CalendarDays size={12} className="opacity-70" />
+                              <span>Promise: {utangPromiseDateLabel(r.value)}</span>
+                            </span>
+                            {!paid && (r.value.paidAmount || 0) > 0 && (
+                              <span className="text-[11px] font-black text-[var(--green)] bg-white/70 dark:bg-black/20 px-1.5 py-0.5 rounded">
+                                Paid {peso(r.value.paidAmount || 0)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons Footer */}
+                      <div className="mt-4 pt-3 border-t border-[var(--line)] flex gap-2">
+                        {!paid ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => { setDetail(r); setShowPartial(false); }}
+                              className="flex-1 min-h-[38px] px-2.5 rounded-xl border border-[var(--line)] hover:bg-[var(--surface2)] font-black text-xs transition-colors"
+                            >
+                              View / Partial
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { const rr = r; setDetail(null); openEdit(rr); }}
+                              className="flex-1 min-h-[38px] px-2.5 rounded-xl border border-[var(--line)] hover:bg-[var(--surface2)] font-black text-xs transition-colors flex items-center justify-center gap-1"
+                            >
+                              <Pencil size={12} /> Edit Date
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => markUtangPaid(r)}
+                              disabled={saving}
+                              className="flex-1 min-h-[38px] px-2.5 rounded-xl bg-[var(--green-solid)] hover:opacity-95 text-white font-black text-xs transition-all shadow-sm flex items-center justify-center gap-1"
+                            >
+                              <CheckCircle2 size={13} /> Mark Paid
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setDetail(r)}
+                            className="w-full min-h-[38px] px-3 rounded-xl border border-[var(--line)] hover:bg-[var(--surface2)] font-black text-xs transition-colors flex items-center justify-center gap-1 text-[var(--muted)]"
+                          >
+                            <CheckCircle2 size={14} className="text-[var(--green)]" /> View Settled Record
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              /* Utang List View */
+              <div className="mt-3 space-y-2">
+                {utangFiltered.map(r => {
+                  const cust = customerByPhone.get(digitsOnly(r.value.phone || ''));
+                  const paid = r.value.utangStatus === 'paid';
+                  const pStatus = utangPromiseStatus(r.value);
+                  const pillClass = pStatus === 'paid'
+                    ? 'bg-[var(--green-soft)] text-[var(--green)]'
+                    : pStatus === 'overdue'
+                    ? 'bg-[var(--red-soft)] text-[var(--red)]'
+                    : pStatus === 'due-today'
+                    ? 'bg-[var(--amber-soft)] text-[var(--amber)]'
+                    : pStatus === 'due-soon'
+                    ? 'bg-[var(--blue-soft)] text-[var(--blue)]'
+                    : 'bg-[var(--surface2)] text-[var(--muted)]';
+
+                  return (
+                    <div key={r.id} className="card p-3 sm:p-4 transition-all hover:border-[var(--brand)]">
+                      <div className="flex items-center gap-3">
+                        <CustomerAvatar name={cust?.value.name || r.value.customerName} phone={r.value.phone} size={48} />
+                        <span className="flex-1 min-w-0">
+                          <span className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-extrabold truncate">{displayNameOnly(cust?.value.name || r.value.customerName, r.value.phone)}</span>
+                            {cust && (customerStats.get(digitsOnly(cust.value.phone))?.count || 0) >= 5 && (
+                              <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">👑 Suki</span>
+                            )}
+                          </span>
+                          <span className="block text-xs font-bold text-[var(--muted)]">
+                            {r.value.type} {r.value.network ? `• ${r.value.network}` : ''} • Borrowed {dateLabel(r.value.date)} • {formatPhone(r.value.phone)}
+                          </span>
+                          <span className="block text-xs font-bold text-[var(--muted)]">
+                            Promise to Pay: {utangPromiseDateLabel(r.value)}
+                            {!paid && (r.value.paidAmount || 0) > 0 ? ` • Paid ${peso(r.value.paidAmount || 0)} • Principal left ${peso(utangRemaining(r.value))}` : ''}
+                          </span>
+                        </span>
+                        <div className="flex items-center gap-2.5 shrink-0">
+                          <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${pillClass}`}>
+                            {utangPromiseLabel(r.value)}
+                          </span>
+                          <span className={`font-display font-black text-base sm:text-lg ${paid ? 'text-[var(--green)]' : pStatus === 'overdue' ? 'text-[var(--red)]' : 'text-[var(--ink)]'}`}>
+                            {peso(paid ? r.value.amount : utangAmountDue(r.value))}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 mt-3 pt-2 border-t border-[var(--line)] flex-wrap">
+                        {!paid ? (
+                          <>
+                            <button onClick={() => { setDetail(r); setShowPartial(false); }} className="min-h-[36px] px-3 rounded-xl border border-[var(--line)] font-black text-xs hover:bg-[var(--surface2)]">
+                              View / Partial
+                            </button>
+                            <button onClick={() => { const rr = r; setDetail(null); openEdit(rr); }} className="min-h-[36px] px-3 rounded-xl border border-[var(--line)] font-black text-xs hover:bg-[var(--surface2)]">
+                              Edit Promise Date
+                            </button>
+                            <button onClick={() => markUtangPaid(r)} disabled={saving} className="min-h-[36px] px-3 rounded-xl bg-[var(--green-solid)] text-white font-black text-xs hover:opacity-95">
+                              Mark Paid
+                            </button>
+                          </>
+                        ) : (
+                          <button onClick={() => setDetail(r)} className="min-h-[36px] px-3 rounded-xl border border-[var(--line)] font-black text-xs hover:bg-[var(--surface2)]">
+                            View
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {utangFiltered.length === 0 && (
+              <div className="card p-10 text-center">
+                <HandCoins size={36} className="mx-auto text-[var(--muted)]" />
+                <p className="font-display font-bold text-xl mt-2">No utang here</p>
+                <p className="text-sm font-semibold text-[var(--muted)] mt-1">
+                  {utangSearch ? 'No utang matched your search.' : 'Turn on “Utang / Pay Later” when saving a sale to add it here.'}
+                </p>
+                {utangSearch ? (
+                  <button onClick={() => setUtangSearch('')} className="big-btn bg-[var(--surface2)] border border-[var(--line)] px-5 mt-4 mx-auto">
+                    Clear Search
+                  </button>
+                ) : (
+                  <button onClick={() => openNew('E-Load')} className="big-btn bg-[var(--green-solid)] text-white px-5 mt-4 mx-auto">
+                    + New Sale
+                  </button>
+                )}
+              </div>
+            )}
           </main>
         )}
 
         {tab==='wallets' && (
           <main>
-            <div className="grid sm:grid-cols-2 gap-3">
-              {walletDefs.map(w=> <article key={w.key} className="card p-4 sm:p-5"><div className="flex justify-between items-start"><div><p className="font-display font-bold text-lg">{w.label}</p><p className="text-xs font-bold text-[var(--muted)]">{w.hint}</p></div><span className="w-10 h-10 rounded-xl grid place-items-center text-white shrink-0" style={{background:w.key==='cash'?'var(--green-solid)':'var(--wallet-solid)'}}><Wallet size={20}/></span></div><p className="font-display font-extrabold mt-4" style={{fontSize:'clamp(28px,4vw,36px)'}}>{peso(meta.wallets[w.key])}</p><p className="text-sm font-bold">Records dated today: <span className={todayDatedWalletEffects[w.key]>=0?'text-[var(--green)]':'text-[var(--red)]'}>{signedPeso(todayDatedWalletEffects[w.key])}</span></p><p className="mt-1 text-xs font-bold text-[var(--muted)]">Cumulative record effects by sale date, not a daily cash-flow total. The live balance also includes collections against older Utang.</p>{w.key==='maribank' && maribankLow && <p className="text-xs font-black text-[var(--amber)] bg-[var(--amber-soft)] rounded-lg px-2 py-1.5 mt-2">⚠ Main Wallet low - top up soon (threshold {peso(meta.lowThreshold)})</p>}<div className="grid grid-cols-2 gap-2 mt-4"><button onClick={()=>openWalletAction(w.key,'add')} className="min-h-[44px] rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-xs">+ Add Funds</button><button onClick={()=>openWalletAction(w.key,'deduct')} className="min-h-[44px] rounded-xl bg-[var(--surface2)] border border-[var(--line)] font-black text-xs">− Deduct</button></div>{w.key==='maribank' && <button onClick={()=>openNew('Top-Up')} className="big-btn bg-[var(--green-solid)] text-white w-full mt-2 text-sm"><RefreshCw size={18}/> Top-Up via External Provider</button>}</article>)}
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {walletDefs.map(w=> {
+                const profitInfo = todayWalletProfit[w.key] || { total: 0, fees: 0, discounts: 0, tips: 0 };
+                const netEffect = todayDatedWalletEffects[w.key] || 0;
+                const capitalEffect = round2(netEffect - profitInfo.total);
+                const isProfitWallet = w.key === 'profit';
+                const currentBal = round2(meta.wallets[w.key] || 0);
+
+                return (
+                  <article key={w.key} className="card p-4 sm:p-5 flex flex-col justify-between relative overflow-hidden group">
+                    {/* 3D Claymorphism Graphic in Background/Corner */}
+                    <div className="pointer-events-none absolute -right-1 -top-1 z-0 select-none opacity-85 transition-transform duration-300 ease-out group-hover:scale-105 group-hover:rotate-1">
+                      {w.key === 'maribank' && <ClayMainWalletArt className="w-24 h-24 sm:w-28 sm:h-28" />}
+                      {w.key === 'cash' && <ClayCashOnHandArt className="w-24 h-24 sm:w-28 sm:h-28" />}
+                      {w.key === 'profit' && <ClayProfitWalletArt className="w-24 h-24 sm:w-28 sm:h-28" />}
+                    </div>
+
+                    <div className="relative z-10 min-w-0">
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="min-w-0 pr-14 sm:pr-16">
+                          <p className="font-display font-bold text-lg">{w.label}</p>
+                          <p className="text-xs font-bold text-[var(--muted)]">{w.hint}</p>
+                        </div>
+                        <span
+                          className="w-10 h-10 rounded-2xl grid place-items-center text-white shrink-0 shadow-sm transition-transform duration-200 group-hover:scale-105"
+                          style={{
+                            background: w.key==='cash'
+                              ? 'linear-gradient(135deg, #10b981 0%, #047857 100%)'
+                              : w.key==='profit'
+                              ? 'linear-gradient(135deg, #a855f7 0%, #6b21a8 100%)'
+                              : 'linear-gradient(135deg, #2563eb 0%, #1e3a8a 100%)',
+                            boxShadow: 'inset 1.5px 1.5px 2px rgba(255,255,255,0.45), inset -1.5px -1.5px 2px rgba(0,0,0,0.25), 0 4px 8px rgba(0,0,0,0.12)'
+                          }}
+                        >
+                          {isProfitWallet ? <Crown size={20}/> : <Wallet size={20}/>}
+                        </span>
+                      </div>
+                      <p className="font-display font-extrabold mt-4" style={{fontSize:'clamp(28px,4vw,36px)'}}>{peso(currentBal)}</p>
+
+                      {!isProfitWallet ? (
+                        <>
+                          <p className="text-sm font-bold">Records dated today: <span className={netEffect>=0?'text-[var(--green)]':'text-[var(--red)]'}>{signedPeso(netEffect)}</span></p>
+
+                          <div className="mt-2.5 p-3 rounded-2xl bg-[var(--surface2)] border border-[var(--line)] space-y-1.5 text-xs font-bold">
+                            <div className="flex justify-between items-center">
+                              <span className="text-[var(--muted)] flex items-center gap-1.5">
+                                <TrendingUp size={14} className="text-[var(--green)]"/> Profit in this wallet today
+                              </span>
+                              <span className="font-display font-black text-sm text-[var(--green)]">+{peso(profitInfo.total)}</span>
+                            </div>
+                            {profitInfo.total > 0 && (
+                              <div className="flex justify-between items-center text-[11px] text-[var(--muted)] font-semibold">
+                                <span>Profit breakdown</span>
+                                <span>
+                                  {[
+                                    profitInfo.fees > 0 ? `Fees ${peso(profitInfo.fees)}` : '',
+                                    profitInfo.discounts > 0 ? `Discounts ${peso(profitInfo.discounts)}` : '',
+                                    profitInfo.tips > 0 ? `Extra / Tips ${peso(profitInfo.tips)}` : '',
+                                  ].filter(Boolean).join(' • ')}
+                                </span>
+                              </div>
+                            )}
+                            <div className="flex justify-between items-center pt-1 border-t border-[var(--line)]">
+                              <span className="text-[var(--muted)]">Revolving capital / float</span>
+                              <span className="font-extrabold">{signedPeso(capitalEffect)}</span>
+                            </div>
+                          </div>
+
+                          <p className="mt-2 text-xs font-bold text-[var(--muted)]">Cumulative record effects by sale date, not a daily cash-flow total. The live balance also includes collections against older Utang.</p>
+                        </>
+                      ) : (
+                        <div className="mt-2.5 p-3 rounded-2xl bg-[var(--purple-soft)] border border-[var(--purple-border)] space-y-1 text-xs font-bold">
+                          <p className="font-black text-[var(--purple-solid)] flex items-center gap-1.5">
+                            <Crown size={15}/> Dedicated Profit Stash
+                          </p>
+                          <p className="text-xs text-[var(--muted)] font-semibold">
+                            Safely separate earned profit from revolving operating capital. Reinvest back to Main Wallet anytime for more load stock.
+                          </p>
+                        </div>
+                      )}
+
+                      {w.key==='maribank' && maribankLow && <p className="text-xs font-black text-[var(--amber)] bg-[var(--amber-soft)] rounded-lg px-2 py-1.5 mt-2">⚠ Main Wallet low - top up soon (threshold {peso(meta.lowThreshold)})</p>}
+                    </div>
+
+                    <div className="mt-4 relative z-10">
+                      {w.key === 'cash' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openTransfer('cash', 'maribank')}
+                            className="big-btn bg-[var(--wallet-solid)] text-white w-full text-sm flex items-center justify-center gap-2"
+                          >
+                            <ArrowLeftRight size={18}/> Cash In to Main Wallet
+                          </button>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <button onClick={()=>openWalletAction('cash','add')} className="min-h-[44px] rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-xs">+ Add Funds</button>
+                            <button onClick={()=>openWalletAction('cash','deduct')} className="min-h-[44px] rounded-xl bg-[var(--surface2)] border border-[var(--line)] font-black text-xs">− Deduct</button>
+                          </div>
+                          {profitInfo.total > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => openTransfer('cash', 'profit', profitInfo.total, "Today's cash profit stash")}
+                              className="w-full mt-2 p-2.5 rounded-xl border border-[var(--purple-border)] bg-[var(--purple-soft)] text-[var(--purple-solid)] font-black text-xs flex items-center justify-center gap-1.5"
+                            >
+                              <Crown size={15}/> Stash Cash Profit ({peso(profitInfo.total)})
+                            </button>
+                          )}
+                        </>
+                      )}
+
+                      {w.key === 'maribank' && (
+                        <>
+                          <button onClick={()=>openNew('Top-Up')} className="big-btn bg-[var(--green-solid)] text-white w-full text-sm flex items-center justify-center gap-2">
+                            <RefreshCw size={18}/> Top-Up via External Provider
+                          </button>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <button onClick={()=>openWalletAction('maribank','add')} className="min-h-[44px] rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-xs">+ Add Funds</button>
+                            <button onClick={()=>openWalletAction('maribank','deduct')} className="min-h-[44px] rounded-xl bg-[var(--surface2)] border border-[var(--line)] font-black text-xs">− Deduct</button>
+                          </div>
+                          {profitInfo.total > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => openTransfer('maribank', 'profit', profitInfo.total, "Today's discount profit stash")}
+                              className="w-full mt-2 p-2.5 rounded-xl border border-[var(--purple-border)] bg-[var(--purple-soft)] text-[var(--purple-solid)] font-black text-xs flex items-center justify-center gap-1.5"
+                            >
+                              <Crown size={15}/> Stash Discounts ({peso(profitInfo.total)})
+                            </button>
+                          )}
+                        </>
+                      )}
+
+                      {w.key === 'profit' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openTransfer('profit', 'maribank')}
+                            className="big-btn bg-[var(--green-solid)] text-white w-full text-sm flex items-center justify-center gap-2"
+                          >
+                            <ArrowLeftRight size={18}/> Add to Main Wallet (Reinvest)
+                          </button>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <button
+                              type="button"
+                              onClick={() => openTransfer('cash', 'profit', todayProfit > 0 ? todayProfit : 100, 'Stash profit')}
+                              className="min-h-[44px] rounded-xl bg-[var(--purple-soft)] text-[var(--purple-solid)] font-black text-xs flex items-center justify-center gap-1"
+                            >
+                              <Plus size={16}/> Stash Profit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openWalletAction('profit', 'deduct')}
+                              className="min-h-[44px] rounded-xl bg-[var(--surface2)] border border-[var(--line)] font-black text-xs"
+                            >
+                              − Withdraw
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
             <section className="card p-4 sm:p-5 mt-3"><div className="flex items-center justify-between gap-2"><div><h2 className="font-display font-bold text-xl">Wallet Activity</h2><p className="text-sm font-semibold text-[var(--muted)]">Manual additions, deductions, and shop spending; these are not sales or profit.</p></div><span className="rounded-full bg-[var(--surface2)] px-3 py-1 text-xs font-black">{walletAdjustments.length} entries</span></div><div className="mt-3 divide-y divide-[var(--line)]">{walletAdjustments.slice(0,12).map(a=>{const v=a.value;const sign=v.mode==='add'?'+':'−';return <div key={a.id} className="flex items-center gap-3 py-3"><span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${v.mode==='add'?'bg-[var(--green-soft)] text-[var(--green)]':'bg-[var(--orange-soft)] text-[var(--orange)]'}`}><Wallet size={18}/></span><div className="min-w-0 flex-1"><p className="truncate font-extrabold">{v.mode==='deduct'?v.category:'Funds added'}{v.note?` · ${v.note}`:''}</p><p className="text-xs font-bold text-[var(--muted)]">{walletDefs.find(w=>w.key===v.wallet)?.label} · {dateLabel(v.date)} · {v.time}</p></div><span className={`shrink-0 font-display font-extrabold ${v.mode==='add'?'text-[var(--green)]':'text-[var(--orange)]'}`}>{sign}{peso(v.amount)}</span></div>})}{walletAdjustments.length===0&&<p className="py-4 text-sm font-semibold text-[var(--muted)]">No manual wallet activity yet. Use Deduct to log Shopee orders or store purchases.</p>}</div></section>
             <div className="card p-5 mt-3 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between" style={{borderColor:'var(--green-solid)', background:'var(--green-soft)'}}><div><h2 className="font-display font-bold text-xl text-[var(--green)]">External Provider — Top-Up History</h2><p className="text-sm font-semibold text-[var(--muted)]">External Provider is NOT a customer wallet. Use it only to move Cash on Hand → Main Wallet. Top-ups this week: <b>{peso(weekTopUp)}</b></p></div><button onClick={()=>openNew('Top-Up')} className="big-btn bg-[var(--green-solid)] text-white px-5"><RefreshCw size={20}/> Top-Up via External Provider</button></div>
@@ -1661,74 +2784,738 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
         )}
 
         {tab==='report' && (
-          <main>
-            <div className="flex flex-wrap gap-2 items-center"><div className="flex gap-2">{(['Day','Week','Month'] as const).map(p=><button key={p} onClick={()=>setReportPeriod(p)} className={`chip ${reportPeriod===p?'active':''}`}>{p}</button>)}</div><button onClick={exportAllCSV} className="min-h-[40px] px-3 rounded-full bg-[var(--strong)] text-[var(--on-strong)] text-xs font-black flex items-center gap-1.5"><FileDown size={16}/> Export CSV</button><button onClick={exportDailyCSV} className="min-h-[40px] px-3 rounded-full border border-[var(--line)] text-xs font-black flex items-center gap-1.5"><Download size={16}/> Export Daily Report</button></div>
-            <div data-arrow-group="report-range" onKeyDown={(e)=>handleModalArrowKeys(e, e.currentTarget)} className="flex flex-wrap gap-2 mt-2">{(['Today','Yesterday','This Week','This Month'] as const).map(r=><button key={r} onClick={()=>setReportRange(r)} className={`chip ${reportRange===r?'active':''}`}>{r}</button>)}</div>
-            <p className="mt-3 text-sm font-bold text-[var(--muted)]">Sales and profit follow the sale date and include unpaid Utang; they are not cash received. Payments against older Utang update the live wallets, not today&apos;s sales.</p>
-            <div className="report-stats grid grid-cols-2 gap-3 mt-3">
-              <div className="card p-4"><p className="label">Transactions</p><p className="font-display font-extrabold text-3xl">{reportTxs.filter(t=>salesTypes.includes(t.type)).length}</p></div>
-              <div className="card p-4"><p className="label">Gross Sales</p><p className="font-display font-extrabold text-3xl">{peso(reportSales+reportCashIn+reportCashOut)}</p></div>
-              <div className="card p-4"><p className="label">Net Profit</p><p className="font-display font-extrabold text-3xl text-[var(--green)]">{peso(reportProfit)}</p><p className="text-xs font-bold text-[var(--muted)]">Includes {peso(reportTips)} extra / tips</p></div>
-              <div className="card p-4" style={{background:'var(--green-soft)'}}><p className="label">External Provider Top-Ups</p><p className="font-display font-extrabold text-3xl text-[var(--green)]">{peso(reportTopUp)}</p><p className="text-xs font-bold text-[var(--muted)]">Fees paid {peso(reportTopUpFees)}</p></div>
+          <main className="space-y-4">
+            {/* Top Toolbar Card: Period, Export Actions, Range, and Accounting Note */}
+            <div className="card p-4 sm:p-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider hidden sm:inline">Period:</span>
+                  <div className="inline-flex p-1 rounded-xl bg-[var(--surface2)] border border-[var(--line)] gap-1">
+                    {(['Day','Week','Month'] as const).map(p => (
+                      <button
+                        key={p}
+                        onClick={() => setReportPeriod(p)}
+                        className={`chip min-h-[32px] px-3.5 rounded-lg text-xs transition-all ${
+                          reportPeriod === p
+                            ? 'active bg-[var(--strong)] text-[var(--on-strong)] shadow-sm font-black'
+                            : 'text-[var(--muted)] hover:text-[var(--strong)] font-bold'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={exportAllCSV}
+                    className="min-h-[38px] px-3.5 rounded-xl bg-[var(--strong)] text-[var(--on-strong)] text-xs font-black inline-flex items-center gap-1.5 shadow-sm hover:opacity-90 active:scale-95 transition-all"
+                  >
+                    <FileDown size={15}/> Export CSV
+                  </button>
+                  <button
+                    onClick={exportDailyCSV}
+                    className="min-h-[38px] px-3.5 rounded-xl border border-[var(--line)] bg-[var(--surface)] text-[var(--strong)] hover:bg-[var(--surface2)] text-xs font-black inline-flex items-center gap-1.5 shadow-sm active:scale-95 transition-all"
+                  >
+                    <Download size={15}/> Export Daily Report
+                  </button>
+                </div>
+              </div>
+
+              {/* Range Filters */}
+              <div className="flex items-center gap-2 mt-3 pt-3 border-t border-[var(--line)] flex-wrap">
+                <span className="text-xs font-bold text-[var(--muted)] uppercase tracking-wider hidden sm:inline">Range:</span>
+                <div
+                  data-arrow-group="report-range"
+                  onKeyDown={(e) => handleModalArrowKeys(e, e.currentTarget)}
+                  className="flex flex-wrap gap-1.5"
+                >
+                  {(['Today','Yesterday','This Week','This Month'] as const).map(r => (
+                    <button
+                      key={r}
+                      onClick={() => setReportRange(r)}
+                      className={`chip min-h-[32px] px-3.5 rounded-full text-xs transition-all ${
+                        reportRange === r
+                          ? 'active bg-[var(--green-solid)] text-white font-black shadow-sm'
+                          : 'border border-[var(--line)] bg-[var(--surface)] text-[var(--muted)] hover:text-[var(--strong)] font-bold'
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Accounting Note */}
+              <div className="mt-3 rounded-xl bg-[var(--surface2)]/80 border border-[var(--line)] p-3 flex items-start gap-2.5 text-xs font-medium text-[var(--muted)] leading-relaxed">
+                <Info size={16} className="text-[var(--green)] shrink-0 mt-0.5" />
+                <span>
+                  Sales and profit follow the sale date and include unpaid Utang; they are not cash received. Payments against older Utang update the live wallets, not today&apos;s sales.
+                </span>
+              </div>
             </div>
+
+            {/* Top 4 KPI Summary Cards */}
+            <div className="report-stats grid grid-cols-2 gap-3">
+              {/* Transactions */}
+              <div className="card p-4 sm:p-5 flex flex-col justify-between hover:shadow-md transition-shadow">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="label text-[11px] font-black tracking-wider text-[var(--muted)] uppercase">Transactions</p>
+                    <p className="font-display font-extrabold text-2xl sm:text-3xl text-[var(--strong)] mt-1">
+                      {reportTxs.filter(t => salesTypes.includes(t.type)).length}
+                    </p>
+                  </div>
+                  <span className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-100 dark:border-blue-900/50 grid place-items-center shrink-0">
+                    <Receipt size={18} className="text-blue-600 dark:text-blue-400"/>
+                  </span>
+                </div>
+                <div className="mt-3 pt-2.5 border-t border-[var(--line)]">
+                  <span className="rounded-full bg-[var(--surface2)] px-2.5 py-0.5 text-[11px] font-bold text-[var(--muted)]">
+                    Sales &amp; services
+                  </span>
+                </div>
+              </div>
+
+              {/* Gross Sales */}
+              <div className="card p-4 sm:p-5 flex flex-col justify-between hover:shadow-md transition-shadow">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="label text-[11px] font-black tracking-wider text-[var(--muted)] uppercase">Gross Sales</p>
+                    <p className="font-display font-extrabold text-2xl sm:text-3xl text-[var(--strong)] mt-1">
+                      {peso(reportSales + reportCashIn + reportCashOut)}
+                    </p>
+                  </div>
+                  <span className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-900/50 grid place-items-center shrink-0">
+                    <Banknote size={18} className="text-emerald-600 dark:text-emerald-400"/>
+                  </span>
+                </div>
+                <div className="mt-3 pt-2.5 border-t border-[var(--line)]">
+                  <span className="rounded-full bg-[var(--surface2)] px-2.5 py-0.5 text-[11px] font-bold text-[var(--muted)]">
+                    E-Load + Cash In/Out
+                  </span>
+                </div>
+              </div>
+
+              {/* Net Profit */}
+              <div className="card p-4 sm:p-5 flex flex-col justify-between hover:shadow-md transition-shadow border-emerald-500/20 bg-gradient-to-br from-[var(--surface)] via-[var(--surface)] to-[var(--green-soft)]/20">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="label text-[11px] font-black tracking-wider text-[var(--green)] uppercase">Net Profit</p>
+                    <p className="font-display font-extrabold text-2xl sm:text-3xl text-[var(--green)] mt-1">
+                      {peso(reportProfit)}
+                    </p>
+                  </div>
+                  <span className="w-9 h-9 rounded-xl bg-[var(--green-soft)] border border-[var(--green-solid)]/20 grid place-items-center shrink-0">
+                    <TrendingUp size={18} className="text-[var(--green)]"/>
+                  </span>
+                </div>
+                <div className="mt-3 pt-2.5 border-t border-[var(--line)]">
+                  <p className="text-xs font-bold text-[var(--muted)] truncate">
+                    Includes {peso(reportTips)} extra / tips
+                  </p>
+                </div>
+              </div>
+
+              {/* Provider Top-Ups */}
+              <div className="card p-4 sm:p-5 flex flex-col justify-between hover:shadow-md transition-shadow">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="label text-[11px] font-black tracking-wider text-[var(--muted)] uppercase">External Provider Top-Ups</p>
+                    <p className="font-display font-extrabold text-2xl sm:text-3xl text-[var(--green)] mt-1">
+                      {peso(reportTopUp)}
+                    </p>
+                  </div>
+                  <span className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-100 dark:border-amber-900/50 grid place-items-center shrink-0">
+                    <RefreshCw size={18} className="text-amber-600 dark:text-amber-400"/>
+                  </span>
+                </div>
+                <div className="mt-3 pt-2.5 border-t border-[var(--line)]">
+                  <p className="text-xs font-bold text-[var(--muted)] truncate">
+                    Fees paid {peso(reportTopUpFees)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Side-by-Side Detail Grid */}
             <div className="report-grid mt-3">
-            <section className="card p-4 sm:p-5 mt-3">
-              <h2 className="font-display font-bold text-xl">Profit per day — {reportPeriod}</h2>
-              <dl className="rounded-2xl bg-[var(--surface2)] p-3 mt-3 space-y-1 text-sm font-bold">
-                <Row k="Regular customer fees" v={peso(sum(reportTxs.filter(t=>salesTypes.includes(t.type)),t=>t.fee||0))}/>
-                <Row k="Provider discounts" v={peso(sum(reportTxs,eLoadDiscount))}/>
-                <Row k="Extra / Tips" v={peso(reportTips)}/>
-                <Row k="Top-up fees paid" v={`−${peso(reportTopUpFees)}`}/>
-              </dl>
-              <div className="mt-2 divide-y divide-[var(--line)]">{profitPerDay.length===0 && <p className="text-sm font-bold text-[var(--muted)] py-2">No sales in this period yet.</p>}{profitPerDay.map(d=><div key={d.date} className="py-2.5 flex justify-between gap-2 font-bold"><span>{d.date===todayKey()?'Today':dateLabel(d.date)} <span className="text-[var(--muted)] text-xs">• {d.count} tx</span></span><span className="text-right">{peso(d.sales)} sales • <span className="text-[var(--green)]">{peso(d.profit)} profit</span></span></div>)}</div>
-              <p className="text-sm font-black mt-3">Total profit {peso(sum(profitPerDay.map(d=>({} as Tx)),()=>0) || reportProfit)} • Total sales {peso(reportSales+reportCashIn+reportCashOut)} • Count {reportTxs.filter(t=>salesTypes.includes(t.type)).length}</p>
-            </section>
-            <section className="card p-4 sm:p-5 mt-3">
-              <h2 className="font-display font-bold text-xl">Breakdown — all via Main Wallet</h2>
-              {[['E-Load',reportSales,'var(--blue)'],['Cash In',reportCashIn,'var(--blue)'],['Cash Out',reportCashOut,'var(--purple)']].map(([label,val,color]:any)=>{ const total=Math.max(1,reportSales+reportCashIn+reportCashOut); return <div key={label} className="mt-4"><div className="flex justify-between font-extrabold text-sm"><span>{label} • Main Wallet</span><span>{peso(val)} • {Math.round(val/total*100)}%</span></div><div className="h-3 rounded-full bg-[var(--surface2)] overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{width:`${val/total*100}%`, background:color}}/></div></div> })}
-              <div className="mt-4"><div className="flex justify-between font-extrabold text-sm"><span>External Provider Top-Ups (not sales)</span><span>{peso(reportTopUp)} • fees {peso(reportTopUpFees)}</span></div><div className="h-3 rounded-full bg-[var(--surface2)] overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{width:`${Math.min(100, reportTopUp/Math.max(1,reportSales+reportCashIn+reportCashOut+reportTopUp)*100)}%`, background:'var(--green-solid)'}}/></div></div>
-              <h3 className="font-display font-bold text-lg mt-6">Best-selling load denominations</h3>
-              <div className="mt-2 divide-y divide-[var(--line)]">{denom.length===0 && <p className="text-sm font-bold text-[var(--muted)] py-2">No e-load sales in this period yet.</p>}{denom.map(([amt,count],i)=><div key={amt} className="py-2.5 flex justify-between font-bold"><span><b className="mr-2">#{i+1}</b> {peso(amt)} load</span><span>{count} sale{count>1?'s':''}</span></div>)}</div>
-              <h3 className="font-display font-bold text-lg mt-6 flex items-center gap-2"><Users size={19}/> Breakdown by customer</h3>
-              <div className="mt-2 divide-y divide-[var(--line)]">{reportByCustomer.length===0 && <p className="text-sm font-bold text-[var(--muted)] py-2">No customer sales in this period yet.</p>}{reportByCustomer.map((c,i)=>{ const max=Math.max(1,...reportByCustomer.map(x=>x.amount)); return <button key={c.phone} onClick={()=>{ const rec=customerByPhone.get(c.phone); if(rec) setCustomerDetail(rec); }} className="w-full py-3 text-left"><div className="flex justify-between gap-2 font-bold"><span className="flex items-center gap-2 min-w-0"><CustomerAvatar name={c.name} phone={c.phone} size={32} /><span className="truncate">#{i+1} {displayNameOnly(c.name, c.phone)}{isRealName(c.name, c.phone) && <span className="text-[var(--muted)] text-xs"> • {formatPhone(c.phone)}</span>}</span></span><span className="shrink-0">{peso(c.amount)} • {c.count} tx</span></div><div className="h-2.5 rounded-full bg-[var(--surface2)] overflow-hidden mt-2"><div className="h-full rounded-full bg-[var(--green)]" style={{width:`${c.amount/max*100}%`}}/></div><p className="text-xs font-bold text-[var(--muted)] mt-1">Fees paid {peso(c.fees)} • Extra / Tips {peso(c.tips)}</p></button> })}</div>
-            </section>
+              {/* Left Column: Profit per day */}
+              <section className="card p-4 sm:p-5 flex flex-col justify-between">
+                <div>
+                  <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                    <CalendarDays size={20} className="text-[var(--green)]"/> Profit per day — {reportPeriod}
+                  </h2>
+
+                  {/* Fee Components Breakdown */}
+                  <dl className="rounded-2xl bg-[var(--surface2)] p-3.5 mt-3 space-y-1.5 text-sm font-bold border border-[var(--line)]">
+                    <Row k="Regular customer fees" v={peso(sum(reportTxs.filter(t => salesTypes.includes(t.type)), t => t.fee || 0))}/>
+                    <Row k="Provider discounts" v={peso(sum(reportTxs, eLoadDiscount))}/>
+                    <Row k="Extra / Tips" v={peso(reportTips)}/>
+                    <Row k="Top-up fees paid" v={`−${peso(reportTopUpFees)}`}/>
+                  </dl>
+
+                  {/* Daily List */}
+                  <div className="mt-3 divide-y divide-[var(--line)]">
+                    {profitPerDay.length === 0 && (
+                      <div className="rounded-xl border border-dashed border-[var(--line)] p-6 text-center my-2">
+                        <p className="text-sm font-bold text-[var(--muted)]">No sales in this period yet.</p>
+                      </div>
+                    )}
+                    {profitPerDay.map(d => (
+                      <div key={d.date} className="py-2.5 flex items-center justify-between gap-2 font-bold hover:bg-[var(--surface2)]/50 px-2 rounded-lg transition-colors">
+                        <span className="flex items-center gap-2">
+                          <span className={d.date === todayKey() ? 'text-[var(--green)] font-black' : ''}>
+                            {d.date === todayKey() ? 'Today' : dateLabel(d.date)}
+                          </span>
+                          <span className="rounded-full bg-[var(--surface2)] px-2 py-0.5 text-xs text-[var(--muted)] font-bold">
+                            • {d.count} tx
+                          </span>
+                        </span>
+                        <span className="text-right flex items-center gap-2">
+                          <span className="text-xs font-bold text-[var(--muted)]">{peso(d.sales)} sales</span>
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-[var(--green)] font-black text-xs">
+                            {peso(d.profit)} profit
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Footer Totals */}
+                <div className="mt-4 p-3 rounded-xl bg-[var(--surface2)] border border-[var(--line)] flex flex-wrap items-center justify-between gap-2 text-xs font-black text-[var(--strong)]">
+                  <span>
+                    Total profit <span className="text-[var(--green)] font-extrabold text-sm">{peso(sum(profitPerDay.map(d => ({} as Tx)), () => 0) || reportProfit)}</span>
+                  </span>
+                  <span className="text-[var(--muted)] font-bold">
+                    • Total sales {peso(reportSales + reportCashIn + reportCashOut)}
+                  </span>
+                  <span className="text-[var(--muted)] font-bold">
+                    • Count {reportTxs.filter(t => salesTypes.includes(t.type)).length}
+                  </span>
+                </div>
+              </section>
+
+              {/* Right Column: Breakdown via Main Wallet */}
+              <section className="card p-4 sm:p-5 flex flex-col justify-between">
+                <div>
+                  <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                    <BarChart3 size={20} className="text-blue-500"/> Breakdown — all via Main Wallet
+                  </h2>
+
+                  {/* Volume Distribution Bars */}
+                  <div className="space-y-3 mt-4">
+                    {[
+                      ['E-Load', reportSales, 'var(--blue)'],
+                      ['Cash In', reportCashIn, 'var(--blue)'],
+                      ['Cash Out', reportCashOut, 'var(--purple)'],
+                    ].map(([label, val, color]: any) => {
+                      const total = Math.max(1, reportSales + reportCashIn + reportCashOut);
+                      const pct = Math.round((val / total) * 100);
+                      return (
+                        <div key={label} className="p-3 rounded-xl bg-[var(--surface2)]/60 border border-[var(--line)]">
+                          <div className="flex justify-between items-center font-extrabold text-sm">
+                            <span className="flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ background: color }} />
+                              {label} • Main Wallet
+                            </span>
+                            <span className="font-display">
+                              {peso(val)} <span className="text-xs font-bold text-[var(--muted)]">({pct}%)</span>
+                            </span>
+                          </div>
+                          <div className="h-2.5 rounded-full bg-[var(--surface)] overflow-hidden mt-2 border border-[var(--line)]/50">
+                            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${(val / total) * 100}%`, background: color }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* External Provider Top-Up Volume */}
+                    <div className="p-3 rounded-xl bg-[var(--surface2)]/60 border border-[var(--line)]">
+                      <div className="flex justify-between items-center font-extrabold text-sm">
+                        <span className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[var(--green-solid)]" />
+                          External Provider Top-Ups (not sales)
+                        </span>
+                        <span className="font-display">
+                          {peso(reportTopUp)} <span className="text-xs font-bold text-[var(--muted)]">• fees {peso(reportTopUpFees)}</span>
+                        </span>
+                      </div>
+                      <div className="h-2.5 rounded-full bg-[var(--surface)] overflow-hidden mt-2 border border-[var(--line)]/50">
+                        <div
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{
+                            width: `${Math.min(100, (reportTopUp / Math.max(1, reportSales + reportCashIn + reportCashOut + reportTopUp)) * 100)}%`,
+                            background: 'var(--green-solid)',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Best-Selling Load Denominations */}
+                  <h3 className="font-display font-bold text-lg mt-6 flex items-center gap-2">
+                    <Zap size={18} className="text-amber-500"/> Best-selling load denominations
+                  </h3>
+                  <div className="mt-2 divide-y divide-[var(--line)]">
+                    {denom.length === 0 && (
+                      <p className="text-sm font-bold text-[var(--muted)] py-3 text-center">No e-load sales in this period yet.</p>
+                    )}
+                    {denom.map(([amt, count], i) => (
+                      <div key={amt} className="py-2.5 flex items-center justify-between font-bold">
+                        <span className="flex items-center gap-2">
+                          <span className={`w-6 h-6 rounded-lg text-xs font-black grid place-items-center ${
+                            i === 0 ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300' :
+                            i === 1 ? 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200' :
+                            'bg-[var(--surface2)] text-[var(--muted)]'
+                          }`}>
+                            #{i + 1}
+                          </span>
+                          <span>{peso(amt)} load</span>
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-full bg-[var(--surface2)] text-xs text-[var(--muted)] font-bold">
+                          {count} sale{count > 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Breakdown by Customer */}
+                  <h3 className="font-display font-bold text-lg mt-6 flex items-center gap-2">
+                    <Users size={19} className="text-[var(--green)]"/> Breakdown by customer
+                  </h3>
+                  <div className="mt-2 space-y-2">
+                    {reportByCustomer.length === 0 && (
+                      <p className="text-sm font-bold text-[var(--muted)] py-3 text-center">No customer sales in this period yet.</p>
+                    )}
+                    {reportByCustomer.map((c, i) => {
+                      const max = Math.max(1, ...reportByCustomer.map(x => x.amount));
+                      return (
+                        <button
+                          key={c.phone}
+                          onClick={() => {
+                            const rec = customerByPhone.get(c.phone);
+                            if (rec) setCustomerDetail(rec);
+                          }}
+                          className="w-full p-3 rounded-xl bg-[var(--surface)] hover:bg-[var(--surface2)] border border-[var(--line)] text-left transition-all group"
+                        >
+                          <div className="flex justify-between items-center gap-2 font-bold">
+                            <span className="flex items-center gap-2.5 min-w-0">
+                              <span className="relative">
+                                <CustomerAvatar name={c.name} phone={c.phone} size={44} />
+                                <span className="absolute -top-1 -left-1 w-4 h-4 rounded-full bg-[var(--strong)] text-[var(--on-strong)] text-[9px] font-black grid place-items-center">
+                                  {i + 1}
+                                </span>
+                              </span>
+                              <span className="truncate">
+                                <span className="font-extrabold">{displayNameOnly(c.name, c.phone)}</span>
+                                {isRealName(c.name, c.phone) && (
+                                  <span className="text-[var(--muted)] text-xs font-medium ml-1.5">• {formatPhone(c.phone)}</span>
+                                )}
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-right">
+                              <span className="font-extrabold font-display">{peso(c.amount)}</span>
+                              <span className="text-xs text-[var(--muted)] font-bold block">• {c.count} tx</span>
+                            </span>
+                          </div>
+                          <div className="h-2 rounded-full bg-[var(--surface2)] overflow-hidden mt-2">
+                            <div className="h-full rounded-full bg-[var(--green)] transition-all duration-300" style={{ width: `${(c.amount / max) * 100}%` }} />
+                          </div>
+                          <p className="text-[11px] font-bold text-[var(--muted)] mt-1.5 flex items-center justify-between">
+                            <span>Fees paid {peso(c.fees)}</span>
+                            <span>Extra / Tips {peso(c.tips)}</span>
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
             </div>
+
+            {/* Closed Days Section */}
             <section className="card p-4 sm:p-5 mt-3">
-              <h2 className="font-display font-bold text-xl">Closed days</h2>
-              {dailyReports.length===0 ? <p className="text-sm font-bold text-[var(--muted)] mt-2">No closed days yet. Use End Day to archive a day.</p> : <div className="divide-y divide-[var(--line)] mt-1">{dailyReports.map(r=><div key={r.id} className="py-3 flex justify-between gap-2"><span><span className="block font-extrabold">{fullDate(r.value.date)}</span><span className="block text-xs font-bold text-[var(--muted)]">Float {typeof r.value.startingFloat==='number'?peso(r.value.startingFloat):'not recorded'} • Counted {peso(r.value.actualCash)} • {r.value.difference===0?'Exact':r.value.difference<0?`Short ${peso(Math.abs(r.value.difference))}`:`Over ${peso(r.value.difference)}`} • Tomorrow {peso(r.value.tomorrowFloat)}</span></span><span className="text-right shrink-0"><span className="block font-extrabold">{peso(r.value.sales)} sales</span><span className="block text-xs font-black text-[var(--green)]">{peso(r.value.profit)} profit</span>{(r.value.tips||0)>0 && <span className="block text-xs font-bold text-[var(--muted)]">Includes {peso(r.value.tips||0)} extra / tips</span>}</span></div>)}</div>}
+              <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                <CheckCircle2 size={20} className="text-[var(--green)]"/> Closed days
+              </h2>
+              {dailyReports.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-[var(--line)] p-6 text-center mt-3">
+                  <p className="text-sm font-bold text-[var(--muted)]">No closed days yet. Use End Day to archive a day.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-[var(--line)] mt-2">
+                  {dailyReports.map(r => (
+                    <div key={r.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <span className="block font-extrabold">{fullDate(r.value.date)}</span>
+                        <span className="block text-xs font-bold text-[var(--muted)] mt-0.5">
+                          Float {typeof r.value.startingFloat === 'number' ? peso(r.value.startingFloat) : 'not recorded'} • Counted {peso(r.value.actualCash)} • {r.value.difference === 0 ? 'Exact' : r.value.difference < 0 ? `Short ${peso(Math.abs(r.value.difference))}` : `Over ${peso(r.value.difference)}`} • Tomorrow {peso(r.value.tomorrowFloat)}
+                        </span>
+                      </div>
+                      <div className="sm:text-right shrink-0">
+                        <span className="block font-extrabold">{peso(r.value.sales)} sales</span>
+                        <span className="block text-xs font-black text-[var(--green)]">{peso(r.value.profit)} profit</span>
+                        {(r.value.tips || 0) > 0 && (
+                          <span className="block text-xs font-bold text-[var(--muted)]">Includes {peso(r.value.tips || 0)} extra / tips</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
-            <div className="card p-5 mt-3 flex flex-col sm:flex-row gap-3 justify-between items-start sm:items-center"><div><h2 className="font-display font-bold text-xl">End of day</h2><p className="text-sm font-semibold text-[var(--muted)]">{meta.lastClosed===todayKey()?'Today is already closed and archived.':'Review today, then archive the summary.'}</p></div><button onClick={openEndDay} className="big-btn bg-[var(--strong)] text-[var(--on-strong)] px-5"><Download size={18}/> End of Day Summary</button></div>
+
+            {/* End of Day Reconciliation Card */}
+            <div className="card p-5 mt-3 border-2 border-[var(--green-solid)]/30 bg-gradient-to-br from-[var(--surface)] via-[var(--surface)] to-[var(--green-soft)]/20 flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-display font-bold text-xl">End of day</h2>
+                  {meta.lastClosed === todayKey() ? (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-[var(--green)] text-xs font-black inline-flex items-center gap-1">
+                      <CheckCircle2 size={12}/> Closed &amp; Archived
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-xs font-black">
+                      Ready to Close
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm font-semibold text-[var(--muted)] mt-1">
+                  {meta.lastClosed === todayKey()
+                    ? 'Today is already closed and archived.'
+                    : 'Review today, then archive the summary.'}
+                </p>
+              </div>
+              <button
+                onClick={openEndDay}
+                className="big-btn bg-[var(--strong)] text-[var(--on-strong)] hover:opacity-90 px-5 shrink-0 shadow-md active:scale-95 transition-all"
+              >
+                <Download size={18}/> End of Day Summary
+              </button>
+            </div>
           </main>
         )}
 
         {tab==='settings' && (
-          <main className="space-y-3">
+          <main className="space-y-4">
+            {/* Card 1: Appearance & Theme */}
             <AppearanceSettings {...appearance}/>
+
+            {/* Card 2: Business Profile & Pricing Configuration */}
             <section className="card p-4 sm:p-5">
-              <h2 className="font-display font-bold text-xl flex items-center gap-2"><SettingsIcon size={20}/> Business settings</h2>
-              <p className="text-sm font-semibold text-[var(--muted)] mt-1">Main app: Main Wallet. External Provider is only a top-up source.</p>
-              {settingsDraft && <div className="rounded-xl bg-[var(--surface2)] p-3 mt-3 text-sm font-bold">Your unsaved settings are kept while balances update live. <button type="button" onClick={()=>setSettingsDraft(null)} className="underline text-[var(--green)]">Discard draft / use latest settings</button></div>}
-              <label className="label block mt-4">Business name</label><input value={settings.businessName} onChange={e=>changeBusinessSetting('businessName',e.target.value)} className="field mt-1"/>
-              <div className="grid sm:grid-cols-2 gap-3 mt-3">
-                <div><label className="label">E-Load Profit % (added to customer total)</label><input type="number" step="0.1" value={settings.eloadPct} onChange={e=>changeBusinessSetting('eloadPct',Number(e.target.value))} className="field mt-1"/></div>
-                <div><label className="label">Cash In - % Fee (Added on Top)</label><input type="number" step="0.1" value={settings.cashInPct} onChange={e=>changeBusinessSetting('cashInPct',Number(e.target.value))} className="field mt-1"/></div>
-                <div><label className="label">Cash Out - % Fee (Added on Top)</label><input type="number" step="0.1" value={settings.cashOutPct} onChange={e=>changeBusinessSetting('cashOutPct',Number(e.target.value))} className="field mt-1"/></div>
-                <div><label className="label">External Provider Top-Up Fee (Flat ₱)</label><input type="number" value={settings.palawanFee} onChange={e=>changeBusinessSetting('palawanFee',Number(e.target.value))} className="field mt-1"/></div>
-                <div><label className="label">Low Balance threshold — Main Wallet (₱)</label><input type="number" value={settings.lowThreshold} onChange={e=>changeBusinessSetting('lowThreshold',Number(e.target.value))} className="field mt-1"/></div>
-                <div className="flex items-end"><p className="text-xs font-bold text-[var(--muted)]">When Main Wallet is at or below this amount, a subtle amber “Main Wallet low - top up soon” pill shows. No popup.</p></div>
+              <div className="pb-3 border-b border-[var(--line)]">
+                <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                  <Store size={22} className="text-[var(--green)]"/> Business Profile &amp; Pricing
+                </h2>
+                <p className="text-sm font-semibold text-[var(--muted)] mt-0.5">
+                  Main app: Main Wallet. External Provider is only a top-up source.
+                </p>
               </div>
-              <p className="text-sm font-semibold text-[var(--muted)] mt-3">Fee = Amount × % ÷ 100. E-Load customers pay the load amount plus its profit/fee; Cash In/Out fees are added on top. Example: Cash In ₱500 at 2% = ₱10 fee, so the customer pays ₱510.</p>
-              <button disabled={saving} onClick={saveBusinessSettings} className="big-btn bg-[var(--green-solid)] text-white px-6 mt-4 w-full sm:w-auto">{saving?'Saving…':'Save Settings'}</button>
-              <button onClick={exportAllCSV} className="big-btn border-2 border-[var(--line)] px-5 mt-3 w-full sm:w-auto"><FileDown size={18}/> Export CSV — All Transactions</button>
-              <input ref={statementImportRef} type="file" accept="application/json,.json" className="hidden" aria-label="Choose statement sales JSON file" onChange={e=>{const file=e.target.files?.[0]; if(file) void importStatementSales(file);}} />
-              <button type="button" disabled={statementImportBusy||saving} onClick={()=>statementImportRef.current?.click()} className="big-btn border-2 border-[var(--line)] px-5 mt-3 w-full sm:w-auto"><Download size={18}/>{statementImportBusy?'Importing statement sales…':'Import statement sales JSON'}</button>
-              <p className="text-xs font-bold text-[var(--muted)] mt-2">Imports past E-Load records to transaction history. Existing wallet balances are preserved; repeat imports skip already-imported rows.</p>
-              <div className="mt-5 border-t border-[var(--line)] pt-4"><h3 className="font-display font-bold text-lg">Full backup</h3><p className="text-sm font-semibold text-[var(--muted)] mt-1">Back up transactions, customers, reports, favorites, wallet adjustments, and settings to a JSON file.</p><button type="button" onClick={exportBackup} className="big-btn border-2 border-[var(--line)] px-5 mt-3 w-full sm:w-auto"><FileDown size={18}/>Download full backup</button><input ref={backupImportRef} type="file" accept="application/json,.json" className="hidden" aria-label="Choose E-LOAD Tracker backup" onChange={e=>{const file=e.target.files?.[0];if(file) void importBackup(file);}}/><button type="button" disabled={backupBusy||saving} onClick={()=>backupImportRef.current?.click()} className="big-btn border-2 border-[var(--line)] px-5 mt-3 ml-0 sm:ml-2 w-full sm:w-auto"><Download size={18}/>{backupBusy?'Restoring backup…':'Restore backup'}</button><p className="text-xs font-bold text-[var(--muted)] mt-2">Restore merges missing record IDs and keeps matching existing records. It replaces settings and wallet balances after confirmation. Restore requires internet access.</p></div>
+
+              {settingsDraft && (
+                <div className="rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 p-3 mt-4 text-sm font-bold text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span>Your unsaved settings are kept while balances update live.</span>
+                  <button
+                    type="button"
+                    onClick={() => setSettingsDraft(null)}
+                    className="underline text-[var(--green)] font-black shrink-0 hover:opacity-80 text-left sm:text-right"
+                  >
+                    Discard draft / use latest settings
+                  </button>
+                </div>
+              )}
+
+              {/* Store Name Input */}
+              <div className="mt-4">
+                <label className="label block font-extrabold text-xs uppercase tracking-wider text-[var(--muted)]">
+                  Business name
+                </label>
+                <input
+                  value={settings.businessName}
+                  onChange={e => changeBusinessSetting('businessName', e.target.value)}
+                  className="field mt-1.5 font-bold text-base"
+                  placeholder="E-Load &amp; Cash In/Out Store"
+                />
+              </div>
+
+              {/* Fee & Rate Settings */}
+              <div className="mt-5 pt-4 border-t border-[var(--line)]">
+                <h3 className="font-display font-bold text-base flex items-center gap-2 mb-3">
+                  <Percent size={18} className="text-blue-500"/> Service Fee Percentages &amp; Thresholds
+                </h3>
+
+                <div className="grid sm:grid-cols-2 gap-3.5">
+                  {/* E-Load % */}
+                  <div className="p-3.5 rounded-xl bg-[var(--surface2)]/70 border border-[var(--line)]">
+                    <label className="label block text-xs font-bold text-[var(--muted)]">
+                      E-Load Profit % (added to customer total)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={settings.eloadPct}
+                      onChange={e => changeBusinessSetting('eloadPct', Number(e.target.value))}
+                      className="field mt-1.5 font-display font-bold text-lg bg-[var(--surface)]"
+                    />
+                    <p className="text-[11px] font-semibold text-[var(--muted)] mt-1.5">
+                      % fee added on top of load face value.
+                    </p>
+                  </div>
+
+                  {/* Cash In % */}
+                  <div className="p-3.5 rounded-xl bg-[var(--surface2)]/70 border border-[var(--line)]">
+                    <label className="label block text-xs font-bold text-[var(--muted)]">
+                      Cash In - % Fee (Added on Top)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={settings.cashInPct}
+                      onChange={e => changeBusinessSetting('cashInPct', Number(e.target.value))}
+                      className="field mt-1.5 font-display font-bold text-lg bg-[var(--surface)]"
+                    />
+                    <p className="text-[11px] font-semibold text-[var(--muted)] mt-1.5">
+                      % fee added to customer cash deposit.
+                    </p>
+                  </div>
+
+                  {/* Cash Out % */}
+                  <div className="p-3.5 rounded-xl bg-[var(--surface2)]/70 border border-[var(--line)]">
+                    <label className="label block text-xs font-bold text-[var(--muted)]">
+                      Cash Out - % Fee (Added on Top)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={settings.cashOutPct}
+                      onChange={e => changeBusinessSetting('cashOutPct', Number(e.target.value))}
+                      className="field mt-1.5 font-display font-bold text-lg bg-[var(--surface)]"
+                    />
+                    <p className="text-[11px] font-semibold text-[var(--muted)] mt-1.5">
+                      % fee charged on customer withdrawal.
+                    </p>
+                  </div>
+
+                  {/* External Provider Top-Up Fee */}
+                  <div className="p-3.5 rounded-xl bg-[var(--surface2)]/70 border border-[var(--line)]">
+                    <label className="label block text-xs font-bold text-[var(--muted)]">
+                      External Provider Top-Up Fee (Flat ₱)
+                    </label>
+                    <input
+                      type="number"
+                      value={settings.palawanFee}
+                      onChange={e => changeBusinessSetting('palawanFee', Number(e.target.value))}
+                      className="field mt-1.5 font-display font-bold text-lg bg-[var(--surface)]"
+                    />
+                    <p className="text-[11px] font-semibold text-[var(--muted)] mt-1.5">
+                      Flat ₱ fee paid to reload float.
+                    </p>
+                  </div>
+
+                  {/* Low Balance Threshold */}
+                  <div className="p-3.5 rounded-xl bg-[var(--surface2)]/70 border border-[var(--line)] sm:col-span-2">
+                    <div className="grid sm:grid-cols-2 gap-3 items-center">
+                      <div>
+                        <label className="label block text-xs font-bold text-[var(--muted)]">
+                          Low Balance threshold — Main Wallet (₱)
+                        </label>
+                        <input
+                          type="number"
+                          value={settings.lowThreshold}
+                          onChange={e => changeBusinessSetting('lowThreshold', Number(e.target.value))}
+                          className="field mt-1.5 font-display font-bold text-lg bg-[var(--surface)]"
+                        />
+                      </div>
+                      <div className="rounded-xl bg-[var(--surface)] p-3 border border-[var(--line)] text-xs font-bold text-[var(--muted)] space-y-1">
+                        <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-black">
+                          <AlertTriangle size={14}/> Threshold Preview:
+                        </div>
+                        <p>When Main Wallet is at or below this amount, a subtle amber “Main Wallet low - top up soon” pill shows. No popup.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Fee Formula Note */}
+              <div className="mt-4 rounded-xl bg-[var(--surface2)]/80 border border-[var(--line)] p-3 flex items-start gap-2.5 text-xs font-medium text-[var(--muted)] leading-relaxed">
+                <Info size={16} className="text-[var(--green)] shrink-0 mt-0.5" />
+                <span>
+                  Fee = Amount × % ÷ 100. E-Load customers pay the load amount plus its profit/fee; Cash In/Out fees are added on top. Example: Cash In ₱500 at 2% = ₱10 fee, so the customer pays ₱510.
+                </span>
+              </div>
+
+              {/* Save Button */}
+              <div className="mt-4 pt-3 flex justify-end">
+                <button
+                  disabled={saving}
+                  onClick={saveBusinessSettings}
+                  className="big-btn bg-[var(--green-solid)] text-white px-8 py-3 rounded-2xl font-black text-sm shadow-md hover:opacity-95 active:scale-95 transition-all w-full sm:w-auto"
+                >
+                  <Save size={18}/> {saving ? 'Saving…' : 'Save Settings'}
+                </button>
+              </div>
             </section>
+
+            {/* Card 3: Data & Statements */}
             <section className="card p-4 sm:p-5">
-              <h2 className="font-display font-bold text-xl">Sample data</h2><p className="text-sm font-semibold text-[var(--muted)] mt-1">If older sample transactions are still in your ledger, clear them to start with a clean ledger.</p>
-              {!confirmClear ? <button onClick={()=>setConfirmClear(true)} className="big-btn border-2 border-[var(--line)] px-5 mt-3"><Trash2 size={18}/> Clear Sample Data</button> : <div className="mt-3 flex flex-wrap gap-2 items-center"><span className="font-bold text-sm">Clear all sample transactions &amp; sample customers?</span><button onClick={clearSample} disabled={saving} className="min-h-[44px] px-4 rounded-xl bg-[var(--red-solid)] text-white font-black text-sm">Yes, clear sample</button><button onClick={()=>setConfirmClear(false)} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Keep them</button></div>}
-              <p className="text-xs font-bold text-[var(--muted)] mt-3">Storage note: the app keeps up to 1,000 saved records. If you reach that limit, delete older transactions in the Transactions tab.</p>
+              <div className="pb-3 border-b border-[var(--line)]">
+                <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                  <Database size={20} className="text-purple-500"/> Data &amp; Statements
+                </h2>
+                <p className="text-sm font-semibold text-[var(--muted)] mt-0.5">
+                  Export your ledger to CSV or import past statements from your provider.
+                </p>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3.5 mt-4">
+                {/* CSV Export */}
+                <div className="p-4 rounded-xl bg-[var(--surface2)]/50 border border-[var(--line)] flex flex-col justify-between">
+                  <div>
+                    <h3 className="font-display font-bold text-base flex items-center gap-2">
+                      <FileDown size={18} className="text-[var(--green)]"/> Transaction History CSV
+                    </h3>
+                    <p className="text-xs font-semibold text-[var(--muted)] mt-1 leading-relaxed">
+                      Download a full spreadsheet of all transactions, fees, customer info, and wallet allocations.
+                    </p>
+                  </div>
+                  <button
+                    onClick={exportAllCSV}
+                    className="big-btn border-2 border-[var(--line)] bg-[var(--surface)] hover:bg-[var(--surface2)] px-5 mt-4 rounded-xl text-xs font-black flex items-center justify-center gap-2 shadow-sm transition-all"
+                  >
+                    <FileDown size={16}/> Export CSV — All Transactions
+                  </button>
+                </div>
+
+                {/* Statement Sales Import */}
+                <div className="p-4 rounded-xl bg-[var(--surface2)]/50 border border-[var(--line)] flex flex-col justify-between">
+                  <div>
+                    <h3 className="font-display font-bold text-base flex items-center gap-2">
+                      <Download size={18} className="text-blue-500"/> Statement Sales Import
+                    </h3>
+                    <p className="text-xs font-semibold text-[var(--muted)] mt-1 leading-relaxed">
+                      Imports past E-Load records to transaction history. Existing wallet balances are preserved; repeat imports skip already-imported rows.
+                    </p>
+                  </div>
+                  <input
+                    ref={statementImportRef}
+                    type="file"
+                    accept="application/json,.json"
+                    className="hidden"
+                    aria-label="Choose statement sales JSON file"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) void importStatementSales(file);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={statementImportBusy || saving}
+                    onClick={() => statementImportRef.current?.click()}
+                    className="big-btn border-2 border-[var(--line)] bg-[var(--surface)] hover:bg-[var(--surface2)] px-5 mt-4 rounded-xl text-xs font-black flex items-center justify-center gap-2 shadow-sm transition-all"
+                  >
+                    <Download size={16}/>
+                    {statementImportBusy ? 'Importing statement sales…' : 'Import statement sales JSON'}
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {/* Card 4: Full Backup & Disaster Recovery */}
+            <section className="card p-4 sm:p-5">
+              <div className="pb-3 border-b border-[var(--line)]">
+                <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                  <ShieldCheck size={20} className="text-emerald-500"/> Full Backup &amp; Recovery
+                </h2>
+                <p className="text-sm font-semibold text-[var(--muted)] mt-0.5">
+                  Back up transactions, customers, reports, favorites, wallet adjustments, and settings to a JSON file.
+                </p>
+              </div>
+
+              <div className="mt-4 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+                <button
+                  type="button"
+                  onClick={exportBackup}
+                  className="big-btn border-2 border-[var(--line)] bg-[var(--surface)] hover:bg-[var(--surface2)] px-5 py-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all flex-1"
+                >
+                  <FileDown size={18}/> Download full backup
+                </button>
+                <input
+                  ref={backupImportRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  aria-label="Choose E-LOAD Tracker backup"
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file) void importBackup(file);
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={backupBusy || saving}
+                  onClick={() => backupImportRef.current?.click()}
+                  className="big-btn border-2 border-[var(--line)] bg-[var(--surface)] hover:bg-[var(--surface2)] px-5 py-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 shadow-sm active:scale-95 transition-all flex-1"
+                >
+                  <Download size={18}/>
+                  {backupBusy ? 'Restoring backup…' : 'Restore backup'}
+                </button>
+              </div>
+
+              <div className="mt-3 rounded-xl bg-[var(--surface2)]/80 border border-[var(--line)] p-3 text-xs font-medium text-[var(--muted)] leading-relaxed">
+                Restore merges missing record IDs and keeps matching existing records. It replaces settings and wallet balances after confirmation. Restore requires internet access.
+              </div>
+            </section>
+
+            {/* Card 5: Sample Data Maintenance */}
+            <section className="card p-4 sm:p-5 border border-rose-200/60 dark:border-rose-900/40 bg-gradient-to-br from-[var(--surface)] to-rose-50/10 dark:to-rose-950/10">
+              <div className="pb-3 border-b border-[var(--line)]">
+                <h2 className="font-display font-bold text-xl flex items-center gap-2">
+                  <Trash2 size={20} className="text-rose-500"/> Sample Data &amp; Reset
+                </h2>
+                <p className="text-sm font-semibold text-[var(--muted)] mt-0.5">
+                  If older sample transactions are still in your ledger, clear them to start with a clean ledger.
+                </p>
+              </div>
+
+              <div className="mt-4">
+                {!confirmClear ? (
+                  <button
+                    onClick={() => setConfirmClear(true)}
+                    className="big-btn border-2 border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 bg-rose-50/50 dark:bg-rose-950/20 hover:bg-rose-100/50 px-5 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 transition-all w-full sm:w-auto"
+                  >
+                    <Trash2 size={16}/> Clear Sample Data
+                  </button>
+                ) : (
+                  <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/80 flex flex-wrap gap-3 items-center justify-between">
+                    <span className="font-bold text-sm text-rose-900 dark:text-rose-200">
+                      Clear all sample transactions &amp; sample customers?
+                    </span>
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <button
+                        onClick={clearSample}
+                        disabled={saving}
+                        className="min-h-[40px] px-4 rounded-xl bg-[var(--red-solid)] text-white font-black text-xs shadow-sm active:scale-95 transition-all flex-1 sm:flex-initial"
+                      >
+                        Yes, clear sample
+                      </button>
+                      <button
+                        onClick={() => setConfirmClear(false)}
+                        className="min-h-[40px] px-4 rounded-xl border border-[var(--line)] bg-[var(--surface)] font-black text-xs shadow-sm active:scale-95 transition-all flex-1 sm:flex-initial"
+                      >
+                        Keep them
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs font-semibold text-[var(--muted)] mt-3">
+                Storage note: the app keeps up to 1,000 saved records. If you reach that limit, delete older transactions in the Transactions tab.
+              </p>
             </section>
           </main>
         )}
@@ -1864,24 +3651,288 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
       </Sheet>}
 
       {detail && !pendingPayment && !tipPrompt && !pendingRelease && !pendingCorrection && <Sheet onClose={()=>setDetail(null)} title="Transaction detail">
-        <div className="rounded-2xl bg-[var(--surface2)] p-4"><p className="font-display font-extrabold text-3xl">{peso(detail.value.amount)}</p><p className="font-bold text-[var(--muted)]">{detail.value.type==='Top-Up'?'Top-Up via External Provider':detail.value.type} • {detail.value.type==='Top-Up'?'External Provider → Main Wallet':`${detail.value.network} • via Main Wallet`} • {dateLabel(detail.value.date)} at {detail.value.time}</p><p className="font-black text-[var(--green)] mt-1">{detail.value.type==='Top-Up' ? `External Provider fee: ${peso(detail.value.fee||0)}` : detail.value.type==='E-Load' ? `Customer fee ${peso(detail.value.fee||0)} + provider discount ${peso(eLoadDiscount(detail.value))} + extra / tip ${peso(txTip(detail.value))} = ${peso(txProfit(detail.value))} total profit` : `Regular fee ${peso(detail.value.fee||0)} + extra / tip ${peso(txTip(detail.value))} = ${peso(txProfit(detail.value))} total profit`}</p>{detail.value.utang && <><p className="font-black text-[13px] mt-1"><span className={`px-2 py-1 rounded-full ${detail.value.utangStatus==='paid'?'bg-[var(--green-soft)] text-[var(--green)]': utangPromiseStatus(detail.value)==='overdue'?'bg-[var(--red-soft)] text-[var(--red)]': utangPromiseStatus(detail.value)==='due-today'?'bg-[var(--amber-soft)] text-[var(--amber)]':'bg-[var(--amber-soft)] text-[var(--amber)]'}`}>Utang — {utangPromiseLabel(detail.value)}</span></p><p className="text-sm font-bold mt-2">Promise to Pay: {utangPromiseDateLabel(detail.value)}{detail.value.promiseDate ? ` • ${fullDate(detail.value.promiseDate)}` : ''}</p>{detail.value.utangStatus!=='paid' && <p className="text-sm font-bold">Total {peso(detail.value.amount)} • Paid {peso(detail.value.paidAmount||0)} • Remaining {peso(utangRemaining(detail.value))}</p>}</>}{detail.value.history && detail.value.history.length>0 && <div className="mt-3 rounded-xl bg-[var(--surface)] p-3 border border-[var(--line)]"><p className="text-xs font-black uppercase tracking-wide text-[var(--muted)]">Edit history</p>{detail.value.history.map((h,i)=><p key={i} className="text-sm font-bold mt-1">Edited: {peso(h.oldAmount)} → {peso(h.newAmount)}, {h.date} {h.time}</p>)}</div>}</div>
-        {(() => { const cust = customerByPhone.get(digitsOnly(detail.value.phone||'')); const showDeleted = !cust && isRealName(detail.value.customerName, detail.value.phone) && !!detail.value.phone; const hasName = cust ? isRealName(cust.value.name, detail.value.phone) : isRealName(detail.value.customerName, detail.value.phone); return <div className="rounded-2xl border border-[var(--line)] p-3 mt-3 flex items-center gap-3"><CustomerAvatar name={cust?.value.name || detail.value.customerName} phone={detail.value.phone} /><div className="flex-1 min-w-0"><p className="font-extrabold truncate">{showDeleted?'Deleted Customer': displayNameOnly(cust?.value.name || detail.value.customerName, detail.value.phone) || 'No customer'}</p><p className="text-xs font-bold text-[var(--muted)]">{hasName && detail.value.phone?formatPhone(detail.value.phone):''}{cust?.value.notes?`${hasName?' • ':''}${cust.value.notes}`:''}</p></div>{!hasName && !showDeleted && detail.value.phone && <button onClick={()=>openAddName(detail.value.phone)} className="min-h-[40px] px-3 rounded-full bg-[var(--orange-soft)] border border-[var(--orange-border)] text-[var(--orange)] font-black text-xs shrink-0">+ Add Name</button>}{cust && <button onClick={()=>{ setDetail(null); setCustomerDetail(cust); }} className="min-h-[44px] px-3 rounded-xl bg-[var(--strong)] text-[var(--on-strong)] font-black text-xs shrink-0">View Customer</button>}</div> })()}
-        {needsUtangRelease(detail.value) && <section className="mt-4 rounded-2xl border border-[var(--line)] bg-[var(--surface2)] p-3"><h3 className="font-extrabold">Review sent / released amount</h3><p className="mt-1 text-sm font-bold text-[var(--muted)]">This older Utang did not record the entire outgoing amount before payment. If you already delivered the service, review whether the missing deduction still needs applying or was already included in a manual balance correction.</p><button type="button" disabled={saving} onClick={()=>reviewUtangRelease(detail)} className="big-btn mt-3 w-full border border-[var(--line)]">Review sent / released</button></section>}
-        {detail.value.utang && detail.value.utangReleased===true && <p className="mt-4 rounded-2xl bg-[var(--green-soft)] p-3 text-sm font-bold">Sent / released amount recorded{detail.value.utangReleaseMode==='already-recorded'?' against an existing manual deduction / balance correction':''}. Customer payments do not deduct that outgoing amount again.</p>}
-        <dl className="mt-4 space-y-2 text-sm font-bold">
-          <Row k="Provider" v={detail.value.type==='Top-Up'?'External Provider (top-up source)':'Main Wallet (main app)'}/>
-          <Row k="Regular payment" v={detail.value.type==='Top-Up'?detail.value.payment:paymentMethodLabel(detail.value)}/><Row k="Phone" v={detail.value.phone?formatPhone(detail.value.phone):'—'}/><Row k="Notes" v={detail.value.notes||'—'}/>
-          {detail.value.utang && <><Row k="Promise to Pay" v={detail.value.promiseDate ? fullDate(detail.value.promiseDate) : 'No date yet'}/><Row k="Utang Status" v={`${utangPromiseLabel(detail.value)} • Paid ${peso(detail.value.paidAmount||0)} • Remaining ${peso(utangRemaining(detail.value))}`}/></>}
-          {detail.value.paymentConfirmedAt && <Row k="Full payment confirmed" v={new Date(detail.value.paymentConfirmedAt).toLocaleString('en-PH')}/>}
-          <Row k="Regular fee" v={peso(detail.value.fee||0)}/>
-          {detail.value.type!=='Top-Up' && <><Row k="Customer payments recorded" v={paymentsLabel(collectedPayments(detail.value))}/>{detail.value.utang && <Row k="Still due (principal + unpaid fee)" v={peso(utangAmountDue(detail.value))}/>}</>}
-          {detail.value.type!=='Top-Up' && <Row k="Extra / Tip" v={`${peso(txTip(detail.value))}${txTip(detail.value)>0?` → ${walletLabel(txTipWallet(detail.value))}`:''}`}/>}
-          <Row k={detail.value.type==='Top-Up'?'Top-up cost':'Customer pays'} v={detail.value.type==='Top-Up'?peso(customerTotal(detail.value)):`${customerPaymentLabel(detail.value)} • Total ${peso(customerTotal(detail.value))}`}/>
-          {(detail.value.type==='Cash In'||detail.value.type==='Cash Out') && <Row k="What you give in full" v={`${peso(detail.value.amount)} ${detail.value.type==='Cash In'?'via Main Wallet':'cash'}`}/>}
-          {detail.value.type==='E-Load' && <><Row k="Provider discount" v={peso(eLoadDiscount(detail.value))}/><Row k="Actual wallet cost" v={peso(detail.value.amount-eLoadDiscount(detail.value))}/></>}
-          {detail.value.type!=='Top-Up' && <Row k="Total profit" v={peso(txProfit(detail.value))}/>}
-        </dl>
-        <div className="flex gap-2 mt-4 flex-wrap"><button onClick={()=>toggleFavoriteForTx(detail)} className="min-h-[44px] px-3 rounded-xl border border-[var(--line)] font-black text-sm flex items-center gap-1.5"><Star size={16} fill={favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'currentColor':'none'}/> {favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'Favorited':'Add to Favorites'}</button><button onClick={()=>repeatTx(detail)} className="min-h-[44px] px-3 rounded-xl border border-[var(--line)] font-black text-sm">Repeat</button>{detail.value.utang && detail.value.utangStatus!=='paid' && <button onClick={()=>{setUtangReminderAll(false); setUtangReminder(detail); setDetail(null);}} className="min-h-[44px] px-3 rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-sm flex items-center gap-1.5"><Share2 size={16}/> Share reminder</button>}{detail.value.utang && detail.value.utangStatus!=='paid' && <button onClick={()=>markUtangPaid(detail)} className="min-h-[44px] px-3 rounded-xl bg-[var(--green-solid)] text-white font-black text-sm">Mark Paid</button>}</div>
+          {/* 1. Hero Transaction Card */}
+          <div className="rounded-2xl bg-[var(--surface2)] border border-[var(--line)] p-4 sm:p-5">
+            {/* Top row: Type badge + Date/Time */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className={`px-2.5 py-1 rounded-full text-xs font-black flex items-center gap-1.5 ${
+                detail.value.type === 'E-Load'
+                  ? 'bg-[var(--green-soft)] text-[var(--green)] border border-[var(--green-border)]'
+                  : detail.value.type === 'Cash In'
+                  ? 'bg-[var(--blue-soft)] text-[var(--blue)] border border-[var(--blue-border)]'
+                  : detail.value.type === 'Cash Out'
+                  ? 'bg-[var(--purple-soft)] text-[var(--purple)] border border-[var(--purple-border)]'
+                  : 'bg-[var(--surface)] text-[var(--ink)] border border-[var(--line)]'
+              }`}>
+                {detail.value.type === 'Top-Up' ? 'Top-Up via External Provider' : detail.value.type}
+                {detail.value.network && detail.value.type !== 'Top-Up' && (
+                  <span className="font-bold opacity-80">• {detail.value.network}</span>
+                )}
+              </span>
+              <span className="text-xs font-bold text-[var(--muted)] flex items-center gap-1">
+                <CalendarDays size={12} className="opacity-70" />
+                {dateLabel(detail.value.date)} at {detail.value.time}
+              </span>
+            </div>
+
+            {/* Hero Amount */}
+            <div className="mt-3 flex items-baseline justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-wider text-[var(--muted)]">Transaction Amount</p>
+                <p className="font-display font-black text-4xl sm:text-5xl text-[var(--ink)] tracking-tight">
+                  {peso(detail.value.amount)}
+                </p>
+              </div>
+              <span className="text-xs font-bold text-[var(--muted)] px-3 py-1 rounded-full bg-[var(--surface)] border border-[var(--line)]">
+                {detail.value.type === 'Top-Up' ? 'External Provider → Main Wallet' : `${detail.value.network || 'Main'} • via Main Wallet`}
+              </span>
+            </div>
+
+            {/* 2. Profit & Earnings Breakdown Container */}
+            <div className="mt-4 p-3 sm:p-3.5 rounded-xl bg-[var(--green-soft)] border border-[var(--green-border)]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-black text-xs uppercase tracking-wider text-[var(--green)] flex items-center gap-1.5">
+                  <TrendingUp size={14} /> Total Profit
+                </span>
+                <span className="font-display font-black text-lg text-[var(--green)]">
+                  +{peso(detail.value.type === 'Top-Up' ? (detail.value.fee || 0) : txProfit(detail.value))}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap mt-2 pt-2 border-t border-[var(--green-border)]/60 text-xs font-bold text-[var(--ink)]">
+                {detail.value.type === 'Top-Up' ? (
+                  <span>External Provider fee: <b>{peso(detail.value.fee || 0)}</b></span>
+                ) : detail.value.type === 'E-Load' ? (
+                  <>
+                    <span className="px-2 py-0.5 rounded-md bg-white/70 dark:bg-black/20">
+                      Customer fee: <b>{peso(detail.value.fee || 0)}</b>
+                    </span>
+                    <span>+</span>
+                    <span className="px-2 py-0.5 rounded-md bg-white/70 dark:bg-black/20">
+                      Provider discount: <b>{peso(eLoadDiscount(detail.value))}</b>
+                    </span>
+                    {txTip(detail.value) > 0 && (
+                      <>
+                        <span>+</span>
+                        <span className="px-2 py-0.5 rounded-md bg-white/70 dark:bg-black/20">
+                          Extra / Tip: <b>{peso(txTip(detail.value))}</b>
+                        </span>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="px-2 py-0.5 rounded-md bg-white/70 dark:bg-black/20">
+                      Regular fee: <b>{peso(detail.value.fee || 0)}</b>
+                    </span>
+                    {txTip(detail.value) > 0 && (
+                      <>
+                        <span>+</span>
+                        <span className="px-2 py-0.5 rounded-md bg-white/70 dark:bg-black/20">
+                          Extra / Tip: <b>{peso(txTip(detail.value))}</b>
+                        </span>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* 3. Utang Status Card (If Utang) */}
+            {detail.value.utang && (
+              <div className={`mt-3 p-3.5 rounded-xl border ${
+                detail.value.utangStatus === 'paid'
+                  ? 'bg-[var(--green-soft)] border-[var(--green-border)]'
+                  : utangPromiseStatus(detail.value) === 'overdue'
+                  ? 'bg-[var(--red-soft)] border-[var(--red-border)]'
+                  : utangPromiseStatus(detail.value) === 'due-today'
+                  ? 'bg-[var(--amber-soft)] border-[var(--amber-border)]'
+                  : 'bg-[var(--surface)] border-[var(--line)]'
+              }`}>
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="font-extrabold text-xs flex items-center gap-1.5 text-[var(--ink)]">
+                    <HandCoins size={15} className="text-[var(--purple)]" />
+                    Utang / Pay Later
+                  </span>
+                  <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${
+                    detail.value.utangStatus === 'paid'
+                      ? 'bg-[var(--green-solid)] text-white'
+                      : utangPromiseStatus(detail.value) === 'overdue'
+                      ? 'bg-[var(--red-solid)] text-white'
+                      : utangPromiseStatus(detail.value) === 'due-today'
+                      ? 'bg-[var(--amber-solid)] text-white'
+                      : 'bg-[var(--surface2)] text-[var(--muted)]'
+                  }`}>
+                    Utang — {utangPromiseLabel(detail.value)}
+                  </span>
+                </div>
+
+                <div className="mt-2.5 flex items-center gap-2 text-xs font-bold text-[var(--muted)]">
+                  <CalendarDays size={13} className="shrink-0 opacity-70" />
+                  <span>
+                    Promise to Pay: <b className="text-[var(--ink)]">{utangPromiseDateLabel(detail.value)}</b>
+                    {detail.value.promiseDate ? ` • ${fullDate(detail.value.promiseDate)}` : ''}
+                  </span>
+                </div>
+
+                {detail.value.utangStatus !== 'paid' && (
+                  <div className="mt-3 pt-2.5 border-t border-[var(--line)]/60 grid grid-cols-3 gap-2 text-center">
+                    <div className="p-2 rounded-lg bg-[var(--surface2)]">
+                      <span className="block text-[10px] font-bold text-[var(--muted)] uppercase">Total</span>
+                      <span className="font-display font-black text-sm text-[var(--ink)]">{peso(detail.value.amount)}</span>
+                    </div>
+                    <div className="p-2 rounded-lg bg-[var(--surface2)]">
+                      <span className="block text-[10px] font-bold text-[var(--muted)] uppercase">Paid</span>
+                      <span className="font-display font-black text-sm text-[var(--green)]">{peso(detail.value.paidAmount || 0)}</span>
+                    </div>
+                    <div className="p-2 rounded-lg bg-[var(--surface2)]">
+                      <span className="block text-[10px] font-bold text-[var(--muted)] uppercase">Remaining</span>
+                      <span className="font-display font-black text-sm text-[var(--red)]">{peso(utangRemaining(detail.value))}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Edit History (if any) */}
+            {detail.value.history && detail.value.history.length > 0 && (
+              <div className="mt-3 rounded-xl bg-[var(--surface)] p-3 border border-[var(--line)]">
+                <p className="text-xs font-black uppercase tracking-wide text-[var(--muted)] flex items-center gap-1">
+                  <Pencil size={11} /> Edit history
+                </p>
+                {detail.value.history.map((h, i) => (
+                  <p key={i} className="text-xs font-bold text-[var(--muted)] mt-1">
+                    Edited: <b className="text-[var(--ink)]">{peso(h.oldAmount)} → {peso(h.newAmount)}</b> on {h.date} at {h.time}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 4. Customer Information Card */}
+          {(() => {
+            const cust = customerByPhone.get(digitsOnly(detail.value.phone || ''));
+            const showDeleted = !cust && isRealName(detail.value.customerName, detail.value.phone) && !!detail.value.phone;
+            const hasName = cust ? isRealName(cust.value.name, detail.value.phone) : isRealName(detail.value.customerName, detail.value.phone);
+            const isSuki = cust && (customerStats.get(digitsOnly(cust.value.phone))?.count || 0) >= 5;
+
+            return (
+              <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-3.5 mt-3 flex items-center gap-3 transition-colors hover:border-[var(--brand)]">
+                <CustomerAvatar name={cust?.value.name || detail.value.customerName} phone={detail.value.phone} size={48} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="font-extrabold text-sm text-[var(--ink)] truncate">
+                      {showDeleted ? 'Deleted Customer' : displayNameOnly(cust?.value.name || detail.value.customerName, detail.value.phone) || 'No customer'}
+                    </p>
+                    {isSuki && (
+                      <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-0.5">
+                        <Crown size={10} /> Suki
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs font-bold text-[var(--muted)] flex items-center gap-1 mt-0.5">
+                    {hasName && detail.value.phone ? (
+                      <>
+                        <Phone size={11} className="opacity-70" />
+                        <span>{formatPhone(detail.value.phone)}</span>
+                      </>
+                    ) : ''}
+                    {cust?.value.notes ? `${hasName ? ' • ' : ''}${cust.value.notes}` : ''}
+                  </p>
+                </div>
+                {!hasName && !showDeleted && detail.value.phone && (
+                  <button
+                    onClick={() => openAddName(detail.value.phone)}
+                    className="min-h-[38px] px-3 rounded-xl bg-[var(--orange-soft)] border border-[var(--orange-border)] text-[var(--orange)] font-black text-xs shrink-0 hover:bg-[var(--orange)] hover:text-white transition-colors"
+                  >
+                    + Add Name
+                  </button>
+                )}
+                {cust && (
+                  <button
+                    onClick={() => { setDetail(null); setCustomerDetail(cust); }}
+                    className="min-h-[38px] px-3.5 rounded-xl bg-[var(--strong)] text-[var(--on-strong)] font-black text-xs shrink-0 hover:opacity-90 transition-opacity"
+                  >
+                    View Customer
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+
+          {needsUtangRelease(detail.value) && (
+            <section className="mt-4 rounded-2xl border border-[var(--line)] bg-[var(--surface2)] p-3">
+              <h3 className="font-extrabold">Review sent / released amount</h3>
+              <p className="mt-1 text-sm font-bold text-[var(--muted)]">
+                This older Utang did not record the entire outgoing amount before payment. If you already delivered the service, review whether the missing deduction still needs applying or was already included in a manual balance correction.
+              </p>
+              <button type="button" disabled={saving} onClick={()=>reviewUtangRelease(detail)} className="big-btn mt-3 w-full border border-[var(--line)]">
+                Review sent / released
+              </button>
+            </section>
+          )}
+
+          {detail.value.utang && detail.value.utangReleased === true && (
+            <p className="mt-4 rounded-2xl bg-[var(--green-soft)] p-3 text-sm font-bold">
+              Sent / released amount recorded{detail.value.utangReleaseMode === 'already-recorded' ? ' against an existing manual deduction / balance correction' : ''}. Customer payments do not deduct that outgoing amount again.
+            </p>
+          )}
+
+          {/* 5. Detailed Financial Rows */}
+          <div className="mt-4 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
+            <h4 className="text-xs font-black uppercase tracking-wider text-[var(--muted)] mb-3 pb-2 border-b border-[var(--line)]">
+              Receipt Details
+            </h4>
+            <dl className="space-y-2.5 text-sm font-bold">
+              <Row k="Provider" v={detail.value.type==='Top-Up'?'External Provider (top-up source)':'Main Wallet (main app)'}/>
+              <Row k="Regular payment" v={detail.value.type==='Top-Up'?detail.value.payment:paymentMethodLabel(detail.value)}/>
+              <Row k="Phone" v={detail.value.phone?formatPhone(detail.value.phone):'—'}/>
+              <Row k="Notes" v={detail.value.notes||'—'}/>
+              {detail.value.utang && (
+                <>
+                  <Row k="Promise to Pay" v={detail.value.promiseDate ? fullDate(detail.value.promiseDate) : 'No date yet'}/>
+                  <Row k="Utang Status" v={`${utangPromiseLabel(detail.value)} • Paid ${peso(detail.value.paidAmount||0)} • Remaining ${peso(utangRemaining(detail.value))}`}/>
+                </>
+              )}
+              {detail.value.paymentConfirmedAt && <Row k="Full payment confirmed" v={new Date(detail.value.paymentConfirmedAt).toLocaleString('en-PH')}/>}
+              <Row k="Regular fee" v={peso(detail.value.fee||0)}/>
+              {detail.value.type!=='Top-Up' && (
+                <>
+                  <Row k="Customer payments recorded" v={paymentsLabel(collectedPayments(detail.value))}/>
+                  {detail.value.utang && <Row k="Still due (principal + unpaid fee)" v={peso(utangAmountDue(detail.value))}/>}
+                </>
+              )}
+              {detail.value.type!=='Top-Up' && <Row k="Extra / Tip" v={`${peso(txTip(detail.value))}${txTip(detail.value)>0?` → ${walletLabel(txTipWallet(detail.value))}`:''}`}/>}
+              <Row k={detail.value.type==='Top-Up'?'Top-up cost':'Customer pays'} v={detail.value.type==='Top-Up'?peso(customerTotal(detail.value)):`${customerPaymentLabel(detail.value)} • Total ${peso(customerTotal(detail.value))}`}/>
+              {(detail.value.type==='Cash In'||detail.value.type==='Cash Out') && <Row k="What you give in full" v={`${peso(detail.value.amount)} ${detail.value.type==='Cash In'?'via Main Wallet':'cash'}`}/>}
+              {detail.value.type==='E-Load' && (
+                <>
+                  <Row k="Provider discount" v={peso(eLoadDiscount(detail.value))}/>
+                  <Row k="Actual wallet cost" v={peso(detail.value.amount-eLoadDiscount(detail.value))}/>
+                </>
+              )}
+              {detail.value.type!=='Top-Up' && <Row k="Total profit" v={peso(txProfit(detail.value))}/>}
+            </dl>
+          </div>
+
+          <div className="flex gap-2 mt-4 flex-wrap">
+            <button onClick={()=>toggleFavoriteForTx(detail)} className="min-h-[44px] px-3.5 rounded-xl border border-[var(--line)] font-black text-sm flex items-center gap-1.5 hover:bg-[var(--surface2)] transition-colors">
+              <Star size={16} fill={favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'currentColor':'none'}/> 
+              {favorites.some(f=>digitsOnly(f.value.phone)===digitsOnly(detail.value.phone) && f.value.amount===detail.value.amount && f.value.type===detail.value.type)?'Favorited':'Add to Favorites'}
+            </button>
+            <button onClick={()=>repeatTx(detail)} className="min-h-[44px] px-3.5 rounded-xl border border-[var(--line)] font-black text-sm hover:bg-[var(--surface2)] transition-colors">
+              Repeat
+            </button>
+            {detail.value.utang && detail.value.utangStatus!=='paid' && (
+              <button onClick={()=>{setUtangReminderAll(false); setUtangReminder(detail); setDetail(null);}} className="min-h-[44px] px-3.5 rounded-xl bg-[var(--green-soft)] text-[var(--green)] font-black text-sm flex items-center gap-1.5 hover:opacity-90 transition-opacity">
+                <Share2 size={16}/> Share reminder
+              </button>
+            )}
+            {detail.value.utang && detail.value.utangStatus!=='paid' && (
+              <button onClick={()=>markUtangPaid(detail)} className="min-h-[44px] px-4 rounded-xl bg-[var(--green-solid)] text-white font-black text-sm hover:opacity-90 transition-opacity flex items-center gap-1.5">
+                <CheckCircle2 size={16}/> Mark Paid
+              </button>
+            )}
+          </div>
         {detail.value.utang && detail.value.utangStatus!=='paid' && <div className="rounded-2xl border border-[var(--line)] p-3 mt-4"><p className="font-extrabold text-sm">Partial Payment — “tomorrow partial”</p><p className="text-xs font-bold text-[var(--muted)] mt-0.5">Remaining principal {peso(utangRemaining(detail.value))}. Enter principal only; the confirmation adds its share of the fee. Promise date stays unless you Edit it.</p>{!showPartial ? <button onClick={()=>{setPartialAmount(utangRemaining(detail.value)); setShowPartial(true);}} className="min-h-[44px] px-4 rounded-xl bg-[var(--purple-solid)] text-white font-black text-sm mt-3">Partial Payment</button> : <div onKeyDown={(e)=>{ if(e.key==='Enter' && !((e.target as HTMLElement).tagName==='BUTTON')){ e.preventDefault(); savePartialPayment(detail); } }}><label className="label block mt-3">Amount paid now</label><input type="number" value={partialAmount} onChange={e=>setPartialAmount(Number(e.target.value))} className="field mt-1" inputMode="decimal" aria-label="Amount paid now"/><p className="text-sm font-bold mt-2">Remaining after this payment: {peso(Math.max(0, round2(utangRemaining(detail.value)-(partialAmount||0))))}</p><div className="flex gap-2 mt-3 flex-wrap"><button disabled={saving} onClick={()=>savePartialPayment(detail)} className="min-h-[44px] px-4 rounded-xl bg-[var(--green-solid)] text-white font-black text-sm flex-1">{saving?'Saving…':'Save Partial Payment'}</button><button onClick={()=>markUtangPaid(detail)} disabled={saving} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Mark Paid Fully</button><button onClick={()=>setShowPartial(false)} className="min-h-[44px] px-4 rounded-xl border border-[var(--line)] font-black text-sm">Cancel</button></div></div>}</div>}
         {hasRecordedPayment(detail.value) && <button type="button" disabled={saving} onClick={()=>reviewPaymentWallet(detail)} className="big-btn w-full mt-3 border border-[var(--line)]"><ArrowLeftRight size={18}/>Correct receiving wallet</button>}
         {detail.value.paymentWalletCorrections && detail.value.paymentWalletCorrections.length>0 && <section className="mt-3 rounded-2xl bg-[var(--surface2)] p-3"><h3 className="text-sm font-extrabold">Receiving wallet corrections</h3>{detail.value.paymentWalletCorrections.map((entry,index)=><p key={index} className="mt-2 text-xs font-bold text-[var(--muted)]">{new Date(entry.recordedAt).toLocaleString('en-PH')} • {paymentsLabel(entry.from)} → {paymentsLabel(entry.to)}. Total receipts unchanged.</p>)}</section>}
@@ -1924,12 +3975,152 @@ function Dashboard({user,previewMode,appearance}:{user:FirebaseUser;previewMode:
       </Sheet>}
 
       {showWalletAction && <Sheet onClose={()=>setShowWalletAction(null)} title={`${walletMode==='add'?'Add funds':'Deduct funds'} — ${walletDefs.find(w=>w.key===showWalletAction)?.label}`}>
-        <p className="font-bold text-sm text-[var(--muted)]">Current balance: {peso(meta.wallets[showWalletAction])}</p>
+        <p className="font-bold text-sm text-[var(--muted)]">Current balance: {peso(meta.wallets[showWalletAction]||0)}</p>
         <label className="label block mt-3">Amount</label><input type="number" min="0.01" step="0.01" value={walletAmt} onChange={e=>setWalletAmt(Number(e.target.value))} className="field mt-1" inputMode="decimal"/>
-        {walletMode==='deduct' ? <><label className="label block mt-3">Reason / category</label><select value={walletActionCategory} onChange={e=>setWalletActionCategory(e.target.value)} className="field mt-1"><option>Shopee / Online shopping</option><option>Store purchase</option><option>Personal use</option><option>Other</option></select><label className="label block mt-3">Details (optional)</label><input value={walletActionNote} onChange={e=>setWalletActionNote(e.target.value)} placeholder="e.g. Shopee order, supplies from a nearby store" className="field mt-1"/><p className="text-xs font-bold text-[var(--muted)] mt-2">This records a wallet expense, not a sale or profit. The deduction will appear in Wallet Activity.</p></> : <><label className="label block mt-3">Details (optional)</label><input value={walletActionNote} onChange={e=>setWalletActionNote(e.target.value)} placeholder="Reason for balance correction" className="field mt-1"/><p className="text-xs font-bold text-[var(--muted)] mt-2">This records a balance correction; it is separate from sales and External Provider top-ups.</p></>}
+        {walletMode==='deduct' ? <><label className="label block mt-3">Reason / category</label><select value={walletActionCategory} onChange={e=>setWalletActionCategory(e.target.value)} className="field mt-1">{showWalletAction==='profit' ? <><option>Owner draw / Personal use</option><option>Store reinvestment</option><option>Emergency reserve</option><option>Other</option></> : <><option>Shopee / Online shopping</option><option>Store purchase</option><option>Personal use</option><option>Other</option></>}</select><label className="label block mt-3">Details (optional)</label><input value={walletActionNote} onChange={e=>setWalletActionNote(e.target.value)} placeholder={showWalletAction==='profit'?'e.g. Taking out store earnings':'e.g. Shopee order, supplies from a nearby store'} className="field mt-1"/><p className="text-xs font-bold text-[var(--muted)] mt-2">{showWalletAction==='profit'?'This records a profit withdrawal / owner payout.':'This records a wallet expense, not a sale or profit. The deduction will appear in Wallet Activity.'}</p></> : <><label className="label block mt-3">Details (optional)</label><input value={walletActionNote} onChange={e=>setWalletActionNote(e.target.value)} placeholder="Reason for balance correction" className="field mt-1"/><p className="text-xs font-bold text-[var(--muted)] mt-2">This records a balance correction; it is separate from sales and External Provider top-ups.</p></>}
         <button disabled={saving} onClick={doWalletAction} className="big-btn bg-[var(--green-solid)] text-white w-full mt-5">{saving?'Saving…':walletMode==='add'?`Add ${peso(walletAmt)}`:`Deduct ${peso(walletAmt)}`}</button>
         <button onClick={()=>setShowWalletAction(null)} className="big-btn border border-[var(--line)] w-full mt-2">Cancel</button>
       </Sheet>}
+
+      {showWalletTransfer && (
+        <Sheet onClose={()=>setShowWalletTransfer(false)} title={
+          transferFrom==='cash' && transferTo==='maribank'
+            ? 'Cash In to Main Wallet'
+            : transferTo==='profit'
+            ? 'Stash Profit'
+            : transferFrom==='profit' && transferTo==='maribank'
+            ? 'Reinvest Profit to Main Wallet'
+            : 'Wallet Transfer'
+        }>
+          <p className="font-bold text-sm text-[var(--muted)]">
+            Move funds between your internal store wallets. Available in <b className="text-[var(--ink)]">{walletLabel(transferFrom)}</b>: {peso(meta.wallets[transferFrom]||0)}.
+          </p>
+
+          <div className="grid grid-cols-2 gap-3 mt-4">
+            <div>
+              <label htmlFor="transfer-from-select" className="label block">From Wallet</label>
+              <select
+                id="transfer-from-select"
+                value={transferFrom}
+                onChange={e => {
+                  const newFrom = e.target.value as keyof Wallets;
+                  setTransferFrom(newFrom);
+                  if (newFrom === transferTo) {
+                    setTransferTo(newFrom === 'cash' ? 'maribank' : 'cash');
+                  }
+                  setTransferError('');
+                }}
+                disabled={saving}
+                className="field mt-1"
+              >
+                {walletDefs.map(w => <option key={w.key} value={w.key}>{w.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="transfer-to-select" className="label block">To Wallet</label>
+              <select
+                id="transfer-to-select"
+                value={transferTo}
+                onChange={e => {
+                  const newTo = e.target.value as keyof Wallets;
+                  setTransferTo(newTo);
+                  setTransferError('');
+                }}
+                disabled={saving}
+                className="field mt-1"
+              >
+                {walletDefs.filter(w => w.key !== transferFrom).map(w => <option key={w.key} value={w.key}>{w.label}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <label htmlFor="transfer-amount-input" className="label block mt-4">Transfer Amount</label>
+          <input
+            id="transfer-amount-input"
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={transferAmt || ''}
+            onChange={e => { setTransferAmt(Number(e.target.value)); setTransferError(''); }}
+            className="field mt-1"
+            inputMode="decimal"
+            placeholder="0.00"
+          />
+
+          <div className="flex gap-1.5 flex-wrap mt-2">
+            {[50, 100, 200, 500, 1000].map(amt => (
+              <button
+                key={amt}
+                type="button"
+                onClick={() => setTransferAmt(amt)}
+                className="chip text-xs py-1"
+              >
+                +{peso(amt)}
+              </button>
+            ))}
+            {(meta.wallets[transferFrom] || 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setTransferAmt(round2(meta.wallets[transferFrom] || 0))}
+                className="chip text-xs py-1 font-black text-[var(--green)]"
+              >
+                All ({peso(meta.wallets[transferFrom] || 0)})
+              </button>
+            )}
+            {transferTo === 'profit' && (todayWalletProfit[transferFrom]?.total || 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => setTransferAmt(todayWalletProfit[transferFrom].total)}
+                className="chip text-xs py-1 font-black text-[var(--purple-solid)]"
+              >
+                Today&apos;s Profit ({peso(todayWalletProfit[transferFrom].total)})
+              </button>
+            )}
+          </div>
+
+          <label htmlFor="transfer-note-input" className="label block mt-4">Note / Reason (optional)</label>
+          <input
+            id="transfer-note-input"
+            value={transferNote}
+            onChange={e => setTransferNote(e.target.value)}
+            placeholder={
+              transferFrom === 'cash' && transferTo === 'maribank'
+                ? 'e.g. Deposit drawer cash into bank'
+                : transferTo === 'profit'
+                ? 'e.g. Stashing today earnings'
+                : 'e.g. Reinvesting in load stock'
+            }
+            className="field mt-1"
+          />
+
+          {transferError && <p role="alert" className="text-sm font-bold text-[var(--red)] mt-3">{transferError}</p>}
+
+          <div className="mt-4 p-3 rounded-2xl bg-[var(--surface2)] text-xs font-bold space-y-1">
+            <div className="flex justify-between">
+              <span className="text-[var(--muted)]">{walletLabel(transferFrom)} after:</span>
+              <span>{peso(Math.max(0, round2((meta.wallets[transferFrom] || 0) - (transferAmt || 0))))}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[var(--muted)]">{walletLabel(transferTo)} after:</span>
+              <span className="text-[var(--green)]">{peso(round2((meta.wallets[transferTo] || 0) + (transferAmt || 0)))}</span>
+            </div>
+          </div>
+
+          <button
+            disabled={saving || !transferAmt || transferAmt <= 0}
+            onClick={doTransfer}
+            className="big-btn bg-[var(--green-solid)] text-white w-full mt-5"
+          >
+            {saving ? 'Transferring…' : `Confirm Transfer of ${peso(transferAmt || 0)}`}
+          </button>
+          <button
+            onClick={() => setShowWalletTransfer(false)}
+            className="big-btn border border-[var(--line)] w-full mt-2"
+          >
+            Cancel
+          </button>
+        </Sheet>
+      )}
 
       {showEOD && <Sheet onClose={()=>setShowEOD(false)} title="End of Day — Close Day">
         <p className="font-bold text-[var(--muted)]">{fullDate(todayKey())} • All via Main Wallet</p>
@@ -2011,7 +4202,20 @@ function TxRow({r,customers,onClick,onAddName,selected,selectedRef,onRepeat,onTo
   const label = v.type==='Top-Up' ? 'Top-Up via External Provider' : v.type==='E-Load' ? `E-Load • ${v.network}` : `${v.type} • Main Wallet`;
   const customerLine = v.type==='Top-Up' ? (hasName ? displayNamePhone(cust?.value.name || v.customerName, v.phone) : v.phone?formatPhone(v.phone):'External Provider → Main Wallet') : deleted ? `Deleted Customer • ${formatPhone(v.phone)}` : hasName ? displayNamePhone(cust?.value.name || v.customerName, v.phone) : v.phone ? formatPhone(v.phone) : 'No customer';
   return <div ref={selectedRef as any} onClick={onClick} className={`dashboard-tx-row w-full flex items-center gap-2 sm:gap-3 px-4 py-3.5 text-left min-h-[64px] cursor-pointer ${selected?'bg-[var(--green-soft)] ring-2 ring-inset ring-[var(--green)]':'hover:bg-[var(--surface2)]'}`} role="button" tabIndex={0} onKeyDown={(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); onClick(); } }}>
-    <span className="w-11 h-11 rounded-xl grid place-items-center shrink-0" style={{background:bg,color}}>{icon}</span>
+    {v.type==='Top-Up'&&!v.phone ? (
+      <span className="w-11 h-11 rounded-xl grid place-items-center shrink-0" style={{background:bg,color}}>{icon}</span>
+    ) : (
+      <div className="relative shrink-0">
+        <CustomerAvatar name={cust?.value.name || v.customerName} phone={v.phone} size={44} />
+        <span
+          className="absolute -bottom-1 -right-1 w-5 h-5 rounded-md grid place-items-center text-white shadow-sm"
+          style={{background: color}}
+          title={v.type}
+        >
+          {React.cloneElement(icon as React.ReactElement, { size: 12 })}
+        </span>
+      </div>
+    )}
     <span className="flex-1 min-w-0"><span className="block font-extrabold truncate">{label}{v.utang ? <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full ${v.utangStatus==='paid'?'bg-[var(--green-soft)] text-[var(--green)]':'bg-[var(--amber-soft)] text-[var(--amber)]'}`}>{v.utangStatus==='paid'?'Utang Paid':'Utang Unpaid'}</span> : null}</span><span className="block text-xs font-bold text-[var(--muted)] truncate">{customerLine}</span><span className="block text-xs font-bold text-[var(--muted)] truncate">{v.notes||v.payment} • {v.time}</span></span>
     {onToggleFavorite && <button type="button" aria-label={isFavorite?'Remove from favorites':'Add to favorites'} onClick={(e)=>{e.stopPropagation(); onToggleFavorite();}} className={`shrink-0 min-h-[36px] w-9 grid place-items-center rounded-full ${isFavorite?'bg-[var(--amber-soft)] text-[var(--amber)]':'text-[var(--muted)] hover:bg-[var(--surface2)]'}`}><Star size={16} fill={isFavorite?'currentColor':'none'}/></button>}
     {onRepeat && <button type="button" onClick={(e)=>{e.stopPropagation(); onRepeat();}} className="shrink-0 min-h-[36px] px-2.5 rounded-full bg-[var(--surface2)] border border-[var(--line)] text-[11px] font-black">Repeat</button>}
@@ -2020,6 +4224,264 @@ function TxRow({r,customers,onClick,onAddName,selected,selectedRef,onRepeat,onTo
     <ChevronRight size={16} className="text-[var(--muted)] shrink-0"/>
   </div>;
 }
+function ClayMainWalletArt({ className = "w-20 h-20" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 96 96" fill="none">
+      <defs>
+        <linearGradient id="clayMwPhone" x1="28" y1="12" x2="68" y2="84" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#38bdf8" />
+          <stop offset="0.5" stopColor="#2563eb" />
+          <stop offset="1" stopColor="#1e3a8a" />
+        </linearGradient>
+        <linearGradient id="clayMwCoin" x1="40" y1="50" x2="84" y2="88" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#7dd3fc" />
+          <stop offset="1" stopColor="#0284c7" />
+        </linearGradient>
+        <filter id="clayMwShadow" x="4" y="6" width="88" height="86" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
+          <feDropShadow dx="0" dy="6" stdDeviation="5" floodColor="#1e3a8a" floodOpacity="0.25" />
+        </filter>
+      </defs>
+      <g filter="url(#clayMwShadow)">
+        <ellipse cx="48" cy="80" rx="36" ry="9" fill="#0f172a" fillOpacity="0.18" />
+        <g transform="rotate(-8 46 44)">
+          <rect x="22" y="14" width="46" height="66" rx="14" fill="url(#clayMwPhone)" />
+          <rect x="24" y="16" width="42" height="62" rx="12" stroke="#bae6fd" strokeWidth="1.5" strokeOpacity="0.6" fill="none" />
+          <rect x="27" y="24" width="36" height="42" rx="8" fill="#0369a1" />
+          <rect x="29" y="26" width="32" height="38" rx="6" fill="#e0f2fe" fillOpacity="0.9" />
+          <path d="M40 38a8 8 0 0 1 10 0M37 35a13 13 0 0 1 16 0" stroke="#0284c7" strokeWidth="2" strokeLinecap="round" fill="none" />
+          <circle cx="45" cy="42" r="2.5" fill="#0284c7" />
+          <rect x="39" y="18" width="12" height="2.5" rx="1.2" fill="#bae6fd" fillOpacity="0.8" />
+        </g>
+        <g transform="translate(42, 42)">
+          <ellipse cx="22" cy="30" rx="18" ry="8" fill="#0369a1" />
+          <path d="M4 22v8c0 4.4 8 8 18 8s18-3.6 18-8v-8" fill="url(#clayMwCoin)" />
+          <ellipse cx="22" cy="22" rx="18" ry="8" fill="#bae6fd" />
+          <ellipse cx="22" cy="22" rx="13" ry="5.5" stroke="#38bdf8" strokeWidth="1.5" fill="none" />
+          <path d="M23 18l-3 4h4l-2 5 5-5h-3l2-4z" fill="#0284c7" />
+          <ellipse cx="17" cy="20" rx="6" ry="2" fill="#ffffff" fillOpacity="0.75" />
+        </g>
+      </g>
+    </svg>
+  );
+}
+
+function ClayCashOnHandArt({ className = "w-20 h-20" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 96 96" fill="none">
+      <defs>
+        <linearGradient id="clayCashBill" x1="18" y1="24" x2="68" y2="72" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#34d399" />
+          <stop offset="0.6" stopColor="#10b981" />
+          <stop offset="1" stopColor="#047857" />
+        </linearGradient>
+        <linearGradient id="clayCashCoin" x1="30" y1="46" x2="74" y2="84" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#86efac" />
+          <stop offset="1" stopColor="#16a34a" />
+        </linearGradient>
+        <filter id="clayCashShadow" x="4" y="6" width="88" height="86" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
+          <feDropShadow dx="0" dy="6" stdDeviation="5" floodColor="#064e3b" floodOpacity="0.22" />
+        </filter>
+      </defs>
+      <g filter="url(#clayCashShadow)">
+        <ellipse cx="48" cy="80" rx="36" ry="9" fill="#022c22" fillOpacity="0.16" />
+        <g transform="rotate(-12 38 38)">
+          <rect x="14" y="24" width="56" height="34" rx="9" fill="url(#clayCashBill)" />
+          <rect x="15.5" y="25.5" width="53" height="31" rx="7.5" stroke="#d1fae5" strokeWidth="1.2" strokeOpacity="0.7" fill="none" />
+          <rect x="20" y="28" width="44" height="26" rx="5" stroke="#6ee7b7" strokeWidth="1" strokeDasharray="3 2" fill="none" />
+          <circle cx="42" cy="41" r="7" fill="#047857" fillOpacity="0.4" />
+          <circle cx="42" cy="41" r="5" fill="#a7f3d0" />
+          <text x="42" y="44" textAnchor="middle" fill="#065f46" fontFamily="Arial,sans-serif" fontSize="8" fontWeight="900">₱</text>
+        </g>
+        <g transform="translate(34, 44)">
+          <ellipse cx="24" cy="28" rx="20" ry="9" fill="#047857" />
+          <path d="M4 20v8c0 5 9 9 20 9s20-4 20-9v-8" fill="url(#clayCashCoin)" />
+          <ellipse cx="24" cy="20" rx="20" ry="9" fill="#a7f3d0" />
+          <ellipse cx="24" cy="20" rx="15" ry="6.5" stroke="#34d399" strokeWidth="1.5" fill="none" />
+          <text x="24" y="23.5" textAnchor="middle" fill="#047857" fontFamily="Arial,sans-serif" fontSize="10" fontWeight="900">₱</text>
+          <ellipse cx="18" cy="17" rx="7" ry="2.5" fill="#ffffff" fillOpacity="0.65" />
+        </g>
+        <g transform="translate(18, 48) rotate(14 16 16)">
+          <ellipse cx="16" cy="20" rx="14" ry="7" fill="#065f46" />
+          <path d="M2 14v6c0 3.8 6.3 7 14 7s14-3.2 14-7v-6" fill="#10b981" />
+          <ellipse cx="16" cy="14" rx="14" ry="7" fill="#d1fae5" />
+          <ellipse cx="16" cy="14" rx="10" ry="5" stroke="#6ee7b7" strokeWidth="1.2" fill="none" />
+          <text x="16" y="17" textAnchor="middle" fill="#047857" fontFamily="Arial,sans-serif" fontSize="8" fontWeight="900">₱</text>
+          <ellipse cx="12" cy="12" rx="5" ry="1.8" fill="#ffffff" fillOpacity="0.75" />
+        </g>
+      </g>
+    </svg>
+  );
+}
+
+function ClayProfitWalletArt({ className = "w-20 h-20" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 96 96" fill="none">
+      <defs>
+        <linearGradient id="clayCrownGold" x1="28" y1="16" x2="68" y2="60" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#fde047" />
+          <stop offset="0.45" stopColor="#f59e0b" />
+          <stop offset="1" stopColor="#b45309" />
+        </linearGradient>
+        <linearGradient id="clayProfitGem" x1="40" y1="48" x2="56" y2="68" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#f472b6" />
+          <stop offset="1" stopColor="#db2777" />
+        </linearGradient>
+        <linearGradient id="clayProfitBase" x1="24" y1="52" x2="72" y2="84" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#a855f7" />
+          <stop offset="1" stopColor="#6b21a8" />
+        </linearGradient>
+        <filter id="clayProfitShadow" x="4" y="6" width="88" height="86" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
+          <feDropShadow dx="0" dy="6" stdDeviation="5" floodColor="#581c87" floodOpacity="0.25" />
+        </filter>
+      </defs>
+      <g filter="url(#clayProfitShadow)">
+        <ellipse cx="48" cy="80" rx="36" ry="9" fill="#3b0764" fillOpacity="0.18" />
+        <g transform="translate(18, 52)">
+          <ellipse cx="30" cy="22" rx="26" ry="9" fill="#4c1d95" />
+          <path d="M4 14v8c0 5 11.6 9 26 9s26-4 26-9v-8" fill="url(#clayProfitBase)" />
+          <ellipse cx="30" cy="14" rx="26" ry="9" fill="#c084fc" />
+          <ellipse cx="30" cy="14" rx="21" ry="6.5" stroke="#e9d5ff" strokeWidth="1.2" strokeOpacity="0.6" fill="none" />
+        </g>
+        <g transform="translate(20, 20)">
+          <path d="M8 38c0 4 10 7.5 28 7.5s28-3.5 28-7.5v-3c0 4-10 7.5-28 7.5s-28-3.5-28-7.5v3z" fill="#78350f" />
+          <path
+            d="M8 35 L12 16 L24 26 L36 10 L48 26 L60 16 L64 35 C58 38 48 40 36 40 C24 40 14 38 8 35 Z"
+            fill="url(#clayCrownGold)"
+          />
+          <path
+            d="M9 34 L13 18 L24 27 L36 12 L48 27 L59 18 L63 34"
+            stroke="#fef08a"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+          />
+          <circle cx="12" cy="16" r="3.5" fill="#ffffff" />
+          <circle cx="12" cy="16" r="2" fill="#fef9c3" />
+          <circle cx="36" cy="10" r="4.2" fill="#ffffff" />
+          <circle cx="36" cy="10" r="2.5" fill="#fef9c3" />
+          <circle cx="60" cy="16" r="3.5" fill="#ffffff" />
+          <circle cx="60" cy="16" r="2" fill="#fef9c3" />
+          <polygon points="36,28 41,33 36,38 31,33" fill="url(#clayProfitGem)" />
+          <circle cx="34.5" cy="31.5" r="1" fill="#ffffff" fillOpacity="0.8" />
+          <path d="M54 8l1 2 2 1-2 1-1 2-1-2-2-1 2-1z" fill="#fde047" />
+          <path d="M18 6l0.8 1.6 1.6 0.8-1.6 0.8-0.8 1.6-0.8-1.6-1.6-0.8 1.6-0.8z" fill="#fde047" />
+        </g>
+      </g>
+    </svg>
+  );
+}
+
+function ClayDashboardHeroArt({ className = "w-28 h-28" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 160 160" fill="none">
+      <defs>
+        <linearGradient id="cdhPhone" x1="40" y1="20" x2="110" y2="140" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#ffffff" />
+          <stop offset="0.6" stopColor="#d1fae5" />
+          <stop offset="1" stopColor="#a7f3d0" />
+        </linearGradient>
+        <linearGradient id="cdhCoin" x1="20" y1="90" x2="70" y2="140" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#fef08a" />
+          <stop offset="0.5" stopColor="#f59e0b" />
+          <stop offset="1" stopColor="#b45309" />
+        </linearGradient>
+        <linearGradient id="cdhBadge" x1="90" y1="30" x2="135" y2="75" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#34d399" />
+          <stop offset="1" stopColor="#059669" />
+        </linearGradient>
+        <filter id="cdhShadow" x="6" y="8" width="148" height="148" filterUnits="userSpaceOnUse" colorInterpolationFilters="sRGB">
+          <feDropShadow dx="0" dy="7" stdDeviation="6" floodColor="#064e3b" floodOpacity="0.22" />
+        </filter>
+      </defs>
+      <g filter="url(#cdhShadow)">
+        <ellipse cx="80" cy="144" rx="55" ry="12" fill="#047857" fillOpacity="0.18" />
+        <g transform="rotate(-6 75 80)">
+          <rect x="42" y="24" width="66" height="106" rx="18" fill="url(#cdhPhone)" stroke="#ffffff" strokeWidth="3" />
+          <rect x="49" y="38" width="52" height="74" rx="10" fill="#ecfdf5" />
+          <rect x="64" y="30" width="22" height="3" rx="1.5" fill="#6ee7b7" />
+          <path d="M63 64a18 18 0 0 1 24 0M68 70a11 11 0 0 1 14 0" stroke="#059669" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+          <circle cx="75" cy="76" r="3" fill="#059669" />
+          <rect x="56" y="88" width="38" height="14" rx="7" fill="#10b981" />
+          <text x="75" y="98" textAnchor="middle" fill="#ffffff" fontFamily="Arial,sans-serif" fontSize="7.5" fontWeight="900">E-LOAD</text>
+        </g>
+        <g transform="translate(14, 88)">
+          <ellipse cx="26" cy="34" rx="22" ry="10" fill="#78350f" fillOpacity="0.3" />
+          <path d="M4 22v10c0 5.5 10 10 22 10s22-4.5 22-10v-10" fill="url(#cdhCoin)" />
+          <ellipse cx="26" cy="22" rx="22" ry="10" fill="#fde047" />
+          <ellipse cx="26" cy="22" rx="17" ry="7.5" stroke="#f59e0b" strokeWidth="1.5" fill="none" />
+          <text x="26" y="26" textAnchor="middle" fill="#92400e" fontFamily="Arial,sans-serif" fontSize="13" fontWeight="900">₱</text>
+          <ellipse cx="19" cy="19" rx="7" ry="2.5" fill="#ffffff" fillOpacity="0.75" />
+        </g>
+        <g transform="translate(98, 28)">
+          <circle cx="22" cy="22" r="20" fill="url(#cdhBadge)" stroke="#ffffff" strokeWidth="2.5" />
+          <path d="M22 12l-5 9h6l-3 9 9-11h-5l3-7z" fill="#ffffff" />
+          <ellipse cx="17" cy="16" rx="5" ry="2" fill="#ffffff" fillOpacity="0.6" />
+        </g>
+      </g>
+    </svg>
+  );
+}
+
+function ClayProfitArt({ className = "w-10 h-10" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 48 48" fill="none">
+      <defs>
+        <linearGradient id="cpGold" x1="12" y1="8" x2="36" y2="40" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#fde047" />
+          <stop offset="0.5" stopColor="#f59e0b" />
+          <stop offset="1" stopColor="#b45309" />
+        </linearGradient>
+      </defs>
+      <ellipse cx="24" cy="42" rx="16" ry="4.5" fill="#78350f" fillOpacity="0.2" />
+      <path d="M8 22v8c0 4.5 7.2 8 16 8s16-3.5 16-8v-8" fill="url(#cpGold)" />
+      <ellipse cx="24" cy="22" rx="16" ry="8" fill="#fef08a" />
+      <ellipse cx="24" cy="22" rx="12" ry="6" stroke="#f59e0b" strokeWidth="1.2" fill="none" />
+      <text x="24" y="25.5" textAnchor="middle" fill="#92400e" fontFamily="Arial,sans-serif" fontSize="10" fontWeight="900">₱</text>
+      <ellipse cx="19" cy="19" rx="5" ry="2" fill="#ffffff" fillOpacity="0.8" />
+    </svg>
+  );
+}
+
+function ClaySalesArt({ className = "w-10 h-10" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 48 48" fill="none">
+      <defs>
+        <linearGradient id="csGreen" x1="10" y1="8" x2="38" y2="40" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#34d399" />
+          <stop offset="1" stopColor="#059669" />
+        </linearGradient>
+      </defs>
+      <ellipse cx="24" cy="42" rx="16" ry="4.5" fill="#064e3b" fillOpacity="0.18" />
+      <rect x="10" y="8" width="28" height="32" rx="7" fill="url(#csGreen)" stroke="#ffffff" strokeWidth="1.5" />
+      <rect x="15" y="14" width="18" height="3" rx="1.5" fill="#a7f3d0" />
+      <rect x="15" y="20" width="13" height="2.5" rx="1.2" fill="#a7f3d0" />
+      <circle cx="24" cy="30" r="6" fill="#ffffff" />
+      <path d="M21.5 30l2 2 3.5-4" stroke="#059669" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+function ClayUtangHourglassArt({ className = "w-10 h-10" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" className={className} viewBox="0 0 48 48" fill="none">
+      <defs>
+        <linearGradient id="cuPurple" x1="12" y1="6" x2="36" y2="42" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#c084fc" />
+          <stop offset="0.5" stopColor="#9333ea" />
+          <stop offset="1" stopColor="#6b21a8" />
+        </linearGradient>
+      </defs>
+      <ellipse cx="24" cy="43" rx="15" ry="4" fill="#3b0764" fillOpacity="0.2" />
+      <rect x="12" y="8" width="24" height="5" rx="2.5" fill="#e9d5ff" />
+      <rect x="12" y="35" width="24" height="5" rx="2.5" fill="#e9d5ff" />
+      <path d="M15 13 L33 13 L27 24 L33 35 L15 35 L21 24 Z" fill="url(#cuPurple)" stroke="#f3e8ff" strokeWidth="1.5" />
+      <circle cx="24" cy="24" r="2" fill="#fde047" />
+      <ellipse cx="24" cy="31" rx="5" ry="2.5" fill="#fde047" />
+    </svg>
+  );
+}
+
 function Row({k,v}:{k:string;v:string}){ return <div className="flex justify-between gap-3"><dt className="text-[var(--muted)]">{k}</dt><dd className="text-right break-words">{v}</dd></div>; }
 function Stat({label,v}:{label:string;v:string}){ return <div className="rounded-2xl bg-[var(--surface2)] p-3"><p className="label">{label}</p><p className="font-display font-extrabold text-xl mt-1">{v}</p></div>; }
 function Sheet({children,onClose,title,closeDisabled=false}:{children:React.ReactNode; onClose:()=>void; title:string; closeDisabled?:boolean}){
