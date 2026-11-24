@@ -278,4 +278,80 @@ describe('payment and tip financial saves', () => {
     expect(overlayOfflineMutations([{ id: 'payment-1', value: debt, updatedAt: 7 }], operations, 'transactions')[0].value).toMatchObject({ utangStatus: 'paid', paidAmount: 100, tip: 17 });
     expect(sdk.runTransaction).not.toHaveBeenCalled();
   });
+
+  it('atomically reclassifies a paid receipt and its tip without creating another payment', async () => {
+    const old = { ...transaction, type: 'Cash Out', selling: 0, fee: 1.5, tip: 18.5, tipWallet: 'maribank', utang: true, utangStatus: 'paid', paidAmount: 100, utangReleased: true };
+    store.set(txPath, { value: old, updatedAt: 7 });
+    const corrected = { ...old, tipWallet: 'cash', paymentAllocation: { cash: 101.5, maribank: 0 } };
+    const payload = { ...args(false, 0, 7), requireOnline: true, value: corrected,
+      meta: { ...args().meta, value: { ...settings, wallets: { cash: 1120, maribank: 380 } } } };
+    const result = await firestoreRecords('records.save_transaction', payload, owner);
+    expect(result.record.id).toBe('payment-1');
+    expect(result.record.value).toEqual(corrected);
+    expect(writes.map(item => item.ref.path)).toEqual([txPath, metaPath]);
+    expect(store.get(metaPath).value.wallets).toEqual({ cash: 1120, maribank: 380 });
+    const committed = clone([...store.entries()]);
+    await expect(firestoreRecords('records.save_transaction', payload, owner)).rejects.toThrow(/changed or was removed/);
+    expect([...store.entries()]).toEqual(committed);
+    expect(writes).toHaveLength(2);
+    expect(sdk.setDoc).not.toHaveBeenCalled();
+  });
+
+  it('refuses an online-only receipt correction offline without creating any proposal', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    store.set(txPath, { value: transaction, updatedAt: 7 });
+    const before = clone([...store.entries()]);
+    await expect(firestoreRecords('records.save_transaction', { ...args(false, 0, 7), requireOnline: true }, owner)).rejects.toThrow(/Reconnect before correcting/);
+    expect([...store.entries()]).toEqual(before);
+    expect(sdk.runTransaction).not.toHaveBeenCalled();
+    expect(sdk.setDoc).not.toHaveBeenCalled();
+  });
+
+  it('does not split a correction into offline proposals when connectivity drops during the queue check', async () => {
+    store.set(txPath, { value: transaction, updatedAt: 7 });
+    sdk.getDocs.mockImplementationOnce(async () => {
+      vi.stubGlobal('navigator', { onLine: false });
+      return { docs: [] };
+    });
+    const before = clone([...store.entries()]);
+    await expect(firestoreRecords('records.save_transaction', { ...args(false, 0, 7), requireOnline: true }, owner)).rejects.toThrow(/Reconnect before correcting/);
+    expect([...store.entries()]).toEqual(before);
+    expect(sdk.runTransaction).not.toHaveBeenCalled();
+    expect(sdk.setDoc).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: 'mutation', collection: 'transactions' },
+    { kind: 'conflict', collection: 'transactions' },
+    { kind: 'mutation', collection: 'meta' },
+    { kind: 'conflict', collection: 'meta' },
+  ])('keeps a $kind proposal for $collection intact instead of overwriting its financial overlay', async operation => {
+    store.set(txPath, { value: transaction, updatedAt: 7 });
+    store.set(`${prefix}/offline_mutations/pending-financial-change`, { ...operation, recordId: 'other-record', action: 'replace', value: { amount: 200 }, expectedUpdatedAt: 2 });
+    const before = clone([...store.entries()]);
+    await expect(firestoreRecords('records.save_transaction', { ...args(false, 0, 7), requireOnline: true }, owner)).rejects.toThrow(/Finish syncing/);
+    expect([...store.entries()]).toEqual(before);
+    expect(sdk.runTransaction).not.toHaveBeenCalled();
+    expect(sdk.setDoc).not.toHaveBeenCalled();
+  });
+
+  it.each(['fromCache', 'hasPendingWrites'])('requires a server-confirmed queue instead of a $0 snapshot for a correction', async flag => {
+    store.set(txPath, { value: transaction, updatedAt: 7 });
+    sdk.getDocs.mockResolvedValueOnce({ docs: [], metadata: { [flag]: true } });
+    await expect(firestoreRecords('records.save_transaction', { ...args(false, 0, 7), requireOnline: true }, owner)).rejects.toThrow(/Finish syncing/);
+    expect(writes).toEqual([]);
+    expect(sdk.runTransaction).not.toHaveBeenCalled();
+  });
+
+  it('does not erase unrelated customer proposals while correcting a receipt', async () => {
+    store.set(txPath, { value: transaction, updatedAt: 7 });
+    const path = `${prefix}/offline_mutations/customer-draft`;
+    const proposal = { kind: 'mutation', collection: 'customers', recordId: 'buyer', value: { name: 'Local draft' } };
+    store.set(path, clone(proposal));
+    await firestoreRecords('records.save_transaction', { ...args(false, 0, 7), requireOnline: true }, owner);
+    expect(store.get(path)).toEqual(proposal);
+    expect(sdk.runTransaction).toHaveBeenCalledTimes(1);
+    expect(writes.map(item => item.ref.path)).toEqual([txPath, metaPath]);
+  });
+
 });

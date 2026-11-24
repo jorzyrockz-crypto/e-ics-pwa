@@ -227,10 +227,20 @@ export async function firestoreRecords(action: string, args: any, user: User): P
     if (name !== 'transactions' || !id) throw new Error('A transaction ID is required for a financial save.');
     const companion = args.meta;
     if (companion && !companion.id) throw new Error('Load the wallet balances before changing this transaction.');
+    if (args.requireOnline) {
+      // A destination correction must never become two independent offline
+      // proposals or overwrite wallet values overlaid by an unprocessed proposal.
+      if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('Reconnect before correcting a payment wallet.');
+      const queued = await getDocs(userMutationsRef(user));
+      if (queued.metadata?.fromCache || queued.metadata?.hasPendingWrites || queued.docs.some(row => ['transactions', 'meta'].includes(row.data().collection))) {
+        throw new Error('Finish syncing and resolve any offline transaction / wallet proposals before correcting a payment wallet.');
+      }
+    }
     // Keep the existing offline proposal/overlay behavior. Online, a sale,
     // release, collection, tip, deletion, or Undo and its wallet change succeed
     // together: a rejected balance revision cannot leave a half-written ledger.
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      if (args.requireOnline) throw new Error('Reconnect before correcting a payment wallet.');
       const record = await firestoreRecords(deleting ? 'records.delete' : args.create ? 'records.create' : 'records.replace', {
         collection: name, id, value, expectedUpdatedAt: args.expectedUpdatedAt,
       }, user);
